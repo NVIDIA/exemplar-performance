@@ -319,7 +319,7 @@ for more details.
   - Llama3.1 405B
   - Grok1 314B
   - Nemotron4 15B/340B
-  - Deepseek v3
+  - DeepSeek V3
   - Llama 4 Maverick
 - Nemotron-H 56B model training recipe for H100 GPUs
 - End to end installer and launcher for all recipes
