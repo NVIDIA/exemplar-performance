@@ -470,9 +470,7 @@ For optimal performance, users should use the correct implementation for their p
 
 ### AWS
 
-For NeMo-based images, EFA support is already included starting with version 25.02 (`nvcr.io/nvidia/nemo:25.02`).
-
-For other images, or if you need to add or update Elastic Fabric Adapter (EFA) support, follow the [step-by-step guide](https://docs.aws.amazon.com/sagemaker/latest/dg/your-algorithms-training-efa.html#your-algorithms-training-efa-install). Use the [reference NCCL tests Dockerfile with EFA support](https://github.com/aws-samples/awsome-distributed-training/blob/main/micro-benchmarks/nccl-tests/nccl-tests.Dockerfile).
+The NeMo images used by the Performance Recipes already include Elastic Fabric Adapter (EFA) support, so no additional setup is required. If NCCL falls back to the socket transport or multi-node performance is unexpectedly low, see [AWS EFA container guidance](docs/csp/aws-efa.md) for how to verify that EFA is active and, if needed, rebuild the image with an updated EFA stack.
 
 ### GCP
 
