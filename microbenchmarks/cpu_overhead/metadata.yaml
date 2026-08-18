@@ -58,7 +58,7 @@ setup:
 
 # Run
 run:
-  launcher_type: 'sbatch'
+  launcher_type: 'configured_sbatch'
   launch_script: 'launch.sh'
 
   gpu_configs:

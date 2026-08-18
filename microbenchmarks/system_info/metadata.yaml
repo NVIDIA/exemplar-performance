@@ -23,13 +23,13 @@
 general:
   workload: system_info
   workload_type: microbenchmark
-  framework: host-debug
+  framework: host-megatron_bridge
 
 # Host-debug steps run directly on the node; the container image is only used
 # for the final srun smoke-test that validates pyxis/enroot + GPU visibility.
 container:
   images:
-    - 'nvcr.io#nvidia/nemo:26.04.00'
+    - 'nvcr.io#nvidia/nemo:26.06.01'
 
 # Run
 run:

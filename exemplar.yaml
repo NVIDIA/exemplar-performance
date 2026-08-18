@@ -39,7 +39,7 @@ workloads:
   - pretrain_nemotron_3_120b:
       dtypes: [bf16, fp8]
   - pretrain_qwen3_235b:
-      dtypes: [bf16]
+      dtypes: [bf16, fp8]
   gb200:
   - pretrain_deepseek-v3_671b:
       dtypes: [bf16, fp8, nvfp4]
@@ -56,7 +56,7 @@ workloads:
   - pretrain_nemotron_3_120b:
       dtypes: [bf16]
   - pretrain_qwen3_235b:
-      dtypes: [bf16]
+      dtypes: [bf16, fp8]
   b300:
   - pretrain_deepseek-v3_671b:
       dtypes: [bf16, fp8, nvfp4]
@@ -73,7 +73,7 @@ workloads:
   - pretrain_nemotron_3_120b:
       dtypes: [bf16]
   - pretrain_qwen3_235b:
-      dtypes: [bf16]
+      dtypes: [bf16, fp8]
   b200:
   - pretrain_deepseek-v3_671b:
       dtypes: [bf16, fp8]
@@ -88,9 +88,9 @@ workloads:
   - pretrain_nemotron-h_56b:
       dtypes: [fp8]
   - pretrain_nemotron_3_120b:
-      dtypes: [bf16, fp8]
-  - pretrain_qwen3_235b:
       dtypes: [bf16]
+  - pretrain_qwen3_235b:
+      dtypes: [bf16, fp8]
   h100:
   - pretrain_gpt_oss_120b:
       dtypes: [bf16]

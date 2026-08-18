@@ -1,6 +1,6 @@
-# DGXC Benchmark Recipes Installer
+# Exemplar Performance Recipes Installer
 
-The installer is an interactive tool that simplifies the setup and deployment of DGXC Benchmarking recipes. It automatically discovers available workloads, configures your environment, downloads required container images, and prepares workloads for execution.
+The installer is an interactive tool that simplifies the setup and deployment of Exemplar Performance recipes. It automatically discovers available workloads, configures your environment, downloads required container images, and prepares workloads for execution.
 
 ## Quick Start
 
@@ -251,6 +251,23 @@ You are running within a SLURM job, but enroot is not available on this system.
 - **Option 2**: Obtain an interactive shell on a dedicated CPU node and run the installer there. This offloads the resource usage from the login node.
 - **Option 3**: On hosts with ample memory, speed up HuggingFace downloads by raising `LLMB_HF_MAX_WORKERS` / `HF_XET_FIXED_DOWNLOAD_CONCURRENCY` (see [HuggingFace Downloads Killed / Out of Memory](#huggingface-downloads-killed--out-of-memory)).
 
+### Package Installation Resource Limit Errors
+
+**Issue**: Package installation fails because the host or job has tight resource limits. For example, a low open-file limit may produce `Too many open files` or `OSError: [Errno 24]`.
+
+**Solution**: Reduce uv's package-install concurrency and re-run the installer:
+
+```bash
+UV_CONCURRENT_DOWNLOADS=4 \
+UV_CONCURRENT_INSTALLS=4 \
+UV_CONCURRENT_BUILDS=1 \
+llmb-install
+```
+
+If the error continues, set all three values to `1`. For open-file errors, check the current shell limits with `ulimit -Sn` and `ulimit -Hn`. For job, cgroup, or system limits that you cannot change, contact your system administrator.
+
+As a last resort, set `LLMB_USE_PIP_FALLBACK=1` to use standard pip. Standard pip is typically significantly slower for LLMB installations, so prefer limiting uv concurrency first.
+
 ### Enroot Not Available for Local Installation
 
 **Issue**: Installer automatically selects SLURM method when enroot is missing
@@ -479,7 +496,7 @@ The installer recognizes the following environment variables to control behavior
 
 **Git Caching**: Set `LLMB_DISABLE_GIT_CACHE=1` to skip local git cache and clone repositories directly from remote sources.
 
-**Pip Fallback**: Set `LLMB_USE_PIP_FALLBACK=1` to use standard pip instead of uv pip when using uv environments. Useful as a workaround for packages that fail with uv pip install.
+**Pip Fallback**: As a last resort, set `LLMB_USE_PIP_FALLBACK=1` to use standard pip instead of uv pip when using uv environments. Standard pip is typically significantly slower for LLMB installations; for resource-limit errors, reduce uv concurrency as described in [Package Installation Resource Limit Errors](#package-installation-resource-limit-errors) instead.
 
 **Managed Python**: By default, UV environments use managed python versions for consistency. Set `LLMB_DISABLE_MANAGED_PYTHON=1` to use system python instead if available.
 

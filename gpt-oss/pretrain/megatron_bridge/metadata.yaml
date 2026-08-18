@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+# Setup
+general:
+  workload: gpt_oss
+  display_name: gpt-oss
+  workload_aliases: [gpt_oss, gpt-oss]
+  workload_type: pretrain
+  framework: megatron_bridge
+
+container:
+  images: 
+    - 'nvcr.io#nvidia/nemo:26.06.01'
+
+repositories: 
+  megatron_bridge:
+    url: "https://github.com/NVIDIA-NeMo/Megatron-Bridge.git"
+    commit: "b50da4c7404caa41793e74ac40d18798844c7b67"
+  nemo_run:
+    url: "https://github.com/NVIDIA-NeMo/Run.git"
+    commit: "211d4b7439c1b5ee401cfbaba1765454ed438ff5"
+
+downloads:
+  huggingface:
+    - repo_id: 'openai/gpt-oss-120b'
+      assets: [config]
+
+setup:
+  venv_req: true
+  dependencies:
+    git:
+      megatron_bridge:
+        repo_key: megatron_bridge
+        install_method:
+          type: clone
+    pip:
+      - package: nemo_run
+        repo_key: nemo_run
+
+
+tools:
+  nsys: "2025.5.1.121-3638078"
+
+
+# Run
+run:
+  launcher_type: 'megatron_bridge'
+  launch_script: 'launch.sh'
+
+  gpu_configs:
+    gb300:
+      model_configs:
+        - model_size: '120b'
+          dtypes: ['bf16']
+          scales: [64, 72, 128, 144, 216, 256, 288, 360, 432, 504, 512, 576]
+    gb200:
+      model_configs:
+        - model_size: '120b'
+          dtypes: ['bf16']
+          scales: [64, 128, 256, 512]
+    b300:
+      model_configs:
+        - model_size: '120b'
+          dtypes: ['bf16']
+          scales: [64, 128, 256, 512]
+    b200:
+      model_configs:
+        - model_size: '120b'
+          dtypes: ['bf16']
+          scales: [64, 128, 256, 512]
+    h100:
+      model_configs:
+        - model_size: '120b'
+          dtypes:  ['bf16']
+          scales:  [64, 128, 256, 512]

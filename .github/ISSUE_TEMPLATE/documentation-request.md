@@ -1,8 +1,8 @@
 ---
 name: Documentation request
-about: Report incorrect or needed documentation
+about: Report incorrect or needed documentation for Exemplar Performance
 title: "[DOC]"
-labels: "? - Needs Triage, doc"
+labels: "needs-triage, doc"
 assignees: ''
 
 ---
@@ -38,5 +38,5 @@ A clear and concise description of what you want to happen.
 List any steps you have taken:
 
 
------
-By submitting this issue, you agree to follow our [code of conduct](https://github.com/NVIDIA/dgxc-benchmarking/blob/main/CODE_OF_CONDUCT.md)
+---
+By submitting this issue, you agree to follow our [code of conduct](https://github.com/NVIDIA/exemplar-performance/blob/main/CODE_OF_CONDUCT.md).

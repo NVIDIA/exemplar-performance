@@ -243,6 +243,7 @@ echo "Starting container build"
 srun --account="${SLURM_ACCOUNT}" \
     --partition="${SLURM_PARTITION}" \
     --time=01:00:00 \
+    --exclusive \
     --export="ALL,NVIDIA_VISIBLE_DEVICES=void,GPU_TYPE=${GPU_TYPE},\
 BUILD_AO=${BUILD_AO},DEEPEP_BRANCH=${DEEPEP_BRANCH},\
 DEEPEP_COMMIT=${DEEPEP_COMMIT},TORCHTITAN_REPO=${TORCHTITAN_REPO}" \

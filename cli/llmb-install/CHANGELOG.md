@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 This project uses [PEP 440](https://www.python.org/dev/peps/pep-0440/) versioning with semantic versioning semantics:
 **MAJOR.MINOR.PATCH** for feature parity with [SemVer](https://semver.org/).
 
+## [1.13.3] - 2026-07-09
+
+### Changed
+
+- Modernized Python dependencies.
+
+## [1.13.2] - 2026-07-06
+
+### Fixed
+
+- A failed resume, edit-resume, or completion action no longer reports success to the calling `install.sh`. These paths previously caught the error and returned success; they now propagate it so the installer exits with a nonzero status.
+
 ## [1.13.1] - 2026-06-22
 
 ### Fixed

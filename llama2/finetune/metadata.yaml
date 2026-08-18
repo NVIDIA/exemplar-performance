@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+# Setup
+general:
+  workload: llama2_mlperf
+  display_name: llama2-mlperf
+  workload_aliases: [llama2_mlperf, llama2-mlperf]
+  workload_type: finetune
+  framework: megatron_bridge
+
+container:
+  images: 
+    - 'nvcr.io#nvidia/nemo:26.06.01'
+
+repositories:
+  megatron_bridge:
+    url: "https://github.com/NVIDIA-NeMo/Megatron-Bridge.git"
+    commit: "f21e0c891ec07469163b0960e0259ade384a778c"
+  nemo_run:
+    url: "https://github.com/NVIDIA-NeMo/Run.git"
+    commit: "f163b1c0dcacb87eb7341a207663ef2a2c302478"
+
+downloads:
+  huggingface:
+    - repo_id: 'meta-llama/Llama-2-70b-hf'
+      assets: [config, tokenizer]
+
+setup:
+  venv_req: true
+  dependencies:
+    git:
+      megatron_bridge:
+        repo_key: megatron_bridge
+        install_method:
+          type: clone
+    pip:
+      - package: nemo_run
+        repo_key: nemo_run
+  tasks:
+    - name: checkpoint_download
+      cmd: './download_ckpt.sh'
+      job_type: srun
+      requires_gpus: true
+
+
+# Run
+run:
+  launcher_type: 'megatron_bridge'
+  launch_script: 'launch.sh'
+
+  gpu_configs:
+    gb300:
+      model_configs:
+        - model_size: '70b'
+          dtypes:
+            fp8: [4, 8, 72, 512]
+
+    gb200:
+      model_configs:
+        - model_size: '70b'
+          dtypes:
+            fp8: [4, 8, 72, 512]

@@ -90,10 +90,7 @@ if [[ -n ${RUN_CONF_MOUNTS:-""} ]]; then
     CONTAINER_MOUNTS+="${RUN_CONF_MOUNTS}"
 fi
 
-CONFIG_OVERRIDES="${CONFIG_OVERRIDES:-}"
-if [[ -n ${CONFIG_OVERRIDES} ]]; then
-    CONFIG_OVERRIDES+=" "
-fi
+CONFIG_OVERRIDES=""
 if [[ -n ${CONTAINER_MOUNTS} ]]; then
     CONFIG_OVERRIDES+=" --custom_mounts $CONTAINER_MOUNTS"
 fi
@@ -168,6 +165,7 @@ python3 scripts/performance/setup_experiment.py \
     --time_limit $TIME_LIMIT \
     --max_steps $MAX_STEPS \
     --packager none \
-    $SLURM_ARGS
+    $SLURM_ARGS \
+    ${LLMB_MBRIDGE_EXTRA_ARGS:-}
 
 popd

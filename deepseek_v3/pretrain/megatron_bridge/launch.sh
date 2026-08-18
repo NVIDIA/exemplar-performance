@@ -41,7 +41,7 @@ GPU_TYPE=${GPU_TYPE,,}
 DTYPE=${DTYPE:-bf16}
 DTYPE=${DTYPE,,}
 
-FW_VERSION=26.04.01
+FW_VERSION=26.06.01
 
 if [[ $DTYPE == "fp8" ]]; then
     if [[ $GPU_TYPE == "h100" ]]; then
@@ -70,6 +70,12 @@ ENABLE_VBOOST=${ENABLE_VBOOST:-false}
 ENABLE_VBOOST=${ENABLE_VBOOST,,}
 ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING:-false}
 ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING,,}
+IS_PROXY_WORKLOAD=${PROXY_WORKLOAD:-false}
+IS_PROXY_WORKLOAD=${IS_PROXY_WORKLOAD,,}
+CPU_PERF_PROXY=${CPU_PERF_PROXY:-false}
+CPU_PERF_PROXY=${CPU_PERF_PROXY,,}
+DISABLE_CG=${DISABLE_CG:-false}
+DISABLE_CG=${DISABLE_CG,,}
 MAX_STEPS=${MAX_STEPS:-50}
 if [[ $GPU_TYPE == "h100" ]]; then
     TIME_LIMIT=${TIME_LIMIT:-"01:30:00"}
@@ -95,10 +101,7 @@ if [[ -n ${RUN_CONF_MOUNTS:-""} ]]; then
     CONTAINER_MOUNTS+="${RUN_CONF_MOUNTS}"
 fi
 
-CONFIG_OVERRIDES="${CONFIG_OVERRIDES:-}"
-if [[ -n ${CONFIG_OVERRIDES} ]]; then
-    CONFIG_OVERRIDES+=" "
-fi
+CONFIG_OVERRIDES=""
 if [[ -n ${CONTAINER_MOUNTS} ]]; then
     CONFIG_OVERRIDES+=" --custom_mounts $CONTAINER_MOUNTS"
 fi
@@ -132,53 +135,97 @@ fi
 CONFIG_OVERRIDES+=" --enable_pct_binding $ENABLE_PCT_BINDING "
 
 if [[ $GPU_TYPE == "gb300" ]] || [[ $GPU_TYPE == "gb200" ]]; then
-    if [[ $GPU_TYPE == "gb300" ]] && [[ $JOB_TOTAL_GPUS -eq 128 ]]; then
-        CONFIG_OVERRIDES+=" -pp 4 "
-        CONFIG_OVERRIDES+=" -vp 4 "
-        CONFIG_OVERRIDES+=" -ep 32 "
-        CONFIG_OVERRIDES+=" --recompute_modules=mla_up_proj "
-    fi
-    if [[ $GPU_TYPE == "gb300" ]] && ((JOB_TOTAL_GPUS % 72 == 0)); then
-        CONFIG_OVERRIDES+=" -tp 1 "
-        CONFIG_OVERRIDES+=" -pp 1 "
-        CONFIG_OVERRIDES+=" -vp None "
-        CONFIG_OVERRIDES+=" -ep 8 "
-        CONFIG_OVERRIDES+=" --hidden_size 1024 "
-        CONFIG_OVERRIDES+=" -mb 2 "
-        if [[ $COMPUTE_TYPE == "fp8" ]]; then
-            CONFIG_OVERRIDES+=" --cuda_graph_impl=transformer_engine "
-            CONFIG_OVERRIDES+=" --cuda_graph_scope=attn,moe_router,moe_preprocess "
-            CONFIG_OVERRIDES+=" --recompute_modules=moe_act "
-        fi
-    elif [[ $JOB_TOTAL_GPUS -le 64 ]]; then # proxy workloads
-        CONFIG_OVERRIDES+=" -tp 1 "
-        CONFIG_OVERRIDES+=" -pp 1 "
-        CONFIG_OVERRIDES+=" -vp None "
-        CONFIG_OVERRIDES+=" -ep $JOB_TOTAL_GPUS "
-        CONFIG_OVERRIDES+=" --hidden_size 1024 "
-        if [[ $GPU_TYPE == "gb200" ]] && [[ $COMPUTE_TYPE == "fp8_mx" ]]; then
-            CONFIG_OVERRIDES+=" --recompute_modules=mla_up_proj "
-        fi
-        if [[ $JOB_TOTAL_GPUS -le 8 ]]; then
-            CONFIG_OVERRIDES+=" --num_layers 24 "
-            CONFIG_OVERRIDES+=" -mb 4 "
-        else
-            CONFIG_OVERRIDES+=" -mb 2 "
-        fi
-    fi
     GPUS_PER_NODE=4
 elif [[ $GPU_TYPE == "b300" ]] || [[ $GPU_TYPE == "b200" ]] || [[ $GPU_TYPE == "h100" ]]; then
-    if [[ $GPU_TYPE == "b300" ]] && [[ $COMPUTE_TYPE == "bf16" ]] && [[ $JOB_TOTAL_GPUS -eq 128 ]]; then
-        CONFIG_OVERRIDES+=" --cuda_graph_impl none "
-    fi
-    if [[ $GPU_TYPE == "b200" ]]; then
-        if [[ $COMPUTE_TYPE == "bf16" ]]; then
-            CONFIG_OVERRIDES+=" -pp 8 "
-        elif [[ $COMPUTE_TYPE == "fp8_mx" ]]; then
-            CONFIG_OVERRIDES+=" --moe_a2a_overlap=False "
-        fi
-    fi
     GPUS_PER_NODE=8
+else
+    echo "Error: Unsupported GPU_TYPE '$GPU_TYPE'. Expected one of: gb300, gb200, b300, b200, h100." >&2
+    exit 1
+fi
+
+if [[ $GPU_TYPE == "gb300" ]] && [[ $JOB_TOTAL_GPUS -eq 128 ]]; then
+    CONFIG_OVERRIDES+=" -pp 4 "
+    CONFIG_OVERRIDES+=" -vp 4 "
+    CONFIG_OVERRIDES+=" -ep 32 "
+    CONFIG_OVERRIDES+=" --recompute_modules=mla_up_proj "
+fi
+
+if [[ $GPU_TYPE == "gb200" ]] && [[ $JOB_TOTAL_GPUS -eq 128 ]] && [[ $COMPUTE_TYPE == "fp8_mx" ]]; then
+    CONFIG_OVERRIDES+=" -tp 2 "
+    CONFIG_OVERRIDES+=" -pp 2 "
+    CONFIG_OVERRIDES+=" -vp 8 "
+    CONFIG_OVERRIDES+=" -ep 32 "
+    CONFIG_OVERRIDES+=" --recompute_modules=mla_up_proj "
+fi
+
+if [[ $GPU_TYPE == "b300" ]] && [[ $JOB_TOTAL_GPUS -eq 128 ]]; then
+    if [[ $COMPUTE_TYPE == "bf16" ]]; then
+        CONFIG_OVERRIDES+=" --cuda_graph_impl none "
+    elif [[ $COMPUTE_TYPE == "fp8_mx" ]]; then
+        CONFIG_OVERRIDES+=" --recompute_modules=mla_up_proj,core_attn "
+    fi
+fi
+
+if [[ $GPU_TYPE == "b200" ]] && [[ $JOB_TOTAL_GPUS -eq 128 ]] && [[ $COMPUTE_TYPE == "fp8_mx" ]]; then
+    CONFIG_OVERRIDES+=" --cuda_graph_impl none "
+    CONFIG_OVERRIDES+=" --recompute_modules=mla_up_proj,core_attn,moe "
+fi
+
+if [[ $IS_PROXY_WORKLOAD == true ]]; then
+    if [[ $CPU_PERF_PROXY == false ]] && [[ $GPU_TYPE != "h100" ]]; then # Lower resource proxy workloads
+        tp=1
+        pp=1
+        vp=None
+        mb=1
+        num_layers=31
+        if [[ $GPU_TYPE == "gb300" || $GPU_TYPE == "gb200" ]]; then
+            if ((JOB_TOTAL_GPUS % 72 == 0)); then
+                ep=72
+                num_moe_experts=144
+            else
+                ep=$JOB_TOTAL_GPUS
+                num_moe_experts=$((JOB_TOTAL_GPUS * 2))
+            fi
+        elif [[ $GPU_TYPE == "b300" || $GPU_TYPE == "b200" ]]; then
+            ep=8
+            num_moe_experts=$((JOB_TOTAL_GPUS * 2))
+            if [[ $JOB_TOTAL_GPUS -eq 64 ]]; then
+                pp=2
+                vp=4
+                pipeline_model_parallel_layout="Et*4\|\(t*4\|\)*6t*3mL"
+                CONFIG_OVERRIDES+=" --pipeline_model_parallel_layout=$pipeline_model_parallel_layout "
+            fi
+        fi
+        if [[ $GPU_TYPE == "gb300" || $GPU_TYPE == "b300" ]]; then
+            mb=2
+        fi
+        CONFIG_OVERRIDES+=" -tp $tp "
+        CONFIG_OVERRIDES+=" -pp $pp "
+        CONFIG_OVERRIDES+=" -vp $vp "
+        CONFIG_OVERRIDES+=" -ep $ep "
+        CONFIG_OVERRIDES+=" -mb $mb "
+        CONFIG_OVERRIDES+=" --num_layers $num_layers "
+        CONFIG_OVERRIDES+=" --num_moe_experts $num_moe_experts "
+    elif [[ $CPU_PERF_PROXY == true ]] && [[ $GPU_TYPE != "h100" ]]; then # CPU proxy workloads
+        if [[ $JOB_TOTAL_GPUS -eq $GPUS_PER_NODE ]]; then
+            CONFIG_OVERRIDES+=" -ep $GPUS_PER_NODE "
+        elif [[ $JOB_TOTAL_GPUS -eq 64 ]] && { [[ $GPU_TYPE == "gb200" ]] || [[ $GPU_TYPE == "gb300" ]]; }; then
+            CONFIG_OVERRIDES+=" -ep 64 "
+        else
+            echo "Error: CPU proxy workloads are supported only for a single node (gb300/gb200/b300/b200) or 64 GPUs (gb200/gb300)."
+            exit 1
+        fi
+        CONFIG_OVERRIDES+=" -tp 1 "
+        CONFIG_OVERRIDES+=" -pp 1 "
+        CONFIG_OVERRIDES+=" -vp None "
+        CONFIG_OVERRIDES+=" -mb 1 "
+        CONFIG_OVERRIDES+=" --num_layers 31 "
+        CONFIG_OVERRIDES+=" --hidden_size 512 "
+    fi
+fi
+
+if [[ $DISABLE_CG == true ]]; then
+    CONFIG_OVERRIDES+=" --cuda_graph_impl none "
 fi
 
 # run command
@@ -200,6 +247,7 @@ python3 scripts/performance/setup_experiment.py \
     --time_limit $TIME_LIMIT \
     --max_steps $MAX_STEPS \
     --packager none \
-    $SLURM_ARGS
+    $SLURM_ARGS \
+    ${LLMB_MBRIDGE_EXTRA_ARGS:-}
 
 popd

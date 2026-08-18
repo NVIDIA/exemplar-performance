@@ -2,7 +2,7 @@
 
 ## Overview
 
-Define the code of conduct followed and enforced for __DGXC Benchmarking__.
+Define the code of conduct followed and enforced for __Exemplar Performance__.
 
 ### Intended audience
 

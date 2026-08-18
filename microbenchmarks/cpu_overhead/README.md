@@ -48,7 +48,7 @@ cd $LLMB_INSTALL
 
 # Run both CPU overhead tests
 llmb-run submit -w microbenchmark_cpu_overhead --dtype mxfp4 --scale 1
- 
+
 # Run the pytorch kernel launch test
 USE_CASES="kernel_launch" llmb-run submit -w microbenchmark_cpu_overhead --dtype mxfp4 --scale 1
 
@@ -56,22 +56,59 @@ USE_CASES="kernel_launch" llmb-run submit -w microbenchmark_cpu_overhead --dtype
 USE_CASES="tokenization" llmb-run submit -w microbenchmark_cpu_overhead --dtype mxfp4 --scale 1
 ```
 
+### Additional SLURM Parameters
+
+For `llmb-run submit`, use the built-in Slurm flags.
+
+Use a Slurm reservation:
+
+```bash
+llmb-run submit -w microbenchmark_cpu_overhead --dtype mxfp4 --scale 1 --reservation my_reservation
+```
+
+Run on a specific node:
+
+```bash
+llmb-run submit -w microbenchmark_cpu_overhead --dtype mxfp4 --scale 1 --nodelist node001
+```
+
+Exclude specific nodes:
+
+```bash
+llmb-run submit -w microbenchmark_cpu_overhead --dtype mxfp4 --scale 1 --exclude node002,node003
+```
+
+Combine multiple parameters:
+
+```bash
+llmb-run submit -w microbenchmark_cpu_overhead --dtype mxfp4 --scale 1 --nodelist node001 --reservation my_reservation
+```
+
 For more details on llmb-run usage, see the [llmb-run documentation](../../cli/llmb-run/README.md).
 
 ### Results/Log files
 
-Results for the workload are stored at `$LLMB_INSTALL/workloads/microbenchmark_cpu_overhead/experiments/cpu_overhead_tests`
+Each submission gets its own timestamped experiment directory, managed by the
+`configured_sbatch` launcher:
 
-You should expect to see separate logs for each use case:
+```text
+$LLMB_INSTALL/workloads/microbenchmark_cpu_overhead/experiments/
+└── microbenchmark_cpu_overhead_120b_mxfp4_gpus<scale>/
+    └── <timestamp>/
+        ├── llmb-config_<job_id>.yaml
+        ├── slurm-<job_id>.out
+        ├── <use_case>_overhead_<node>_<job_id>.err
+        ├── <use_case>_overhead_<node>_<job_id>.out
+        ├── gemm_benchmark_results.csv  # kernel_launch only
+        └── dataset_1000_1000_<num_prompts>.txt  # tokenization only
+```
 
-```
-├── <use_case>_overhead_%N_%j.err  # Error logs
-├── <use_case>_overhead_%N_%j.out  # Benchmarking output
-```
+`llmb-run submit` reports the exact experiment directory as `workdir`. Logs and
+other generated artifacts from different submissions are therefore not mixed.
 
 The `*.out` file provides key performance metrics:
 
-```
+```text
 Kernel launch test:
 
 Benchmarking GEMM size: 4x4 ...

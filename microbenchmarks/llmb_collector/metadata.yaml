@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+general:
+  workload: llmb_collector
+  workload_type: microbenchmark
+  framework: llmb-collector
+
+# Collection runs directly on the allocated host. No workload container is needed.
+container: {}
+
+run:
+  launcher_type: configured_sbatch
+  launch_script: launch.sh
+
+  # llmb-run currently models supported systems through GPU configurations even
+  # though this workload only needs one allocated host.
+  gpu_configs:
+    gb300:
+      model_configs:
+        - model_size: system
+          dtypes: [bf16]
+          scales: [1]
+          exact_scales: true
+    gb200:
+      model_configs:
+        - model_size: system
+          dtypes: [bf16]
+          scales: [1]
+          exact_scales: true
+    b300:
+      model_configs:
+        - model_size: system
+          dtypes: [bf16]
+          scales: [1]
+          exact_scales: true
+    b200:
+      model_configs:
+        - model_size: system
+          dtypes: [bf16]
+          scales: [1]
+          exact_scales: true
+    h100:
+      model_configs:
+        - model_size: system
+          dtypes: [bf16]
+          scales: [1]
+          exact_scales: true

@@ -29,7 +29,7 @@ general:
 
 container:
   images:
-    - 'nvcr.io#nvidia/nemo:26.04.01'
+    - 'nvcr.io#nvidia/nemo:26.06.01'
 
 downloads:
   huggingface:
@@ -39,7 +39,7 @@ downloads:
 repositories:
   megatron_bridge:
     url: "https://github.com/NVIDIA-NeMo/Megatron-Bridge.git"
-    commit: "06f25c227ef9d3d9b22e5561fb9f46e1cbdab7e2"
+    commit: "b50da4c7404caa41793e74ac40d18798844c7b67"
   nemo_run:
     url: "https://github.com/NVIDIA-NeMo/Run.git"
     commit: "211d4b7439c1b5ee401cfbaba1765454ed438ff5"
@@ -68,28 +68,48 @@ run:
     gb300:
       model_configs:
         - model_size: '671b'
-          dtypes: ['bf16', 'fp8', 'nvfp4']
-          scales: [128, 256, 512]
-          proxy_scales: [4, 8, 16, 32, 64, 72, 144, 216, 288, 360, 432, 504, 576]
+          dtypes:
+            bf16:
+              scales: [128, 256, 512]
+            fp8:
+              scales: [128, 256, 512]
+              proxy_scales: [4, 8, 16, 32, 64, 72, 144, 216, 288, 432, 504, 576]
+            nvfp4:
+              scales: [128, 256, 512]
 
     gb200:
       model_configs:
         - model_size: '671b'
-          dtypes: ['bf16', 'fp8', 'nvfp4']
-          scales: [256, 512]
-          proxy_scales: [64]
+          dtypes:
+            bf16:
+              scales: [256, 512]
+            fp8:
+              scales: [128, 256, 512]
+              proxy_scales: [4, 8, 16, 32, 64, 72, 144, 216, 288, 432, 504, 576]
+            nvfp4:
+              scales: [256, 512]
 
     b300:
       model_configs:
         - model_size: '671b'
-          dtypes: ['bf16', 'fp8', 'nvfp4']
-          scales: [128, 256, 512]
+          dtypes:
+            bf16:
+              scales: [128, 256, 512]
+            fp8:
+              scales: [128, 256, 512]
+              proxy_scales: [8, 16, 32, 64]
+            nvfp4:
+              scales: [128, 256, 512]
 
     b200:
       model_configs:
         - model_size: '671b'
-          dtypes: ['bf16', 'fp8']
-          scales: [256, 512]
+          dtypes:
+            bf16:
+              scales: [256, 512]
+            fp8:
+              scales: [128, 256, 512]
+              proxy_scales: [8, 16, 32, 64]
 
     h100:
       model_configs:

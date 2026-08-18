@@ -74,7 +74,11 @@ class TaskGenerationRequest:
     force: bool = False
     slurm_args: Optional['SlurmArgs'] = None
     explicit_env_overrides: dict[str, str] = field(default_factory=dict)
+    # Legacy Megatron-Bridge argument channel carried through CONFIG_OVERRIDES.
+    # Replaced by mbridge_args once all supported launch scripts consume
+    # LLMB_MBRIDGE_EXTRA_ARGS.
     extra_workload_args: tuple[str, ...] = ()
+    mbridge_args: tuple[str, ...] = ()
 
     def validate(self) -> None:
         """Validate parameter combinations."""
@@ -313,18 +317,7 @@ def _generate_forced_explicit_task(request: TaskGenerationRequest) -> List[Workl
         request.cluster_config,
     )
     if not is_valid:
-        raise ValueError(
-            format_validation_error(
-                workload_key,
-                model_size,
-                None,
-                None,
-                cluster_gpu_type,
-                error_type,
-                error_msg,
-                suggestions,
-            )
-        )
+        raise ValueError(format_validation_error(error_type, error_msg, suggestions))
 
     tasks = [
         WorkloadTask(
@@ -345,6 +338,7 @@ def _apply_task_generation_modifiers(tasks: List[WorkloadTask], request: TaskGen
     """Apply request-level modifiers to generated tasks."""
     tasks = _apply_explicit_env_overrides(tasks, request.explicit_env_overrides)
     tasks = _apply_extra_workload_args(tasks, request.extra_workload_args)
+    tasks = _apply_mbridge_args(tasks, request.mbridge_args)
     return tasks
 
 
@@ -367,6 +361,17 @@ def _apply_extra_workload_args(tasks: List[WorkloadTask], args: tuple[str, ...])
 
     for task in tasks:
         task.extra_workload_args = (*task.extra_workload_args, *args)
+
+    return tasks
+
+
+def _apply_mbridge_args(tasks: List[WorkloadTask], args: tuple[str, ...]) -> List[WorkloadTask]:
+    """Apply request-level Megatron-Bridge arguments to generated tasks."""
+    if not args:
+        return tasks
+
+    for task in tasks:
+        task.mbridge_args = (*task.mbridge_args, *args)
 
     return tasks
 

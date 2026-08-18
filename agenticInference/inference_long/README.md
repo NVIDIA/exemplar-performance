@@ -1,7 +1,7 @@
 # Inference Recipes (Long Context)
 
 LLMB inference recipes for long-context inference on NVIDIA Grace systems
-(verified on gb200). Driven through the standard DGXC flow — `llmb-install` to
+(verified on gb200). Driven through the standard install flow — `llmb-install` to
 provision, `llmb-run submit` to launch a benchmark.
 
 ## Available recipes
@@ -35,7 +35,7 @@ Current recipe is validated on polyphe (gb200). See the per-recipe
    ```bash
    tmux new -s llmb-install
    # re-export your env vars inside the new tmux shell (they don't carry over):
-   export LLMB_REPO=/path/to/llm-benchmarking-collection-internal
+   export LLMB_REPO=/path/to/exemplar-performance
    export LLMB_INSTALL=/path/to/your/llmbinstall
    export HF_TOKEN=hf_xxx
    # Ctrl-b d to detach safely; reconnect with: tmux attach -t llmb-install

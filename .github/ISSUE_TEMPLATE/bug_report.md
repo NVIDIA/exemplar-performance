@@ -1,8 +1,8 @@
 ---
 name: Bug report
-about: Create a bug report to help us improve ___DGXC Benchmarking___
+about: Create a bug report to help us improve Exemplar Performance
 title: "[BUG]"
-labels: "? - Needs Triage, bug"
+labels: "needs-triage, bug"
 assignees: ''
 
 ---
@@ -17,8 +17,9 @@ Follow [this guide](http://matthewrocklin.com/blog/work/2018/02/28/minimal-bug-r
 A clear and concise description of what you expected to happen.
 
 **Environment details (please complete the following information):**
+ - Version: [e.g., 26.02, 25.12.01]
  - Environment location: [Bare-metal, Docker, Cloud(specify cloud provider)]
- - Method of ___DGXC Benchmarking___ install: [conda, Docker, pip, or from source]
+ - Method of Exemplar Performance install: [conda, Docker, pip, or from source]
    - If method of install is [Docker], provide `docker pull` & `docker run` commands used
  - Run `print_env.sh` from the project root and paste the results here
  
@@ -27,4 +28,4 @@ A clear and concise description of what you expected to happen.
 Add any other context about the problem here.
 
 -----
-By submitting this issue, you agree to follow our [code of conduct](https://github.com/NVIDIA/dgxc-benchmarking/blob/main/CODE_OF_CONDUCT.md).
+By submitting this issue, you agree to follow our [code of conduct](https://github.com/NVIDIA/exemplar-performance/blob/main/CODE_OF_CONDUCT.md).

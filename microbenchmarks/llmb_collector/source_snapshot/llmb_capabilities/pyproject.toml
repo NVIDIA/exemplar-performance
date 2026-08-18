@@ -1,0 +1,99 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[project]
+name = "llmb-capabilities"
+version = "1.2.0"
+description = "Cross-package contract for LLMB capability providers and consumers (constants, dataclass, Protocols, conformance)"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Ehud Kaldor", email = "ekaldor@nvidia.com" }
+]
+requires-python = ">=3.11,<3.16"
+# Stdlib only by design: this package is the contract every provider /
+# consumer in the LLMB ecosystem will install. Adding runtime deps here
+# would inflate the install footprint of all of them.
+dependencies = []
+
+# Nothing in this package's dependencies (or dev group) is private, so
+# this index is only ever used explicitly, e.g. by `uv publish --index nv`.
+[[tool.uv.index]]
+name = "nv"
+url = "https://urm.nvidia.com/artifactory/api/pypi/nv-shared-pypi-local/simple"
+publish-url = "https://urm.nvidia.com/artifactory/api/pypi/nv-shared-pypi-local"
+explicit = true
+
+[build-system]
+requires = ["uv_build>=0.9.5,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "python-semantic-release>=10.5.3",
+    "ruff==0.15.22",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint]
+extend-select = ["E", "W", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+
+[tool.coverage.report]
+exclude_also = [
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "@(abc\\.)?abstractmethod",
+]
+ignore_errors = true
+show_missing = true
+precision = 2
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+commit_message = "chore: bump version to {version} [skip ci]"
+tag_format = "v{version}"
+logging_use_named_masks = false
+allow_zero_version = true
+
+[tool.semantic_release.remote]
+type = "gitlab"
+token = { env = "GL_TOKEN" }
+
+[tool.semantic_release.branches.main]
+match = "main"
+prerelease = false
+
+[tool.semantic_release.changelog.default_templates]
+# Top-level `changelog.changelog_file` is deprecated in PSR v10 and breaks
+# in v11; the new home is here under `default_templates`.
+changelog_file = "CHANGELOG.md"
+
+[tool.semantic_release.publish]
+# GitLab's HVCS in PSR has no upload_dists implementation — calling it
+# emits a UserWarning per dist glob during `semantic-release publish`.
+# Empty list short-circuits the publish loop. GitLab releases manage
+# their own artifact attachments via the Package Registry / Release API,
+# not via PSR's per-release file uploads.
+dist_glob_patterns = []
+upload_to_vcs_release = false

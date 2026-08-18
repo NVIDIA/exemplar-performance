@@ -1,7 +1,7 @@
 # Inference Recipes (Short Context)
 
 LLMB inference recipes for GLM-5 and Kimi-K2.6 on NVIDIA Grace systems
-(gb200, gb300). Driven through the standard DGXC flow — `llmb-install` to
+(gb200, gb300). Driven through the standard install flow — `llmb-install` to
 provision, `llmb-run submit` to launch a benchmark.
 
 ## Available recipes
@@ -35,7 +35,7 @@ Kimi-K2.6 is additionally validated on polyphe (gb200). See the per-recipe
    ```bash
    tmux new -s llmb-install
    # re-export your env vars inside the new tmux shell (they don't carry over):
-   export LLMB_REPO=/path/to/llm-benchmarking-collection-internal
+   export LLMB_REPO=/path/to/exemplar-performance
    export LLMB_INSTALL=/path/to/your/llmbinstall
    export HF_TOKEN=hf_xxx
    # Ctrl-b d to detach safely; reconnect with: tmux attach -t llmb-install
@@ -92,7 +92,7 @@ After a successful `llmb-run submit`, your benchmark outputs sit under
 Concrete example, with `LLMB_INSTALL=/lustre/.../llmbinstall` and the GLM5
 recipe:
 
-```
+```text
 /lustre/.../llmbinstall/
 └── workloads/
     └── inference_glm5/
@@ -271,7 +271,7 @@ exits — fire-and-forget.
 
 This produces two SLURM jobs per submit:
 
-```
+```text
 JOBID    NAME      ST  NODES  comment
 <short>  inferenc  CG   1     dispatcher (~30s)
 <long>   <recipe>  R   N      real benchmark (multi-node, multi-minute)

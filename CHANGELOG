@@ -1,10 +1,34 @@
-## [v26.06.01] - 2026-07-29
+## [v26.08.00] - 2026-08-18
 
-### Fixed
+### Added
 
-- Removed non-existent Nemotron 3 120B NVFP4 GB300 configuration from Exemplar.
-- Enabled MLA up-projection recomputation for DeepSeek V3 GB200 FP8 proxy runs to resolve OOM issue.
-- Nemotron 3 launch configuration now preserves externally supplied overrides.
+- FP8 support for Qwen3 235B and 30B pretrain on GB300, GB200, B300, and B200.
+- Qwen3 235B FP8 in the Exemplar suite on GB300, GB200, B300, and B200.
+- MLPerf pretrain recipes for GPT-OSS 20B and Llama 3.1 8B, and an MLPerf Llama 2 70B LoRA finetune recipe.
+- `llmb-collector` system report microbenchmark (opt-in).
+- `llmb-run submit --mbridge-arg` passthrough for Megatron-Bridge workload arguments.
+- AWS EFA container guidance for verifying and updating EFA support.
+
+### Changed
+
+- Renamed the project to Exemplar Performance; the clone URL is now `https://github.com/NVIDIA/exemplar-performance.git`.
+- Updated recipes to NeMo 26.06.01 where applicable, including DeepSeek V3, GPT-OSS 120B, Llama 3.1, Llama 3 LoRA finetune, Nemotron 3, Qwen3, and the NCCL and system info microbenchmarks. Nemotron-H remains on NeMo 26.04.01.
+- Llama 3 LoRA finetune now runs in offline mode to match other recipes.
+
+### Removed
+
+- FP8 for Nemotron 3 Super 120B on B200.
+- H100 support from the Kimi-K2 recipe.
+- NVFP4 for DeepSeek V3 on B200.
+
+### Known Issues
+
+- EFA limitations remain for DeepSeek V3 (Megatron-Bridge H100, TorchTitan, RL), Nemotron-H, and Qwen3 (30B H100, 235B H100); see Known Issues section of README for details.
+- Optional PCT fixed-core CPU binding may improve select workloads on B300 Granite Rapids systems where PCT is enabled. Validate the cluster's PCT core layout before enabling `ENABLE_PCT_BINDING=true` or applying the patch described in the README.
+
+### End of Support
+
+- LLMB `v26.05.x` and earlier are no longer supported as of `v26.08.00`. These release lines will not receive further updates, fixes, or support.
 
 ## [v26.06.00] - 2026-06-29
 
@@ -352,7 +376,7 @@ for more details.
 
 ### Added
 
-- Deepseek R1 NIM inference benchmark
+- DeepSeek R1 NIM inference benchmark
 
 ## [v25.02] - 2025-03-17
 

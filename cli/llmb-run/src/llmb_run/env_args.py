@@ -19,7 +19,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Parsing and launcher-contract helpers for explicit CLI environment overrides."""
+"""Parsing and launcher contracts for explicit environment and workload arguments."""
 
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ from typing import Iterable, Mapping
 
 LLMB_CONTAINER_ENV = 'LLMB_CONTAINER_ENV'
 NEMO_ENV_OVERRIDE_VAR = 'CONFIG_OVERRIDES'
+MBRIDGE_EXTRA_ARGS_VAR = 'LLMB_MBRIDGE_EXTRA_ARGS'
 
 _ENV_KEY_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
@@ -82,6 +83,23 @@ def parse_cli_env_args(raw_env_args: Iterable[str] | None) -> dict[str, str]:
     return parsed
 
 
+def parse_cli_mbridge_args(raw_args: Iterable[str] | None) -> tuple[str, ...]:
+    """Validate raw Megatron-Bridge argv tokens while preserving their order."""
+    parsed: list[str] = []
+
+    for raw_arg in raw_args or ():
+        if not raw_arg:
+            raise ValueError("`--mbridge-arg` cannot be empty.")
+        if any(char.isspace() for char in raw_arg):
+            raise ValueError(
+                "`--mbridge-arg` accepts one argv token at a time and cannot contain whitespace. "
+                "Repeat the option for arguments that require multiple tokens."
+            )
+        parsed.append(raw_arg)
+
+    return tuple(parsed)
+
+
 def build_nemo_env_override_flags(overrides: Mapping[str, str]) -> str:
     """Render explicit env overrides as repeatable `-E KEY=value` flags.
 
@@ -125,3 +143,38 @@ def apply_nemo_workload_args_contract(env: dict[str, str], args: Iterable[str]) 
 
     existing = str(env.get(NEMO_ENV_OVERRIDE_VAR, '')).strip()
     env[NEMO_ENV_OVERRIDE_VAR] = f"{existing} {rendered_args}".strip() if existing else rendered_args
+
+
+def build_mbridge_extra_args(
+    args: Iterable[str],
+    *,
+    compatibility_args: Iterable[str] = (),
+    env_overrides: Mapping[str, str] | None = None,
+) -> str:
+    """Render legacy args, explicit env, then raw args for MBridge launch scripts."""
+    segments = (
+        build_nemo_workload_args(compatibility_args),
+        build_nemo_env_override_flags(env_overrides or {}),
+        ' '.join(args),
+    )
+    return ' '.join(segment for segment in segments if segment)
+
+
+def apply_mbridge_extra_args_contract(
+    env: dict[str, str],
+    args: Iterable[str],
+    *,
+    compatibility_args: Iterable[str] = (),
+    env_overrides: Mapping[str, str] | None = None,
+) -> None:
+    """Expose complete MBridge arguments for launch scripts to append last."""
+    rendered_args = build_mbridge_extra_args(
+        args,
+        compatibility_args=compatibility_args,
+        env_overrides=env_overrides,
+    )
+    if not rendered_args:
+        return
+
+    existing = str(env.get(MBRIDGE_EXTRA_ARGS_VAR, '')).strip()
+    env[MBRIDGE_EXTRA_ARGS_VAR] = f"{existing} {rendered_args}".strip() if existing else rendered_args

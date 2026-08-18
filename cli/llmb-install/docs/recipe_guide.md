@@ -505,8 +505,10 @@ Launch scripts should treat values passed through `llmb-run submit --env KEY=val
 - `llmb-run` validates `--env` keys as bash-style environment variable names and exports the corresponding `KEY=value` pairs into the job environment. YAML `env:` entries from `-f` task files receive the same treatment.
 - For `sbatch` and `configured_sbatch` launchers, `llmb-run` also exports `LLMB_CONTAINER_ENV=KEY1,KEY2,...`.
   Launch scripts that invoke `srun` should pass this through to Pyxis `--container-env`, and may append additional keys if needed.
-- For `nemo` and `megatron_bridge` launchers, `llmb-run` appends repeatable `-E KEY=value` flags into `CONFIG_OVERRIDES`.
+- For `nemo` launchers, `llmb-run` appends repeatable `-E KEY=value` flags into `CONFIG_OVERRIDES`.
   Launch scripts should preserve that variable and may append additional override flags to it if needed.
+- For `megatron_bridge` launchers, keep recipe-generated arguments in `CONFIG_OVERRIDES` and initialize it to an empty string.
+  Append `${LLMB_MBRIDGE_EXTRA_ARGS:-}` as the final expansion in the `setup_experiment.py` command so explicit environment and workload arguments take precedence.
 
 This contract covers explicit `--env` values and YAML `env:` blocks. Environment variables from cluster config or workload config continue to flow through the normal job environment unless the launch script chooses to add them to its container override mechanism.
 

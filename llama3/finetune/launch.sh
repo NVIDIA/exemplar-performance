@@ -29,7 +29,6 @@ fi
 set -eu -o pipefail
 
 # Required environment variables
-: "${HF_TOKEN:?Required variable Hugging Face token}"
 : "${LLMB_INSTALL:?Required variable LLMB_INSTALL}"
 : "${SBATCH_ACCOUNT:?Required variable SBATCH_ACCOUNT}"
 : "${SBATCH_PARTITION:?Required variable SBATCH_PARTITION}"
@@ -41,7 +40,7 @@ if [[ $MODEL_SIZE != "70b" ]]; then
     echo "ERROR: Only 70b LoRA is supported. MODEL_SIZE=$MODEL_SIZE is not supported."
     exit 1
 fi
-export FW_VERSION=26.02.01
+export FW_VERSION=26.06.01
 
 export OPENBLAS_NUM_THREADS=1 # Required for login nodes with tight memory restrictions. Do not remove.
 
@@ -82,6 +81,11 @@ if [ -n "$ADDITIONAL_SLURM_PARAMS" ]; then
 fi
 
 CONTAINER_MOUNTS=""
+export HF_HOME="${HF_HOME:-$LLMB_INSTALL/.cache/huggingface}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$LLMB_WORKLOAD/checkpoint_and_dataset/datasets}"
+mkdir -p "$HF_HOME" "$HF_HUB_CACHE" "$HF_DATASETS_CACHE"
+CONTAINER_MOUNTS="$HF_HOME"
 if [[ -n ${RUN_CONF_MOUNTS:-""} ]]; then
     if [[ -n ${CONTAINER_MOUNTS} ]]; then
         CONTAINER_MOUNTS+=","
@@ -89,10 +93,7 @@ if [[ -n ${RUN_CONF_MOUNTS:-""} ]]; then
     CONTAINER_MOUNTS+="${RUN_CONF_MOUNTS}"
 fi
 
-CONFIG_OVERRIDES="${CONFIG_OVERRIDES:-}"
-if [[ -n ${CONFIG_OVERRIDES} ]]; then
-    CONFIG_OVERRIDES+=" "
-fi
+CONFIG_OVERRIDES=""
 if [[ -n ${CONTAINER_MOUNTS} ]]; then
     CONFIG_OVERRIDES+=" --custom_mounts $CONTAINER_MOUNTS"
 fi
@@ -186,7 +187,7 @@ fi
 pushd $LLMB_WORKLOAD/Megatron-Bridge
 python3 scripts/performance/setup_experiment.py \
     --container_image $IMAGE \
-    --hf_token "${HF_TOKEN}" \
+    --offline \
     --compute_dtype $COMPUTE_DTYPE \
     --model_family_name llama \
     --model_recipe_name llama3_70b \
@@ -203,6 +204,7 @@ python3 scripts/performance/setup_experiment.py \
     --log_dir $NEMORUN_HOME \
     --time_limit $TIME_LIMIT \
     --max_steps $MAX_STEPS \
-    $SLURM_ARGS
+    $SLURM_ARGS \
+    ${LLMB_MBRIDGE_EXTRA_ARGS:-}
 
 popd

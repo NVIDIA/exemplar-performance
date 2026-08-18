@@ -19,8 +19,8 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
-# Top-level release metadata for the LLM Benchmarking Collection
+# Top-level release metadata for Exemplar Performance
 # This file centralizes version management across all recipes
 
-llmb_version: '26.06.00'
+llmb_version: '26.08.00'
 

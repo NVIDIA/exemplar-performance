@@ -30,13 +30,24 @@ set -eu -o pipefail
 
 export WORKLOAD_TYPE=pretrain
 export MODEL_NAME=kimi-k2
-export FW_VERSION=26.04.01
 
 export OPENBLAS_NUM_THREADS=1 # Required for login nodes with tight memory restrictions. Do not remove.
 
 export LLMB_WORKLOAD=$LLMB_INSTALL/workloads/${WORKLOAD_TYPE}_${MODEL_NAME}
 export NEMORUN_HOME=$LLMB_WORKLOAD
 export LLMB_REPO=$PWD
+
+GPU_TYPE=${GPU_TYPE:?GPU_TYPE is a required variable.}
+GPU_TYPE=${GPU_TYPE,,}
+
+if [[ $GPU_TYPE == "gb300" ]] || [[ $GPU_TYPE == "gb200" ]] || [[ $GPU_TYPE == "b300" ]]; then
+    export FW_VERSION=26.06.01
+elif [[ $GPU_TYPE == "b200" ]]; then
+    export FW_VERSION=26.04.01
+else
+    echo "Error: GPU_TYPE must be gb300, gb200, b300, or b200 for Kimi-K2."
+    exit 1
+fi
 
 export IMAGE=${RUN_CONF_IMAGE:-$LLMB_INSTALL/images/nvidia+nemo+$FW_VERSION.sqsh}
 
@@ -45,8 +56,6 @@ DTYPE=${DTYPE,,}
 FP8_RECIPE=${FP8_RECIPE:-mx}
 FP8_RECIPE=${FP8_RECIPE,,}
 COMPUTE_TYPE=${DTYPE}_${FP8_RECIPE}
-GPU_TYPE=${GPU_TYPE:?GPU_TYPE is a required variable.}
-GPU_TYPE=${GPU_TYPE,,}
 JOB_TOTAL_GPUS=${JOB_TOTAL_GPUS:?JOB_TOTAL_GPUS is a required variable.}
 
 PROFILE_ENABLED=${ENABLE_PROFILE:-false}
@@ -94,10 +103,7 @@ if [[ -n ${RUN_CONF_MOUNTS:-""} ]]; then
     CONTAINER_MOUNTS+="${RUN_CONF_MOUNTS}"
 fi
 
-CONFIG_OVERRIDES="${CONFIG_OVERRIDES:-}"
-if [[ -n ${CONFIG_OVERRIDES} ]]; then
-    CONFIG_OVERRIDES+=" "
-fi
+CONFIG_OVERRIDES=""
 if [[ -n ${CONTAINER_MOUNTS} ]]; then
     CONFIG_OVERRIDES+=" --custom_mounts $CONTAINER_MOUNTS"
 fi
@@ -123,11 +129,8 @@ CONFIG_OVERRIDES+=" --enable_pct_binding $ENABLE_PCT_BINDING "
 
 if [[ $GPU_TYPE == "gb300" ]] || [[ $GPU_TYPE == "gb200" ]]; then
     GPUS_PER_NODE=4
-elif [[ $GPU_TYPE == "b300" ]] || [[ $GPU_TYPE == "b200" ]] || [[ $GPU_TYPE == "h100" ]]; then
-    GPUS_PER_NODE=8
 else
-    echo "Error: GPU_TYPE must be gb300, gb200, b300, b200, or h100 for Kimi-K2."
-    exit 1
+    GPUS_PER_NODE=8
 fi
 
 # run command
@@ -149,6 +152,7 @@ python3 scripts/performance/setup_experiment.py \
     --time_limit $TIME_LIMIT \
     --max_steps $MAX_STEPS \
     --packager none \
-    $SLURM_ARGS
+    $SLURM_ARGS \
+    ${LLMB_MBRIDGE_EXTRA_ARGS:-}
 
 popd

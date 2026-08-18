@@ -58,29 +58,12 @@ def parse_slurm_job_id(raw_job_id: object) -> int:
     return int(match.group(1))
 
 
-def get_slurm_job_status(jobid: int):
-    """Get the status of a SLURM job by job ID.
-
-    Args:
-        jobid: SLURM job ID
-
-    Returns:
-        str: Job status string, or None if error occurred
-    """
-    cmd = f"sacct -X --format=State --noheader -j {jobid}"
-    try:
-        result = subprocess.run(shlex.split(cmd), capture_output=True, text=True, check=True)
-        job_status = result.stdout.strip()
-        logger.debug(f"Job {jobid} status: {job_status}")
-        return job_status
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Error running sacct for job {jobid}: {e.stderr}")
-        return None
-
-
-def get_slurm_job_statuses(job_ids: list[int]) -> dict[int, SlurmAccountingRecord] | None:
+def get_slurm_job_statuses(
+    job_ids: list[int], *, start_time: str | None = None
+) -> dict[int, SlurmAccountingRecord] | None:
     """Get Slurm accounting records for multiple jobs with one sacct call.
 
+    ``start_time`` bounds the accounting window passed to sacct.
     Returns a dict (possibly empty) on success. Job ids that sacct does not
     know about are simply absent from the dict — sacct does not error for
     unknown ids. Returns None when sacct itself could not be queried (timeout,
@@ -99,6 +82,8 @@ def get_slurm_job_statuses(job_ids: list[int]) -> dict[int, SlurmAccountingRecor
         f"--jobs={','.join(str(job_id) for job_id in unique_job_ids)}",
         "--format=JobIDRaw,State,Elapsed,Submit,NodeList,ExitCode",
     ]
+    if start_time:
+        cmd.append(f"--starttime={start_time}")
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=SACCT_TIMEOUT_SECONDS)

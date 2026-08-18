@@ -25,14 +25,14 @@ import pathlib
 import sys
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
-from typing import Annotated, Optional
+from typing import Annotated, Any, Mapping, Optional
 
 import typer
 import yaml
 
 from llmb_run.archive import run_archive
 from llmb_run.config_manager import ClusterConfig, get_cluster_config
-from llmb_run.env_args import parse_cli_env_args
+from llmb_run.env_args import parse_cli_env_args, parse_cli_mbridge_args
 from llmb_run.exemplar import generate_exemplar_tasks
 from llmb_run.job_history import (
     format_job_details,
@@ -49,6 +49,7 @@ from llmb_run.metadata_utils import parse_workload_name
 from llmb_run.slurm_args import build_cli_slurm_args, validate_no_additional_slurm_params_conflict
 from llmb_run.task_generation import TaskGenerationRequest, ValidationError, generate_tasks
 from llmb_run.tasks import (
+    WorkloadTask,
     format_task_output,
 )
 from llmb_run.workload_validator import (
@@ -295,18 +296,15 @@ def _handle_no_tasks_error(app_ctx: AppContext, request: TaskGenerationRequest):
         )
 
 
-def report_validation_results(validated_tasks, error_summary, task_list, cluster_config, mode_name="job"):
+def report_validation_results(validated_tasks, error_summary, task_list, mode_name="job"):
     """Report validation results in a consistent format across different modes.
 
     Args:
         validated_tasks: List of valid tasks
         error_summary: Dictionary of validation errors
         task_list: Original list of all tasks
-        cluster_config: Cluster configuration
         mode_name: Name of the mode for error messages (e.g., "submit", "exemplar")
     """
-    cluster_gpu_type = cluster_config.gpu_type
-
     if error_summary:
         total_errors = sum(err['count'] for err in error_summary.values())
         logger.error(f"Validation failed for {total_errors} out of {len(task_list)} tasks:")
@@ -319,16 +317,7 @@ def report_validation_results(validated_tasks, error_summary, task_list, cluster
             suggestions = error_info['suggestions']
 
             # Use existing format_validation_error for consistent formatting
-            formatted_error = format_validation_error(
-                example_task.workload_key,
-                example_task.model_size,
-                example_task.dtype,
-                example_task.scale,
-                cluster_gpu_type,
-                error_type,
-                error_msg,
-                suggestions,
-            )
+            formatted_error = format_validation_error(error_type, error_msg, suggestions)
 
             # Add count prefix with example
             prefix = f"  ❌ {count}x {example_task.workload_key}_{example_task.model_size} (dtype={example_task.dtype})"
@@ -533,6 +522,22 @@ def jobs_rebuild(ctx: typer.Context):
         logger.warning(f"sacct unavailable; refreshed statuses may be stale ({stats.refresh_error}).")
 
 
+def _warn_and_clear_unsupported_mbridge_args(tasks: list[WorkloadTask], workloads: Mapping[str, Any]) -> None:
+    """Warn once and clear MBridge-only arguments from incompatible tasks."""
+    ignored_workloads: set[str] = set()
+
+    for task in tasks:
+        workload = workloads.get(task.workload_key, {})
+        launcher_type = workload.get('metadata', {}).get('run', {}).get('launcher_type')
+        if launcher_type != 'megatron_bridge' and task.mbridge_args:
+            ignored_workloads.add(task.workload_key)
+            task.mbridge_args = ()
+
+    if ignored_workloads:
+        names = ', '.join(sorted(ignored_workloads))
+        logger.warning(f"Ignoring --mbridge-arg for non-Megatron-Bridge workloads: {names}")
+
+
 def _submit_impl(ctx: typer.Context, request: TaskGenerationRequest, dryrun: bool, mode_name: str = "submit"):
     """Shared implementation for all submission commands."""
     app_ctx: AppContext = ctx.obj
@@ -567,7 +572,9 @@ def _submit_impl(ctx: typer.Context, request: TaskGenerationRequest, dryrun: boo
             validated_tasks, error_summary = validate_bulk_tasks(task_list, app_ctx.workloads, app_ctx.cluster_config)
 
             # Report results
-            report_validation_results(validated_tasks, error_summary, task_list, app_ctx.cluster_config, mode_name)
+            report_validation_results(validated_tasks, error_summary, task_list, mode_name)
+
+        _warn_and_clear_unsupported_mbridge_args(validated_tasks, app_ctx.workloads)
 
         if request.slurm_args:
             for task in validated_tasks:
@@ -650,6 +657,14 @@ def submit(
             help='Write a redacted rank-0 environment snapshot for Megatron-Bridge workloads. Ignored for other workloads.',
         ),
     ] = False,
+    mbridge_arg_values: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            '--mbridge-arg',
+            help='Repeatable raw Megatron-Bridge argument (`--flag=value` or Hydra override). Applied after recipe overrides.',
+            rich_help_panel='Megatron-Bridge',
+        ),
+    ] = None,
     proxy: Annotated[bool, typer.Option('--proxy', help='Use proxy scales.')] = False,
     dryrun: Annotated[
         bool,
@@ -705,6 +720,7 @@ def submit(
 
     try:
         explicit_env_overrides = parse_cli_env_args(env_values)
+        mbridge_args = parse_cli_mbridge_args(mbridge_arg_values)
     except ValueError as e:
         logger.error(str(e))
         raise typer.Exit(code=EXIT_VALIDATION_ERROR) from e
@@ -740,6 +756,7 @@ def submit(
         slurm_args=slurm_args,
         explicit_env_overrides=explicit_env_overrides,
         extra_workload_args=("--dump_env",) if dump_env else (),
+        mbridge_args=mbridge_args,
     )
 
     _submit_impl(ctx, request, dryrun, mode_name="submit")
@@ -812,9 +829,7 @@ def exemplar(
         validated_tasks, error_summary = validate_bulk_tasks(task_list, app_ctx.workloads, app_ctx.cluster_config)
 
         # Report results
-        report_validation_results(
-            validated_tasks, error_summary, task_list, app_ctx.cluster_config, mode_name="exemplar"
-        )
+        report_validation_results(validated_tasks, error_summary, task_list, mode_name="exemplar")
 
         # Print the concrete jobs we're about to submit
         logger.info(f"Exemplar Certification Jobs ({len(validated_tasks)}):")

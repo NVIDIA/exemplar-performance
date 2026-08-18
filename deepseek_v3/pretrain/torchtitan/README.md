@@ -2,7 +2,7 @@
 
 This recipe contains information and scripts to produce performance results for the DeepSeek-V3 pre-training workload using the **TorchTitan** framework. The scripts help perform environment setup and launch benchmark jobs.
 
-TorchTitan is a proof-of-concept for Large-scale LLM training using native PyTorch. This implementation leverages TorchTitan's distributed training capabilities with FSDP (Fully Sharded Data Parallel), tensor parallelism, pipeline parallelism, and expert parallelism for efficient training of the DeepSeek-V3 671B parameter model.
+TorchTitan is a PyTorch-native platform for large-scale generative AI training.
 
 ## Supported GPU Configurations
 
@@ -30,17 +30,13 @@ BF16 is supported on all GPUs; FP8 is supported on B200 and GB200 only.
 | ---- | :-------: | :--: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :--: | :-: | :-----: |
 | 671B |   BF16    | 512  |  4096  |  60   | 64  |  1  | 64  |  8  | 16  | 1024 |  1  |   C4    |
 
-| Size | Precision | GPUs | SeqLen | Steps | DP  | TP  | EP  | PP  | MBS | GBS  | GA  | Dataset |
-| ---- | :-------: | :--: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :--: | :-: | :-----: |
-| 671B |   BF16    | 1024 |  4096  |  60   | 128 |  1  | 64  |  8  | 16  | 2048 |  1  |   C4    |
-
 # Prerequisites
 
-## HuggingFace Account
+## Hugging Face Account
 
-A HuggingFace account is required to download the tokenizer and dataset. You will need to:
+A Hugging Face account and access token are required to download the tokenizer and dataset reliably. Although the assets are public, unauthenticated downloads are heavily rate-limited. You will need to:
 
-1. [Create a HuggingFace access token](https://huggingface.co/settings/tokens)
+1. [Create a Hugging Face access token](https://huggingface.co/settings/tokens)
 2. Add the generated token to your environment:
 
 ```bash
@@ -53,7 +49,7 @@ Use the installer-managed Python environment for installation, setup tasks, and 
 
 ## Request Access
 
-No special access is required to run this benchmark. The DeepSeek-V3.1-Base tokenizer is publicly available on HuggingFace.
+No special model access is required to run this benchmark. The DeepSeek-V3.1-Base tokenizer is publicly available on Hugging Face.
 
 ## Slurm
 
@@ -86,22 +82,14 @@ The installer will automatically:
 1. Pull and convert the PyTorch container image (`nvidia/pytorch:25.12-py3`)
 2. Clone the TorchTitan repository (`https://github.com/elfiegg/torchtitan.git` at commit `b5351f166b2751684aeb1d2cb15ceb619d383ae0`)
 3. Install TorchTitan into the container (`install_torchtitan_to_container.sh`)
-4. Download the DeepSeek-V3.1-Base tokenizer from HuggingFace (`download_hf_assets.sh`)
-5. Download the C4 dataset from HuggingFace (`download_dataset.sh`)
+4. Download the DeepSeek-V3.1-Base tokenizer from Hugging Face (`download_hf_assets.sh`)
+5. Download the C4 dataset from Hugging Face using the installer-managed dataset download feature
 
-**Note**: The tokenizer and dataset downloads are performed automatically as part of the setup tasks defined in `metadata.yaml`.
+**Note**: The tokenizer download is performed as a setup task, while the dataset is defined in the `downloads.huggingface.repos` section of `metadata.yaml`.
 
 # Prepare Dataset
 
-The C4 dataset is automatically downloaded during the environment setup process. The download script fetches the English subset of the C4 dataset from HuggingFace and stores it in `$LLMB_INSTALL/datasets/c4`.
-
-If you need to manually download or re-download the dataset, you can run:
-
-```bash
-export LLMB_INSTALL=<path to your install directory>
-cd $LLMB_INSTALL/workloads/pretrain_deepseek-v3-torchtitan
-sbatch $LLMB_INSTALL/llmb_repo/deepseek_v3/pretrain/torchtitan/download_dataset.sh
-```
+The C4 dataset is automatically downloaded by `llmb-install`. The installer fetches the English subset of the C4 dataset from Hugging Face and stores it in `$LLMB_INSTALL/datasets/c4`.
 
 # Run Training
 
@@ -186,7 +174,7 @@ TRAINING_STEPS=5000 LOCAL_BATCH_SIZE=8 llmb-run submit -w pretrain_deepseek-v3-t
 
 - `GPUS_PER_NODE`: Number of GPUs per node (default: 8 for H100/B200, 4 for GB200)
 - `DTYPE`: Training precision (default: `bf16`; `fp8` is also supported on B200 and GB200)
-- `DATA_PARALLEL_SHARD_DEGREE`: Data parallel sharding degree (default: 64 for H100 on 512 GPUs, 128 for H100 on 1024 GPUs, `-1` for B200/GB200)
+- `DATA_PARALLEL_SHARD_DEGREE`: Data parallel sharding degree (default: 64 for H100, `-1` for B200/GB200)
 - `EXPERT_PARALLEL_DEGREE`: Expert parallel degree for MoE (default: 64)
 - `PIPELINE_PARALLEL_DEGREE`: Pipeline parallel degree (default: 8 for H100, 1 for B200/GB200)
 - `PIPELINE_PARALLEL_SCHEDULE`: Pipeline schedule (default: `1F1B` for H100, `Interleaved1F1B` for B200/GB200)
@@ -195,7 +183,7 @@ TRAINING_STEPS=5000 LOCAL_BATCH_SIZE=8 llmb-run submit -w pretrain_deepseek-v3-t
 - `SEQ_LEN`: Sequence length (default: 4096)
 - `TRAINING_STEPS`: Number of training steps (default: 60)
 - `LOCAL_BATCH_SIZE`: Local batch size per GPU (default: 16 for H100, 8 for B200/GB200)
-- `LOG_RANK`: Rank to log from (default: 448 for H100 on 512 GPUs, 896 for H100 on 1024 GPUs, 224 for B200/GB200)
+- `LOG_RANK`: Rank to log from (default: 448 for H100, 224 for B200/GB200)
 - `EP_COMM_BACKEND`: Expert parallel communication backend (default: `deepep` for H100/B200, `hybridep` for GB200)
 - `RUN_CONF_IMAGE`: Override container image path
 - `RUN_CONF_MOUNTS`: Additional container mounts
@@ -207,13 +195,13 @@ To control the batch allocation in the direct method, pass flags directly to `sb
 ### Command Template
 
 ```bash
-GPU_TYPE=<type> JOB_TOTAL_GPUS=<number> sbatch launch.sh
+GPU_TYPE=<type> JOB_TOTAL_GPUS=<number> sbatch -N <nodes> launch.sh
 ```
 
 For example, to use a reservation with the direct method:
 
 ```bash
-GPU_TYPE=<type> JOB_TOTAL_GPUS=<number> sbatch --reservation=my_reservation launch.sh
+GPU_TYPE=<type> JOB_TOTAL_GPUS=<number> sbatch -N <nodes> --reservation=my_reservation launch.sh
 ```
 
 ### Example Commands
@@ -221,37 +209,37 @@ GPU_TYPE=<type> JOB_TOTAL_GPUS=<number> sbatch --reservation=my_reservation laun
 Train on H100 GPUs (minimum configuration):
 
 ```bash
-GPU_TYPE=h100 JOB_TOTAL_GPUS=512 sbatch launch.sh
+GPU_TYPE=h100 JOB_TOTAL_GPUS=512 sbatch -N 64 launch.sh
 ```
 
 Train on B200 GPUs:
 
 ```bash
-GPU_TYPE=b200 JOB_TOTAL_GPUS=256 sbatch launch.sh
+GPU_TYPE=b200 JOB_TOTAL_GPUS=256 sbatch -N 32 launch.sh
 ```
 
 Train on B200 GPUs with FP8:
 
 ```bash
-GPU_TYPE=b200 DTYPE=fp8 JOB_TOTAL_GPUS=256 sbatch launch.sh
+GPU_TYPE=b200 DTYPE=fp8 JOB_TOTAL_GPUS=256 sbatch -N 32 launch.sh
 ```
 
 Train on GB200 GPUs:
 
 ```bash
-GPU_TYPE=gb200 JOB_TOTAL_GPUS=256 sbatch launch.sh
+GPU_TYPE=gb200 JOB_TOTAL_GPUS=256 sbatch -N 64 launch.sh
 ```
 
 Train on GB200 GPUs with FP8:
 
 ```bash
-GPU_TYPE=gb200 DTYPE=fp8 JOB_TOTAL_GPUS=256 sbatch launch.sh
+GPU_TYPE=gb200 DTYPE=fp8 JOB_TOTAL_GPUS=256 sbatch -N 64 launch.sh
 ```
 
 Train with custom training steps:
 
 ```bash
-GPU_TYPE=h100 JOB_TOTAL_GPUS=1024 TRAINING_STEPS=5000 sbatch launch.sh
+GPU_TYPE=h100 JOB_TOTAL_GPUS=512 TRAINING_STEPS=5000 sbatch -N 64 launch.sh
 ```
 
 Train with custom parallelism settings:
@@ -261,7 +249,7 @@ GPU_TYPE=h100 JOB_TOTAL_GPUS=512 \
   DATA_PARALLEL_SHARD_DEGREE=32 \
   EXPERT_PARALLEL_DEGREE=16 \
   PIPELINE_PARALLEL_DEGREE=4 \
-  sbatch launch.sh
+  sbatch -N 64 launch.sh
 ```
 
 ## Configuration Files
@@ -394,18 +382,6 @@ To calculate throughput in tokens per second:
 throughput (tokens/sec) = (sequence length) × (global batch size) / (training step time in seconds)
 ```
 
-Where:
-
-- Sequence length = 4096 (default)
-- Global batch size = (local batch size) × (gradient accumulation steps) × (number of GPUs) / (data parallel shard degree)
-
-Example for H100 with 512 GPUs:
-
-```
-global_batch_size = 16 × 1 × 512 / 64 = 128  (where GA=1)
-throughput = 4096 × 128 / (step_time_seconds)
-```
-
 ## Model FLOPs Utilization (MFU)
 
 Model FLOPs Utilization indicates how efficiently the model is using the available compute:
@@ -448,7 +424,7 @@ If the container cannot access files:
 
 ### GPU Type Not Supported
 
-The error "Torchtitan recipes only supports h100, b200 and gb200 GPU types" means:
+The error message `TorchTitan recipe supports only h100, b200, and gb200 GPU types; got ...` means:
 
 - You're trying to use a GPU type not supported by this recipe
 - Currently supported: h100, b200, gb200

@@ -21,6 +21,7 @@
 
 """Configuration file generation for individual test runs."""
 
+import getpass
 import hashlib
 import importlib
 import json
@@ -32,6 +33,7 @@ from typing import Any, Dict, Optional
 import yaml
 
 from llmb_run.config_manager import ClusterConfig
+from llmb_run.constants import USER_ENV_VARS
 from llmb_run.slurm_utils import get_cluster_name
 
 logger = logging.getLogger('llmb_run.run_config')
@@ -44,6 +46,25 @@ try:
 except ModuleNotFoundError:
     # Internal extensions unavailable – safe to ignore.
     pass
+
+
+def _get_current_user() -> str:
+    """Resolve the human user to attribute a job to.
+
+    Checks USER_ENV_VARS (CI-provided identity, since the OS/container user
+    in a runner is generic, e.g. root; SUDO_USER covers the interactive sudo
+    case) before falling back to the OS user. getpass.getuser() can raise on
+    minimal containers with no matching passwd entry, so it's wrapped rather
+    than allowed to crash config generation.
+    """
+    for var in USER_ENV_VARS:
+        val = os.environ.get(var)
+        if val:
+            return val
+    try:
+        return getpass.getuser()
+    except Exception:
+        return 'unknown'
 
 
 def load_llmb_version(repo_root: str) -> Optional[str]:
@@ -344,6 +365,7 @@ def create_llmb_config(task, job_id, workdir, config: ClusterConfig, workloads):
     llmb_config = {
         'job_info': {
             'job_id': job_id,
+            'user': _get_current_user(),
             'launcher_type': metadata.get('run', {}).get('launcher_type', ''),
             'launch_time': datetime.now().isoformat(),
             'experiment_id': experiment_id,
@@ -380,6 +402,7 @@ def create_llmb_config(task, job_id, workdir, config: ClusterConfig, workloads):
             'strong_scaling': os.getenv('STRONG_SCALING', 'false').lower() == 'true',
             'env_overrides': task.env_overrides,
             'model_overrides': task.model_overrides,
+            'mbridge_args': list(task.mbridge_args),
         },
     }
 

@@ -42,3 +42,8 @@ GPU_TYPE_TO_NUM_GPUS = {
 
 # Workload exclusions (currently empty but keeping for future use)
 EXCLUDE_WORKLOADS = []
+
+# Env vars carrying the pipeline-triggering/human user, checked in order.
+# GITLAB_USER_LOGIN/GITHUB_ACTOR are CI-provided (the OS/container user in a
+# runner is generic, e.g. root); SUDO_USER covers the interactive sudo case.
+USER_ENV_VARS = ('GITLAB_USER_LOGIN', 'GITHUB_ACTOR', 'SUDO_USER')
