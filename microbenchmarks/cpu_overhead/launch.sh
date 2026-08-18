@@ -50,12 +50,13 @@ export FW_VERSION=1.1.0rc5
 export LLMB_INSTALL=${LLMB_INSTALL:?Please set LLMB_INSTALL to the path of the installation directory for all workloads}
 export LLMB_WORKLOAD=$LLMB_INSTALL/workloads/${WORKLOAD_TYPE}_${WORKLOAD}
 export LLMB_REPO=${LLMB_REPO:-$LLMB_INSTALL/llmb_repo}
+export LLMB_EXPERIMENT_DIR=${LLMB_EXPERIMENT_DIR:?LLMB_EXPERIMENT_DIR must be set by the configured_sbatch launcher}
 export IMAGE=${RUN_CONF_IMAGE:-$LLMB_INSTALL/images/tensorrt-llm+release+${FW_VERSION}.sqsh}
 
 export MODEL_PATH=$LLMB_WORKLOAD/gpt-oss-120b
 export MOUNT_DIR=$LLMB_WORKLOAD,$LLMB_REPO:$LLMB_REPO:ro
 export TRT_DIR=$LLMB_WORKLOAD/TensorRT-LLM
-export RESULT_DIR=$LLMB_WORKLOAD/experiments/cpu_overhead_tests
+export RESULT_DIR=$LLMB_EXPERIMENT_DIR
 export CPU_OVERHEAD_SCRIPT=${CPU_OVERHEAD_SCRIPT:-$LLMB_REPO/microbenchmarks/cpu_overhead/pytorch_kernel_launch_latency.py}
 export USE_CASES=${USE_CASES:-"kernel_launch tokenization"}
 export NUM_PROMPTS=${NUM_PROMPTS:-100000}
@@ -80,10 +81,10 @@ for value in $USE_CASES; do
     LOG_NAME=${value}_overhead
 
     if [ ${value} == "kernel_launch" ]; then
-        CMD="numactl ${CPU_BIND} --membind=0 python \"$CPU_OVERHEAD_SCRIPT\" \
+        CMD="cd \"$RESULT_DIR\" && numactl ${CPU_BIND} --membind=0 python \"$CPU_OVERHEAD_SCRIPT\" \
 	    --start_size 4 --end_size 512 --iters 1000000"
     elif [ ${value} == "tokenization" ]; then
-        export DATASET_FILE=$LLMB_WORKLOAD/dataset_1000_1000_${NUM_PROMPTS}_${SLURM_PROCID}.txt
+        export DATASET_FILE=$RESULT_DIR/dataset_1000_1000_${NUM_PROMPTS}.txt
         CMD="START_TIME=\$(date +%s); \
             python $TRT_DIR/benchmarks/cpp/prepare_dataset.py \
             --stdout --tokenizer $MODEL_PATH \
@@ -100,7 +101,8 @@ for value in $USE_CASES; do
     export SRUN_OUTPUT=${RESULT_DIR}/${LOG_NAME}_%N_%j.out
     export SRUN_ERROR=${RESULT_DIR}/${LOG_NAME}_%N_%j.err
 
-    srun --container-image "$IMAGE" \
+    # Run one task with all CPUs in the node allocation.
+    srun --ntasks=1 --cpus-per-task="$SLURM_CPUS_ON_NODE" --container-image "$IMAGE" \
         --container-mounts "$MOUNT_DIR" \
         --container-writable \
         --no-container-mount-home bash -c "$CMD"

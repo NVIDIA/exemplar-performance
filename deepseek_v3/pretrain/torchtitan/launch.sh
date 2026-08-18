@@ -92,7 +92,7 @@ elif [[ $GPU_TYPE == "gb200" ]]; then
     export PIPELINE_PARALLEL_DEGREE=${PIPELINE_PARALLEL_DEGREE:-1}
     export LOCAL_BATCH_SIZE=${LOCAL_BATCH_SIZE:-8}
 else
-    echo "❌ Error: Torchtitan recipes only supports h100, b200, and gb200 GPU types, got '$GPU_TYPE'"
+    echo "❌ Error: TorchTitan recipe supports only h100, b200, and gb200 GPU types; got '$GPU_TYPE'."
     exit 1
 fi
 
@@ -112,6 +112,8 @@ fi
 export SLURM_LOG_DIR=$LLMB_RUN_DIR
 export LLMB_OUTPUT_DIR=$LLMB_RUN_DIR/outputs
 mkdir -p "$LLMB_OUTPUT_DIR"
+# Ensure the target dir for the resolved-config dump (--job.save_config_file) exists
+mkdir -p "$LLMB_RUN_DIR/configs"
 
 # Default training parameters - can be overridden via environment variables
 export DATASET_PATH=${DATASET_PATH:-$LLMB_INSTALL/datasets/c4}
@@ -166,6 +168,7 @@ LOCAL_RANK=\$SLURM_LOCALID; \
 python -m torchtitan.train \
 --job.config_file=$LLMB_REPO/deepseek_v3_671b.toml \
 --job.dump_folder=$LLMB_OUTPUT_DIR \
+--job.save_config_file=$LLMB_RUN_DIR/configs/torchtitan_resolved_config.json \
 --training.dataset_path=$DATASET_PATH \
 --training.steps=$TRAINING_STEPS \
 --training.seq_len=$SEQ_LEN \

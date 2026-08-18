@@ -55,6 +55,15 @@ This recipe contains information and scripts to produce performance results for 
 | FP8/BF16  | 256  |  8192  |   88   |  1  |  1  |  1  | 64  | 256 |     |  1  | 2048 |  8  |
 | FP8/BF16  | 512  |  8192  |   88   |  1  |  1  |  1  | 64  | 512 |     |  1  | 4096 |  8  |
 
+## GB200 Nemotron 3 120B
+
+| Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
+| --------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
+| BF16      |  64  |  8192  |   88   |  2  |  1  |  1  | 64  | 32  |     |  1  | 512  | 16  |
+| BF16      | 128  |  8192  |   88   |  2  |  1  |  1  | 64  | 64  |     |  1  | 1024 | 16  |
+| BF16      | 256  |  8192  |   88   |  2  |  1  |  1  | 64  | 128 |     |  1  | 2048 | 16  |
+| BF16      | 512  |  8192  |   88   |  2  |  1  |  1  | 64  | 256 |     |  1  | 4096 | 16  |
+
 ## B300 Nemotron 3 120B
 
 | Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
@@ -68,10 +77,10 @@ This recipe contains information and scripts to produce performance results for 
 
 | Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
 | --------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
-| FP8/BF16  |  64  |  8192  |   88   |  1  |  1  |  1  | 64  | 64  |     |  1  | 512  |  8  |
-| FP8/BF16  | 128  |  8192  |   88   |  1  |  1  |  1  | 64  | 128 |     |  1  | 1024 |  8  |
-| FP8/BF16  | 256  |  8192  |   88   |  1  |  1  |  1  | 64  | 256 |     |  1  | 2048 |  8  |
-| FP8/BF16  | 512  |  8192  |   88   |  1  |  1  |  1  | 64  | 512 |     |  1  | 4096 |  8  |
+| BF16      |  64  |  8192  |   88   |  2  |  1  |  1  |  8  | 32  |     |  1  | 512  | 16  |
+| BF16      | 128  |  8192  |   88   |  2  |  1  |  1  |  8  | 64  |     |  1  | 1024 | 16  |
+| BF16      | 256  |  8192  |   88   |  2  |  1  |  1  |  8  | 128 |     |  1  | 2048 | 16  |
+| BF16      | 512  |  8192  |   88   |  2  |  1  |  1  |  8  | 256 |     |  1  | 4096 | 16  |
 
 # Performance Measurement and Analysis
 

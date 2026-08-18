@@ -1,43 +1,48 @@
 # Overview
 
-This recipe contains information and scripts to produce performance results for the Deepseek-v3 pre-training workload. The scripts help perform environment setup and launch benchmark jobs. Configurations use weak scaling methodology (global batch size scales proportionally with GPU count).
+This recipe contains information and scripts to produce performance results for the DeepSeek V3 pre-training workload. The scripts help perform environment setup and launch benchmark jobs. Configurations use weak scaling methodology (global batch size scales proportionally with GPU count).
 
 ## GB300
 
 | Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
 | --------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
 | NVFP4     | 128  |  4096  |   61   |  1  |  4  |  1  | 32  | 32  |  4  |  2  | 2048 | 32  |
-| FP8       | 128  |  4096  |   61   |  1  |  4  |  1  | 32  | 32  |  4  |  2  | 2048 | 32  |
+| FP8       | 128  |  4096  |   61   |  1  |  4  |  1  | 32  | 32  |  4  |  1  | 2048 | 64  |
 | BF16      | 128  |  4096  |   61   |  1  |  4  |  1  | 32  | 32  |  4  |  1  | 2048 | 64  |
 | NVFP4     | 256  |  4096  |   61   |  1  |  2  |  1  | 32  | 128 |  8  |  2  | 4096 | 16  |
-| FP8       | 256  |  4096  |   61   |  1  |  2  |  1  | 32  | 128 |  8  |  2  | 4096 | 16  |
+| FP8       | 256  |  4096  |   61   |  1  |  2  |  1  | 32  | 128 |  8  |  1  | 4096 | 32  |
 | BF16      | 256  |  4096  |   61   |  1  |  4  |  1  | 64  | 64  |  4  |  1  | 4096 | 64  |
 | NVFP4     | 512  |  4096  |   61   |  1  |  2  |  1  | 32  | 256 |  8  |  2  | 8192 | 16  |
-| FP8       | 512  |  4096  |   61   |  1  |  2  |  1  | 32  | 256 |  8  |  2  | 8192 | 16  |
+| FP8       | 512  |  4096  |   61   |  1  |  2  |  1  | 32  | 256 |  8  |  1  | 8192 | 32  |
 | BF16      | 512  |  4096  |   61   |  1  |  4  |  1  | 64  | 128 |  4  |  1  | 8192 | 64  |
 
 ## GB200
 
 | Precision      | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
 | -------------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
+| FP8            | 128  |  4096  |   61   |  2  |  2  |  1  | 32  | 32  |  8  |  1  | 2048 | 64  |
 | NVFP4/FP8/BF16 | 256  |  4096  |   61   |  1  |  4  |  1  | 64  | 64  |  4  |  1  | 4096 | 64  |
 | NVFP4/FP8/BF16 | 512  |  4096  |   61   |  1  |  4  |  1  | 64  | 128 |  4  |  1  | 8192 | 64  |
 
 ## B300
 
-| Precision      | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
-| -------------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
-| NVFP4/FP8/BF16 | 128  |  4096  |   61   |  1  |  8  |  1  |  8  | 16  |     |  2  | 2048 | 64  |
-| NVFP4/FP8/BF16 | 256  |  4096  |   61   |  1  |  8  |  1  |  8  | 32  |     |  2  | 4096 | 64  |
-| NVFP4/FP8/BF16 | 512  |  4096  |   61   |  1  |  8  |  1  |  8  | 64  |     |  2  | 8192 | 64  |
+| Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
+| --------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
+| NVFP4     | 128  |  4096  |   61   |  1  |  8  |  1  |  8  | 16  |  2  |  2  | 2048 | 64  |
+| FP8/BF16  | 128  |  4096  |   61   |  1  |  8  |  1  |  8  | 16  |  2  |  1  | 2048 | 128 |
+| NVFP4     | 256  |  4096  |   61   |  1  |  8  |  1  |  8  | 32  |  2  |  2  | 4096 | 64  |
+| FP8/BF16  | 256  |  4096  |   61   |  1  |  8  |  1  |  8  | 32  |  2  |  1  | 4096 | 128 |
+| NVFP4     | 512  |  4096  |   61   |  1  |  8  |  1  |  8  | 64  |  2  |  2  | 8192 | 64  |
+| FP8/BF16  | 512  |  4096  |   61   |  1  |  8  |  1  |  8  | 64  |  2  |  1  | 8192 | 128 |
 
 ## B200
 
 | Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
 | --------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
-| FP8       | 256  |  4096  |   61   |  1  |  8  |  1  | 32  | 32  |  2  |  1  | 4096 | 128 |
+| FP8       | 128  |  4096  |   61   |  1  |  8  |  1  |  8  | 16  |  2  |  1  | 2048 | 128 |
+| FP8       | 256  |  4096  |   61   |  1  |  8  |  1  |  8  | 32  |  2  |  1  | 4096 | 128 |
 | BF16      | 256  |  4096  |   61   |  1  |  8  |  1  |  8  | 32  |     |  1  | 4096 | 128 |
-| FP8       | 512  |  4096  |   61   |  1  |  8  |  1  | 32  | 64  |  2  |  1  | 8192 | 128 |
+| FP8       | 512  |  4096  |   61   |  1  |  8  |  1  |  8  | 64  |  2  |  1  | 8192 | 128 |
 | BF16      | 512  |  4096  |   61   |  1  |  8  |  1  |  8  | 64  |     |  1  | 8192 | 128 |
 
 ## H100
@@ -138,7 +143,7 @@ The following directory layout and key variables are used in the recipe:
 
 # Prepare Dataset
 
-Since Deepseek-v3 training only uses synthetic datasets, this step is omitted.
+Since DeepSeek V3 training only uses synthetic datasets, this step is omitted.
 
 # Run Training
 
@@ -229,7 +234,7 @@ JOB_TOTAL_GPUS=<number> GPU_TYPE=<type> [DTYPE=<precision>] [MODEL_SIZE=<size>] 
 
 ### Example Commands
 
-Train Deepseek-v3 with BF16 precision on 256 GB200 GPUs:
+Train DeepSeek V3 with BF16 precision on 256 GB200 GPUs:
 
 ```shell
 JOB_TOTAL_GPUS=256 GPU_TYPE=gb200 ./launch.sh
@@ -331,8 +336,46 @@ PyTorch Profiling is intended for rare, advanced debugging scenarios such as NCC
 ENABLE_PYTORCH_PROFILE=true llmb-run submit -w pretrain_deepseek-v3 --dtype bf16 --scale 256
 ```
 
-The trace file location depends on the GPU type and the NeMo version used:
+Trace files are written to `torch_profile/rank-N.json.gz` on all supported GPU types, where `N` is the rank number. For details on the PyTorch Profiler and how to view resulting traces, see the [PyTorch Profiler documentation](https://docs.pytorch.org/tutorials/recipes/recipes/profiler_recipe.html).
 
-- **GB300, GB200, B300, B200, H100** (nemo:26.04.01): `torch_profile/rank-N.json.gz`
+# Proxy Configurations
 
-In both cases `N` is the rank number. For details on the PyTorch Profiler and how to view resulting traces, see the [PyTorch Profiler documentation](https://docs.pytorch.org/tutorials/recipes/recipes/profiler_recipe.html).
+Two proxy configurations are available for performance benchmarking and debugging.
+
+## 1. Reduced GPU-Count Proxy
+
+Runs a reduced version of the full model on fewer GPUs while maintaining high model TFLOPS. These configurations also support testing NVL72 platforms for GB300/GB200 GPUs.
+
+Supported configurations:
+
+- **GB300:** 4, 8, 16, 32, 64, and 72×N GPUs
+- **GB200:** 4, 8, 16, 32, 64, and 72×N GPUs
+- **B300:** 8, 16, 32, and 64 GPUs
+- **B200:** 8, 16, 32, and 64 GPUs
+
+**Example:**
+
+```bash
+llmb-run submit -w pretrain_deepseek-v3 --dtype fp8 --scale 4 --proxy
+```
+
+## 2. CPU Performance Debug Proxy
+
+Designed to isolate CPU performance bottlenecks by allowing full CG (CUDA Graphs) to be enabled or disabled. These configurations are CPU-limited when full CG is disabled, making CPU-related performance issues easier to analyze.
+
+**Supported configurations:**
+
+- **GB300/GB200:** 4 and 64 GPUs
+- **B300/B200:** 8 GPUs
+
+### Run with Full CG enabled (GB300 single node)
+
+```bash
+CPU_PERF_PROXY=true llmb-run submit -w pretrain_deepseek-v3 --dtype fp8 --scale 4 --proxy
+```
+
+### Run with Full CG disabled (GB300 single node)
+
+```bash
+CPU_PERF_PROXY=true DISABLE_CG=true llmb-run submit -w pretrain_deepseek-v3 --dtype fp8 --scale 4 --proxy
+```

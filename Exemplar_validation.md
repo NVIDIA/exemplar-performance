@@ -60,7 +60,7 @@ If approved, your cloud is recognized as an [NVIDIA Exemplar Cloud](https://www.
 - Periodically re-run recipes and maintain performance vs. updated baselines to ensure the platform is delivering optimal perf/value for end users.
 - An Exemplar validation from NVIDIA is valid for 12 months.
 
-To start, contact your NVIDIA account team and reference this DGX Cloud Benchmarking repo.
+To start, contact your NVIDIA account team and reference this Exemplar Performance repo.
 
 ## Exemplar Workload Recipes
 
@@ -77,7 +77,7 @@ Scale: **512 GPUs** | Repeats: **1** | Profiling: **disabled**
 | Llama 3.1   | 70B  | FP8, NVFP4       |
 | Nemotron-H  | 56B  | FP8              |
 | Nemotron 3  | 120B | BF16, FP8        |
-| Qwen3       | 235B | BF16             |
+| Qwen3       | 235B | BF16, FP8        |
 
 ### GB200
 
@@ -90,7 +90,7 @@ Scale: **512 GPUs** | Repeats: **1** | Profiling: **disabled**
 | Llama 3.1   | 70B  | FP8, NVFP4       |
 | Nemotron-H  | 56B  | FP8              |
 | Nemotron 3  | 120B | BF16             |
-| Qwen3       | 235B | BF16             |
+| Qwen3       | 235B | BF16, FP8        |
 
 ### B300
 
@@ -103,7 +103,7 @@ Scale: **512 GPUs** | Repeats: **1** | Profiling: **disabled**
 | Llama 3.1   | 70B  | FP8, NVFP4       |
 | Nemotron-H  | 56B  | FP8              |
 | Nemotron 3  | 120B | BF16             |
-| Qwen3       | 235B | BF16             |
+| Qwen3       | 235B | BF16, FP8        |
 
 ### B200
 
@@ -115,8 +115,8 @@ Scale: **512 GPUs** | Repeats: **1** | Profiling: **disabled**
 | Llama 3.1   | 405B | FP8, NVFP4 |
 | Llama 3.1   | 70B  | FP8, NVFP4 |
 | Nemotron-H  | 56B  | FP8        |
-| Nemotron 3  | 120B | BF16, FP8  |
-| Qwen3       | 235B | BF16       |
+| Nemotron 3  | 120B | BF16       |
+| Qwen3       | 235B | BF16, FP8  |
 
 ### H100
 

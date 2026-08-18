@@ -21,14 +21,11 @@
 
 """Task management for workload execution."""
 
-import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from llmb_run.slurm_args import SlurmArgs
-
-logger = logging.getLogger('llmb_run.tasks')
 
 
 @dataclass
@@ -43,7 +40,11 @@ class WorkloadTask:
     explicit_env_overrides: dict = field(default_factory=dict)
     model_overrides: dict = field(default_factory=dict)
     slurm_args: 'SlurmArgs | None' = None
+    # Legacy Megatron-Bridge argument channel carried through CONFIG_OVERRIDES.
+    # New passthrough arguments should use mbridge_args. Remove after all
+    # supported launch scripts consume LLMB_MBRIDGE_EXTRA_ARGS.
     extra_workload_args: tuple[str, ...] = ()
+    mbridge_args: tuple[str, ...] = ()
 
 
 def format_task_output(task, prefix="", suffix=""):
@@ -63,12 +64,8 @@ def format_task_output(task, prefix="", suffix=""):
         output += f" env={task.env_overrides}"
     if task.model_overrides:
         output += f" params={task.model_overrides}"
+    if task.mbridge_args:
+        output += f" mbridge_args={list(task.mbridge_args)}"
     if suffix:
         output += f" {suffix}"
     return output
-
-
-def print_tasks(task_list):
-    """Print task details in a consistent format."""
-    for task in task_list:
-        logger.info(format_task_output(task, prefix="Task: "))

@@ -37,7 +37,7 @@ fi
 
 export WORKLOAD_TYPE=microbenchmark
 export WORKLOAD=system_info
-export FW_VERSION=26.04.00
+export FW_VERSION=26.06.01
 
 export LLMB_INSTALL=${LLMB_INSTALL:?Please set LLMB_INSTALL to the path of the installation directory for all workloads}
 export IMAGE=${RUN_CONF_IMAGE:-$LLMB_INSTALL/images/nvidia+nemo+$FW_VERSION.sqsh}

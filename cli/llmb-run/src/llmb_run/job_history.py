@@ -55,6 +55,8 @@ HISTORY_DB_NAME = "jobs.sqlite3"
 # sacct accounting can lag behind sbatch by several seconds; don't mark a job
 # PURGED if it was created within this window — sacct just hasn't seen it yet.
 PURGE_GRACE_SECONDS = 300
+SACCT_JOB_CHUNK_SIZE = 150
+SACCT_START_TIME_SAFETY_DAYS = 1
 TERMINAL_STATES = {
     "BOOT_FAIL",
     "CANCELLED",
@@ -290,8 +292,8 @@ def _refresh_slurm_statuses(config: ClusterConfig, job_ids: list[int]) -> tuple[
         return 0, None
 
     refreshed = 0
-    for chunk in _chunks(sorted({int(job_id) for job_id in job_ids}), 200):
-        records = get_slurm_job_statuses(chunk)
+    for chunk in _chunks(sorted({int(job_id) for job_id in job_ids}), SACCT_JOB_CHUNK_SIZE):
+        records = get_slurm_job_statuses(chunk, start_time=_sacct_start_time(config, chunk))
         if records is None:
             return refreshed, "sacct query failed"
 
@@ -307,6 +309,37 @@ def _refresh_slurm_statuses(config: ClusterConfig, job_ids: list[int]) -> tuple[
             conn.commit()
 
     return refreshed, None
+
+
+def _sacct_start_time(config: ClusterConfig, job_ids: list[int]) -> str | None:
+    """Return a safe lower bound for a sacct query, or None for legacy rows."""
+    placeholders = ','.join('?' for _ in job_ids)
+    with _open_history_db(config) as conn:
+        rows = list(
+            conn.execute(
+                f"SELECT submit_time FROM jobs WHERE job_id IN ({placeholders})",
+                job_ids,
+            )
+        )
+
+    submit_times = [row["submit_time"] for row in rows]
+    if len(submit_times) != len(job_ids) or any(not value for value in submit_times):
+        return None
+
+    try:
+        submit_dates = []
+        for value in submit_times:
+            timestamp = datetime.datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+            if timestamp.tzinfo is not None:
+                timestamp = timestamp.astimezone()
+            submit_dates.append(timestamp.date())
+    except ValueError:
+        logger.debug("Unable to derive sacct start time from job submit timestamps")
+        return None
+
+    # Starting at the previous midnight covers small clock/timezone differences
+    # while avoiding sacct's --jobs default of searching from Unix epoch 0.
+    return (min(submit_dates) - datetime.timedelta(days=SACCT_START_TIME_SAFETY_DAYS)).isoformat()
 
 
 def rebuild_history(config: ClusterConfig, workloads: dict[str, Any]) -> RebuildStats:

@@ -43,7 +43,13 @@ _ARCHIVE_PREFIX = "llmb-archive"
 # aligns with the standard layout.
 _NCCL_WORKLOAD_NAME = "microbenchmark_nccl"
 _NCCL_TOP_LEVEL_PATTERNS = ("llmb-config_*.yaml", "slurm-*.out")
-_ARCHIVE_EXCLUDED_PATTERNS = ("*.nsys-rep", "*_trace.json", "*.pt.trace.json", "*.tar.*")
+_ARCHIVE_EXCLUDED_PATTERNS = (
+    "*.nsys-rep",
+    "*_trace.json",
+    "*.pt.trace.json",
+    "*.tar.*",
+    "dataset_1000_1000_*.txt",
+)
 _ARCHIVE_EXCLUDED_DIRS = {"code", "checkpoints", "nsys_profile", "torch_profile", "pytorch_profile"}
 
 

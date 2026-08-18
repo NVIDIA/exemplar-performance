@@ -247,9 +247,7 @@ def validate_workload_with_details(
     return True, None, "", []
 
 
-def format_validation_error(
-    workload_key, model_size, dtype, scale, cluster_gpu_type, error_type, error_msg, suggestions
-):
+def format_validation_error(error_type, error_msg, suggestions):
     """Format a user-friendly validation error message with suggestions."""
     lines = [error_msg]
 

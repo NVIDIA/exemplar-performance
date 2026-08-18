@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+# Setup
+general:
+  workload: gpt_oss_mlperf
+  display_name: gpt-oss-mlperf
+  workload_aliases: [gpt_oss_mlperf, gpt-oss-mlperf]
+  workload_type: pretrain
+  framework: megatron_bridge
+
+container:
+  images: 
+    - 'nvcr.io#nvidia/nemo:26.06.00'
+
+repositories: 
+  megatron_bridge:
+    url: "https://github.com/NVIDIA-NeMo/Megatron-Bridge.git"
+    commit: "fcbb6031103d0ca845c1a54d4fee55ecfcca17b6"
+  nemo_run:
+    url: "https://github.com/NVIDIA-NeMo/Run.git"
+    commit: "c3fa23fef00b9f4911ffebc94ec81e2409825330"
+
+downloads:
+  huggingface:
+    - repo_id: 'openai/gpt-oss-20b'
+      assets: [config]
+
+setup:
+  venv_req: true
+  dependencies:
+    git:
+      megatron_bridge:
+        repo_key: megatron_bridge
+        install_method:
+          type: clone
+    pip:
+      - package: nemo_run
+        repo_key: nemo_run
+
+# Todo: Needed for 20b?
+tools:
+  cuda_cupti_lib: "13.0.85"
+  nsys: 
+    by_gpu:
+      gb300: "2025.5.1.121-3638078"
+      b300: "2025.5.1.121-3638078"
+
+# Run
+run:
+  launcher_type: 'megatron_bridge'
+  launch_script: 'launch.sh'
+
+  gpu_configs:
+    gb300:
+      model_configs:
+        - model_size: '20b'
+          dtypes:
+            nvfp4: [8, 72]
+            fp8: [8, 72, 512]
+    gb200:
+      model_configs:
+        - model_size: '20b'
+          dtypes:
+            nvfp4: [8, 72]
+            fp8: [8, 72, 512]
+

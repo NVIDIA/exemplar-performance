@@ -97,6 +97,24 @@ from llmb_install.utils.install_summary import write_install_summary_file
 from llmb_install.utils.logging import get_logger, setup_logging
 
 
+class _ResumeExecutionError(BaseException):
+    """Carry a resume action error past resume-detection error handling.
+
+    Subclasses BaseException (not Exception) on purpose: the resume action
+    methods each catch ``except Exception`` to report failures, and some call
+    one another (e.g. edit -> _complete_installation). Deriving from
+    BaseException lets an already-wrapped error pass straight through those
+    broad handlers instead of being caught and re-wrapped. Only the explicit
+    ``except _ResumeExecutionError`` handler in _check_and_handle_resume
+    catches it, where it is unwrapped to the original error and re-raised.
+    Do not change this to Exception.
+    """
+
+    def __init__(self, error: Exception):
+        super().__init__(str(error))
+        self.error = error
+
+
 class Installer:
     """Main installer class that orchestrates the LLMB installation process."""
 
@@ -305,7 +323,7 @@ class Installer:
         except Exception as e:
             print(f"Error completing installation: {e}")
             print("Resume state preserved for retry.")
-            return True
+            raise _ResumeExecutionError(e) from e
 
     def _check_and_handle_resume(self, args: argparse.Namespace, state_result=None) -> bool:
         """Check for resumable installation state and handle resume if requested.
@@ -478,6 +496,11 @@ class Installer:
                     config, completed_workloads, workload_venvs, existing_cluster_config
                 )
 
+        except _ResumeExecutionError as e:
+            # Installation actions must reach the central CLI error handler;
+            # only failures while detecting or presenting resume state should
+            # fall back to the normal installation flow below.
+            raise e.error from None
         except Exception as e:
             print(f"Error in resume detection: {e}")
             print("Disabling resume functionality for this session...")
@@ -550,7 +573,7 @@ class Installer:
         except Exception as e:
             print(f"\nError during resume: {e}")
             print("You may need to start a fresh installation.")
-            return True  # Still return True to avoid double-installation attempts
+            raise _ResumeExecutionError(e) from e
 
     def _edit_resume_installation(
         self,
@@ -694,7 +717,7 @@ class Installer:
         except Exception as e:
             print(f"\nError during edit: {e}")
             print("You may need to start a fresh installation.")
-            return True
+            raise _ResumeExecutionError(e) from e
 
     def run(self, args: argparse.Namespace) -> None:
         """Run the installer with the given arguments.

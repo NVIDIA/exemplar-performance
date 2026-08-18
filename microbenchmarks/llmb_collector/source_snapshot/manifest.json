@@ -1,0 +1,17 @@
+{
+  "projects": [
+    {
+      "commit": "233bd329ea9bfcbc7d9184df00f46f2f66c0e644",
+      "directory": "llmb_collector",
+      "package": "llmb-collector",
+      "tag": "main"
+    },
+    {
+      "commit": "6653e0b8f3768ba2a8ca22959b1c2739116ea12f",
+      "directory": "llmb_capabilities",
+      "package": "llmb-capabilities",
+      "tag": "main"
+    }
+  ],
+  "schema_version": 1
+}

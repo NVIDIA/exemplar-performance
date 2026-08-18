@@ -266,6 +266,20 @@ These flags apply to all `llmb-run submit` modes (single explicit target, target
 - `--dry-run`: Print the jobs that would be submitted without running them.
 - `--force`: Bypass dtype/scale validation for one explicit task. Use only when you intentionally need to run a configuration outside workload metadata.
 
+#### Megatron-Bridge Options
+
+- `--mbridge-arg=ARG`: Pass one raw argument to a Megatron-Bridge workload. Use MBridge's `--flag=value` form or a Hydra override, and repeat the option to pass additional arguments. Compatible launch scripts append them after recipe overrides, so explicit user arguments take precedence.
+
+```bash
+llmb-run submit -w pretrain_llama3.1 -s 70b --dtype fp8 --scale 128 \
+  --mbridge-arg=--micro_batch_size=2 \
+  --mbridge-arg=model.hidden_size=4096
+```
+
+Arguments must be non-empty and cannot contain whitespace. No other validation is performed, and compatible launch scripts may interpret shell metacharacters. Quote the entire option in your invoking shell when it contains shell syntax, for example `--mbridge-arg='model.layers=[1,2,3]'`; downstream launch scripts may still apply their own shell processing.
+
+Arguments are ignored with a warning for non-Megatron-Bridge workloads. This is a raw debugging interface, and secrets should be passed with `--env` instead.
+
 #### Slurm Options
 
 These flags control Slurm submission parameters and apply to all `llmb-run submit` modes:
@@ -457,6 +471,7 @@ The `llmb-config_<JOBID>.yaml` file contains the following sections:
 ```yaml
 job_info:
   job_id: "3530909"                    # SLURM job ID
+  user: "jdoe"                         # User who launched the job (GITLAB_USER_LOGIN/GITHUB_ACTOR/SUDO_USER/OS user...)
   launch_time: "2025-01-15T10:30:45"  # ISO timestamp of job launch
 
 workload_info:
@@ -563,7 +578,7 @@ These methods require additional setup and are recommended only for advanced use
 uv tool install $LLMB_REPO/cli/llmb-run
 
 # Or from git
-# uv tool install git+https://github.com/NVIDIA/dgxc-benchmarking#subdirectory=cli/llmb-run
+# uv tool install git+https://github.com/NVIDIA/exemplar-performance#subdirectory=cli/llmb-run
 ```
 
 ### Option 2: Install as a Package (pip)

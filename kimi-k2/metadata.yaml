@@ -22,26 +22,45 @@
 # Setup
 general:
   workload: kimi-k2
+  display_name: kimi-k2
+  workload_aliases: [kimi-k2, kimi]
   workload_type: pretrain
   framework: megatron_bridge
 
 container:
   images:
-    - 'nvcr.io#nvidia/nemo:26.04.01'
+    by_gpu:
+      default:
+        - 'nvcr.io#nvidia/nemo:26.06.01'
+      b200:
+        - 'nvcr.io#nvidia/nemo:26.04.01'
 
 downloads:
   huggingface:
     - repo_id: 'moonshotai/Kimi-K2-Instruct'
       assets: [config]
 
+# B200 stays on the NeMo 26.04.01 container, so it keeps the Megatron-Bridge
+# commit that container was validated against. The other GPUs run NeMo 26.06.01.
 repositories:
-  megatron_bridge:
-    url: "https://github.com/NVIDIA-NeMo/Megatron-Bridge.git"
-    commit: "06f25c227ef9d3d9b22e5561fb9f46e1cbdab7e2"
+  by_gpu:
+    default:
+      megatron_bridge:
+        url: "https://github.com/NVIDIA-NeMo/Megatron-Bridge.git"
+        commit: "b50da4c7404caa41793e74ac40d18798844c7b67"
 
-  nemo_run:
-    url: "https://github.com/NVIDIA-NeMo/Run.git"
-    commit: "211d4b7439c1b5ee401cfbaba1765454ed438ff5"
+      nemo_run:
+        url: "https://github.com/NVIDIA-NeMo/Run.git"
+        commit: "211d4b7439c1b5ee401cfbaba1765454ed438ff5"
+
+    b200:
+      megatron_bridge:
+        url: "https://github.com/NVIDIA-NeMo/Megatron-Bridge.git"
+        commit: "06f25c227ef9d3d9b22e5561fb9f46e1cbdab7e2"
+
+      nemo_run:
+        url: "https://github.com/NVIDIA-NeMo/Run.git"
+        commit: "211d4b7439c1b5ee401cfbaba1765454ed438ff5"
 
 setup:
   venv_req: true
@@ -55,11 +74,9 @@ setup:
       - package: nemo_run
         repo_key: nemo_run
 
+
 tools:
-  nsys:
-    by_gpu:
-      gb200: "2025.5.1.121-3638078"
-      b300: "2025.5.1.121-3638078"
+  nsys: "2025.5.1.121-3638078"
 
 # Run
 run:

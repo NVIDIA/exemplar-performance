@@ -38,6 +38,7 @@ from llmb_run.constants import (
     SLURM_OUTPUT_PATTERN,
 )
 from llmb_run.env_args import (
+    apply_mbridge_extra_args_contract,
     apply_nemo_explicit_env_contract,
     apply_nemo_workload_args_contract,
     apply_sbatch_explicit_env_contract,
@@ -55,16 +56,6 @@ from llmb_run.tasks import format_task_output
 
 logger = logging.getLogger('llmb_run.job_launcher')
 console = Console()
-
-
-# internal mode
-_internal_modules_available = False
-try:
-    internal_module = importlib.import_module("llmb_run.internal")
-    _internal_modules_available = True
-except ModuleNotFoundError:
-    # Internal extensions unavailable – safe to ignore.
-    pass
 
 # Pre-compiled regex patterns for filtering Nemo2 status instructions
 NEMO2_PYTHON_API_PATTERN = re.compile(
@@ -291,7 +282,7 @@ class JobLauncher(ABC):
         metadata = self.workloads[task.workload_key].get('metadata', {})
         return metadata.get('run', {}).get('launch_script', 'launch.sh')
 
-    def get_gpu_type(self, task):
+    def get_gpu_type(self):
         """Determine GPU type for a task from cluster config only."""
         return self.config.gpu_type
 
@@ -334,7 +325,7 @@ class SbatchLauncher(JobLauncher):
         if os.environ.get('GPUS_PER_NODE'):
             gpus_per_node = int(os.environ.get('GPUS_PER_NODE'))
         else:
-            gpu_type = self.get_gpu_type(task)
+            gpu_type = self.get_gpu_type()
             if gpu_type not in GPU_TYPE_TO_NUM_GPUS:
                 raise ValueError(
                     f"Invalid GPU type specified: '{gpu_type}'. Valid types in 'llmb-run' modules are: {', '.join(GPU_TYPE_TO_NUM_GPUS.keys())}"
@@ -376,7 +367,7 @@ class SbatchLauncher(JobLauncher):
         env["MODEL_SIZE"] = job["MODEL_SIZE"]
         env["DTYPE"] = job["DTYPE"]
         env["JOB_TOTAL_GPUS"] = str(task.scale)
-        env["GPU_TYPE"] = self.get_gpu_type(task)
+        env["GPU_TYPE"] = self.get_gpu_type()
 
         # Add SLURM environment variables
         slurm_env = self.config.slurm.env()
@@ -458,7 +449,7 @@ class ConfiguredSbatchLauncher(JobLauncher):
         job_name = f"{task.workload_key}_{task.model_size}_{task.dtype}"
 
         # Determine node configuration
-        gpu_type = self.get_gpu_type(task)
+        gpu_type = self.get_gpu_type()
         if os.environ.get('GPUS_PER_NODE'):
             gpus_per_node = int(os.environ.get('GPUS_PER_NODE'))
         else:
@@ -606,7 +597,7 @@ class Nemo2Launcher(JobLauncher):
             env["MODEL_SIZE"] = task.model_size
             env["DTYPE"] = task.dtype
             env["JOB_TOTAL_GPUS"] = str(task.scale)
-            env["GPU_TYPE"] = self.get_gpu_type(task)
+            env["GPU_TYPE"] = self.get_gpu_type()
 
             # Add SLURM environment variables
             slurm_env = self.config.slurm.env()
@@ -616,6 +607,9 @@ class Nemo2Launcher(JobLauncher):
                 env['ENABLE_PROFILE'] = 'true'
                 if env.get('ENABLE_GPU_METRICS', 'false').lower() == 'true':
                     env['GPU_METRICS_NODES'] = os.getenv('GPU_METRICS_NODES', '0')
+
+            if task.proxy:
+                env['PROXY_WORKLOAD'] = 'true'
 
             # Automatically enable VBoost for 'eos' cluster if not explicitly set
             if (
@@ -640,7 +634,15 @@ class Nemo2Launcher(JobLauncher):
             task_env = {k: str(v) for k, v in task.env_overrides.items()}
             env.update(task_env)
             if launcher_type == 'megatron_bridge':
+                # Dual-write established workload and environment arguments until
+                # MBridge recipes no longer require CONFIG_OVERRIDES.
                 apply_nemo_workload_args_contract(env, task.extra_workload_args)
+                apply_mbridge_extra_args_contract(
+                    env,
+                    task.mbridge_args,
+                    compatibility_args=task.extra_workload_args,
+                    env_overrides=task.explicit_env_overrides,
+                )
             apply_nemo_explicit_env_contract(env, task.explicit_env_overrides)
 
             # Handle model parameter overrides
@@ -655,7 +657,7 @@ class Nemo2Launcher(JobLauncher):
                 tool_mounts = get_tool_mounts(
                     llmb_install=self.config.llmb_install,
                     workload_metadata=workload_metadata,
-                    gpu_type=self.get_gpu_type(task),
+                    gpu_type=self.get_gpu_type(),
                     arch=self.config.install.node_architecture,
                     profiling_enabled=task.profile,
                 )

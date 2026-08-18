@@ -23,6 +23,7 @@
 # It contains metadata about the job, workload, model, cluster, and container
 job_info:
   job_id: '3913022'
+  user: jdoe
   launch_time: '2025-07-01T21:05:18.298517'
 workload_info:
   framework: megatron_bridge

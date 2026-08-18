@@ -105,16 +105,7 @@ def get_tasks_simple(workloads, input_file, cluster_config: ClusterConfig | None
                         workloads, workload_key, model_size, cluster_gpu_type, cluster_config
                     )
                     if not is_valid:
-                        user_error = format_validation_error(
-                            workload_key,
-                            model_size,
-                            None,
-                            None,
-                            cluster_config.gpu_type if cluster_config else None,
-                            error_type,
-                            error_msg,
-                            suggestions,
-                        )
+                        user_error = format_validation_error(error_type, error_msg, suggestions)
                         logger.error(user_error)
                         logger.error(f"Skipping invalid workload specification: {workload_key}_{model_size}")
                         # Reset state to skip tasks for this invalid workload
@@ -150,16 +141,13 @@ def get_tasks_simple(workloads, input_file, cluster_config: ClusterConfig | None
     return workload_tasks
 
 
-def get_tasks_yaml(input_file, workloads=None, cluster_config: ClusterConfig | None = None):
+def get_tasks_yaml(input_file):
     """Parse an advanced YAML workload file.
 
     The expected YAML format is described in the README.md file.
 
     Args:
         input_file: Path to YAML file
-        workloads: Dictionary of workloads for validation (optional)
-        cluster_config: Cluster configuration for validation (optional)
-
     Returns a dictionary in the same nested format:
       { workload: { model_size: [ list of tuples ] } }
     where each tuple is:
@@ -299,7 +287,7 @@ def get_tasks_yaml(input_file, workloads=None, cluster_config: ClusterConfig | N
 def get_tasks_wrapper(workloads, input_file, cluster_config: ClusterConfig | None = None):
     """Dispatcher for task parsing based on file extension."""
     if input_file.endswith(('.yaml', '.yml')):
-        return get_tasks_yaml(input_file, workloads, cluster_config)
+        return get_tasks_yaml(input_file)
     else:
         return get_tasks_simple(workloads, input_file, cluster_config)
 

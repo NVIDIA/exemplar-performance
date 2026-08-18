@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.2] - 2026-08-11
+
+### Added
+
+- Set `PROXY_WORKLOAD=true` in the environment when launching proxy workloads via `Nemo2Launcher`.
+
+## [1.16.1] - 2026-07-23
+
+### Fixed
+
+- Exclude generated CPU tokenization benchmark datasets from `llmb-run archive`.
+
+## [1.16.0] - 2026-07-14
+
+### Added
+
+- Add repeatable `llmb-run submit --mbridge-arg` passthrough for Megatron-Bridge workload arguments.
+- Add `user` field to `job_info` in `llmb-config_<JOBID>.yaml`, resolved from `GITLAB_USER_LOGIN`, `GITHUB_ACTOR`, `SUDO_USER`, or the OS user.
+
+## [1.15.2] - 2026-07-10
+
+### Changed
+
+- Update Python dependencies.
+
+## [1.15.1] - 2026-07-10
+
+### Fixed
+
+- Time bound and batch `sacct` status queries to prevent `llmb-run jobs` timeouts.
+
 ## [1.15.0] - 2026-06-11
 
 ### Added

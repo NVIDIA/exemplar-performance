@@ -36,6 +36,19 @@ repositories:
     url: "https://github.com/elfiegg/torchtitan.git"
     commit: "b5351f166b2751684aeb1d2cb15ceb619d383ae0"
 
+downloads:
+  huggingface:
+    repos:
+      - repo_id: allenai/c4
+        repo_type: dataset
+        target: shared
+        name: c4
+        include:
+          - "en/*"
+          - "dataset_info.json"
+          - "*.py"
+          - "README.md"
+
 setup:
   venv_req: true
   dependencies:
@@ -56,10 +69,6 @@ setup:
       cmd: './download_hf_assets.sh'
       job_type: local
       requires_gpus: false
-    - name: dataset_download
-      cmd: './download_dataset.sh'
-      job_type: local
-      requires_gpus: false
 
 # Run
 run:
@@ -77,7 +86,7 @@ run:
       model_configs:
         - model_size: '671b'
           dtypes:
-            bf16: [512, 1024]
+            bf16: [512]
 
     gb200:
       model_configs:
