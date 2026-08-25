@@ -1,0 +1,133 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+envelope:
+  name: glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c8-1p8d
+  model: glm5-fp8
+  gpu_type: B200
+  arch: amd64
+  engine: sglang
+  serving_mode: disaggregated
+  framework: dynamo
+  scenario: llm-perf
+  distribution: synthetic
+  mode: synthetic
+  launcher: aiperf
+  goal: pareto
+  status: wip
+  results_link: ./RESULTS.md
+  provenance:
+    schema_version: k8s.llm-perf.v1
+    official: false
+    source_image_tag: nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1
+    image_digest: sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9
+    image_ref: nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9
+  exemplar:
+    metric: pareto_geomean
+    unit: geomean(tps/gpu*tps/user)
+    reference: null
+    tolerance_pct: 5
+    comparison: point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs
+  requires:
+    gpu: { count: 72 }
+    rdma: true
+    infra: [etcd, nats]
+    tolerations: [ nvidia.com/gpu, dedicated ]
+
+serving:
+  stack: sglang-disagg
+  model_repo: zai-org/GLM-5-FP8
+  model_revision: 4f96cc5eec29dcee5d6ded54f7ffe889438f9516
+  served_model: GLM-5-FP8
+  tp: 8
+  context_length: 16896
+  env:
+    - { name: SGLANG_MOONCAKE_CUSTOM_MEM_POOL, value: "True" }
+  disagg:
+    transfer_backend: nixl
+    prefill:
+      tp: 8
+      dp: 8
+      ep: 1
+      extra_args:
+        - "--trust-remote-code"
+        - "--quantization fp8"
+        - "--kv-cache-dtype fp8_e4m3"
+        - "--max-running-requests 160"
+        - "--cuda-graph-max-bs 160"
+        - "--mem-fraction-static 0.7"
+        - "--chunked-prefill-size 131072"
+        - "--max-prefill-tokens 16384"
+        - "--enable-dp-attention"
+        - "--enable-dp-lm-head"
+        - "--load-balance-method total_tokens"
+        - "--nsa-decode-backend trtllm"
+        - "--nsa-prefill-backend trtllm"
+        - "--moe-runner-backend flashinfer_trtllm"
+        - "--enable-flashinfer-allreduce-fusion"
+        - "--disable-radix-cache"
+        - "--stream-interval 30"
+        - "--model-loader-extra-config '{\"enable_multithread_load\": true}'"
+        - "--weight-loader-prefetch-checkpoints"
+    decode:
+      replicas: 8
+      tp: 8
+      dp: 1
+      ep: 1
+      extra_args:
+        - "--trust-remote-code"
+        - "--quantization fp8"
+        - "--kv-cache-dtype fp8_e4m3"
+        - "--max-running-requests 1"
+        - "--cuda-graph-max-bs 1"
+        - "--mem-fraction-static 0.8"
+        - "--nsa-decode-backend trtllm"
+        - "--nsa-prefill-backend trtllm"
+        - "--moe-runner-backend flashinfer_trtllm"
+        - "--enable-flashinfer-allreduce-fusion"
+        - "--disable-radix-cache"
+        - "--stream-interval 30"
+        - "--model-loader-extra-config '{\"enable_multithread_load\": true}'"
+        - "--weight-loader-prefetch-checkpoints"
+
+bench:
+  # Pin the validated AIPerf client consistently across the GLM-5 Dynamo family.
+  aiperf_ref: "git+https://github.com/ai-dynamo/aiperf.git@38687855e98044fcf12ee48c6794128f10b6780b"
+  aiperf_unsafe_override: false
+  synthetic:
+    isl: 14746
+    isl_stddev: 946
+    osl: 461
+    osl_stddev: 30
+    num_entries: 80
+    request_count_multiplier: 10
+    warmup_request_multiplier: 2
+    seed: 42
+    nominal_isl: 16384
+    nominal_osl: 512
+    range_ratio: 0.8
+  sweep_concurrency: [8]
+  sweep_mode: fixed
+  endpoint_type: completions
+  extra_inputs: "ignore_eos:true"
+  connection_reuse: sticky-user-sessions
+  request_timeout_s: 3600
+  gpu_telemetry: true

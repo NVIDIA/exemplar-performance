@@ -1,0 +1,244 @@
+# dynamo-vllm-agg-kvbm — one-pod aggregated Dynamo + vLLM + KVBM POC.
+# Recipe truth is rendered by Jinja; ${...} cluster truth is filled from a cluster profile at deploy time.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ envelope.name }}-server
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    llmb.nvidia.com/served-model: {{ serving.served_model }}
+spec:
+  replicas: 1
+  progressDeadlineSeconds: {{ serving.get('startup_timeout_s', 900) }}
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: {{ envelope.name }}-server } }
+  template:
+    metadata: { labels: { app: {{ envelope.name }}-server } }
+    spec:
+      schedulerName: ${SCHEDULER_NAME}
+      nodeSelector: { nvidia.com/gpu.product: ${GPU_PRODUCT} }
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+{% set _tols = (envelope.get('requires') or {}).get('tolerations') %}
+{% if _tols %}
+      tolerations:
+{% for t in _tols %}
+        - { key: {{ t }}, operator: Exists }
+{% endfor %}
+{% endif %}
+      containers:
+        - name: dynamo-vllm
+          # Source tag: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.1.0
+{% if envelope.arch == 'amd64' %}
+          # image_ref is its pinned linux/amd64 platform-manifest digest.
+{% else %}
+          # image_ref is its pinned linux/{{ envelope.arch }} platform-manifest digest.
+{% endif %}
+          image: {{ image_ref }}
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8000, name: http, protocol: TCP }]
+          startupProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: {{ (serving.get('startup_timeout_s', 900) // 5) }}
+          readinessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Restart only when token output is flat while requests remain active. Missing metrics keep
+          # the pod healthy so startup and idle periods are not mistaken for stalls.
+{# Gated identically in THREE places — probe, volumeMount, volume. A cell that opts out renders no
+   liveness ConfigMap, so an ungated mount would name an object that never exists and park the pod in
+   ContainerCreating: a probe opt-out silently becoming a cell that cannot start. #}
+{% if serving.get('liveness_enabled', True) %}
+          livenessProbe:
+            exec:
+              command: ["sh", "/llmb-probe/progress_liveness.sh"]
+            periodSeconds: {{ serving.get('liveness_period_s', 30) }}
+            timeoutSeconds: {{ serving.get('liveness_timeout_s', 15) }}
+            failureThreshold: {{ serving.get('liveness_failure_threshold', 20) }}
+{% endif %}
+          env:
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: HF_HOME, value: /data/hf-cache }
+            - { name: HF_HUB_OFFLINE, value: "1" }
+            - { name: TRANSFORMERS_OFFLINE, value: "1" }
+            - { name: DYN_DISCOVERY_BACKEND, value: etcd }
+            - { name: ETCD_ENDPOINTS, value: "127.0.0.1:2379" }
+            # Dynamo's DistributedRuntime request/event plane is NATS (same-Pod sidecar below).
+            - { name: NATS_SERVER, value: "nats://127.0.0.1:4222" }
+{% for e in (serving.get('env') or []) %}
+            - { name: {{ e.name }}, value: "{{ e.value }}" }
+{% endfor %}
+{% set _res = serving.get('resources') or {} %}
+{# Whole-node recipes request the profile GPU count; other recipes retain their declared tensor parallelism. #}
+{% set _whole_node = ((envelope.get('requires') or {}).get('gpu') or {}).get('whole_node') %}
+{% set _gpu_req = '${GPU_PER_NODE}' if _whole_node else serving.tp %}
+{# Whole-node CPU and memory come from profile-derived allocatable capacity. Equal requests and limits
+   provide Guaranteed QoS; recipes without whole_node retain their declared resources. #}
+          resources:
+            requests:
+              cpu: "{{ '${WHOLE_NODE_CPU}' if _whole_node else _res.get('requests', {}).get('cpu', '8') }}"
+              memory: {{ '${WHOLE_NODE_MEM}' if _whole_node else _res.get('requests', {}).get('memory', '32Gi') }}
+              nvidia.com/gpu: "{{ _gpu_req }}"
+            limits:
+              cpu: "{{ '${WHOLE_NODE_CPU}' if _whole_node else _res.get('limits', {}).get('cpu', '32') }}"
+              memory: {{ '${WHOLE_NODE_MEM}' if _whole_node else _res.get('limits', {}).get('memory', '96Gi') }}
+              nvidia.com/gpu: "{{ _gpu_req }}"
+          securityContext:
+            capabilities:
+              add: [IPC_LOCK, SYS_RESOURCE]
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              python3 - <<'PY'
+              import time
+              import urllib.request
+
+              for _ in range(120):
+                  try:
+                      with urllib.request.urlopen("http://127.0.0.1:2379/health", timeout=1) as response:
+                          if response.status == 200:
+                              break
+                  except Exception:
+                      time.sleep(1)
+              else:
+                  raise SystemExit("etcd did not become healthy within 120 seconds")
+
+              # Dynamo's DistributedRuntime also needs NATS (request/event plane); the frontend does NOT
+              # retry, so gate on the NATS monitoring endpoint before launching it.
+              for _ in range(120):
+                  try:
+                      with urllib.request.urlopen("http://127.0.0.1:8222/healthz", timeout=1) as response:
+                          if response.status == 200:
+                              break
+                  except Exception:
+                      time.sleep(1)
+              else:
+                  raise SystemExit("nats did not become healthy within 120 seconds")
+              PY
+
+              SNAPSHOT=$(python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id='{{ serving.model_repo }}', revision='{{ serving.model_revision }}', cache_dir='/data/hf-cache/hub', local_files_only=True))")
+              test -s "$SNAPSHOT/config.json" || { echo "FATAL: pinned model snapshot missing at $SNAPSHOT" >&2; exit 64; }
+
+              frontend_pid=""
+              worker_pid=""
+              cleanup() {
+                [ -z "$frontend_pid" ] || kill "$frontend_pid" 2>/dev/null || true
+                [ -z "$worker_pid" ] || kill "$worker_pid" 2>/dev/null || true
+                wait 2>/dev/null || true
+              }
+              trap cleanup EXIT TERM INT
+
+              python3 -m dynamo.frontend --http-port 8000 &
+              frontend_pid=$!
+              python3 -m dynamo.vllm \
+                --model "$SNAPSHOT" \
+                --served-model-name {{ serving.served_model }} \
+                --tensor-parallel-size {{ serving.tp }} \
+                --max-model-len {{ serving.max_model_len }} \
+                --gpu-memory-utilization {{ serving.gpu_mem_util }} \
+{% for a in serving.extra_args %}
+                {{ a }} \
+{% endfor %}
+                --trust-remote-code &
+              worker_pid=$!
+
+              set +e
+              wait -n "$frontend_pid" "$worker_pid"
+              rc=$?
+              set -e
+              echo "Dynamo frontend or vLLM worker exited (rc=$rc); stopping the peer" >&2
+              exit "$rc"
+          volumeMounts:
+{% if serving.get('liveness_enabled', True) %}
+            - { mountPath: /llmb-probe, name: llmb-probe }
+{% endif %}
+            - { mountPath: /data/hf-cache, name: model-cache, readOnly: true, subPath: ${MODEL_CACHE_SUBPATH} }
+            - { mountPath: /dev/shm, name: dshm }
+
+        # KVBM uses etcd for leader/worker registration and discovery. Keeping it in the
+        # same Pod makes this deliberately small POC self-contained and avoids an operator.
+        - name: etcd
+          # Source tag: quay.io/coreos/etcd:v3.5.17
+{% if envelope.arch == 'amd64' %}
+          # Pinned linux/amd64 platform-manifest digest.
+{% else %}
+          # Pinned linux/{{ envelope.arch }} platform-manifest digest.
+{% endif %}
+          image: quay.io/coreos/etcd@{{ envelope.provenance.etcd_image_digest }}
+          imagePullPolicy: IfNotPresent
+          # quay.io/coreos/etcd sets no `etcd` entrypoint, so args alone make k8s exec the first
+          # flag as the binary ("--name=default: not found"). Name the binary explicitly.
+          command: ["/usr/local/bin/etcd"]
+          args:
+            - --name=default
+            - --data-dir=/etcd-data
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://127.0.0.1:2379
+            - --listen-peer-urls=http://127.0.0.1:2380
+            - --initial-advertise-peer-urls=http://127.0.0.1:2380
+            - --initial-cluster=default=http://127.0.0.1:2380
+          ports: [{ containerPort: 2379, name: etcd-client }]
+          readinessProbe:
+            httpGet: { path: /health, port: etcd-client }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 12
+          resources:
+            {# Guaranteed QoS is a POD-level property: EVERY container must have requests == limits. So on a
+               whole_node cell the control-plane sidecars match their limits too, otherwise the pod silently
+               degrades to Burstable and the server container's Guaranteed posture is forfeited. #}
+            requests: { cpu: "{{ '1' if _whole_node else '250m' }}", memory: {{ '1Gi' if _whole_node else '256Mi' }} }
+            limits: { cpu: "1", memory: 1Gi }
+          volumeMounts: [{ name: etcd-data, mountPath: /etcd-data }]
+
+        # Dynamo's DistributedRuntime request/event plane is NATS (JetStream). Kept in-Pod like etcd so
+        # the POC stays operator-independent. Without it the frontend dies: "Failed to connect to NATS".
+        - name: nats
+          # Source tag: nats:2.10.22-alpine
+{% if envelope.arch == 'amd64' %}
+          # Pinned linux/amd64 platform-manifest digest.
+{% else %}
+          # Pinned linux/{{ envelope.arch }} platform-manifest digest.
+{% endif %}
+          image: nats@{{ envelope.provenance.nats_image_digest }}
+          imagePullPolicy: IfNotPresent
+          args: ["-js", "-m", "8222"]      # JetStream on :4222 (client), monitoring/health on :8222
+          ports:
+            - { containerPort: 4222, name: nats-client }
+            - { containerPort: 8222, name: nats-mon }
+          readinessProbe:
+            httpGet: { path: /healthz, port: nats-mon }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 12
+          resources:
+            {# Guaranteed QoS is a POD-level property: EVERY container must have requests == limits. So on a
+               whole_node cell the control-plane sidecars match their limits too, otherwise the pod silently
+               degrades to Burstable and the server container's Guaranteed posture is forfeited. #}
+            requests: { cpu: "{{ '1' if _whole_node else '250m' }}", memory: {{ '1Gi' if _whole_node else '256Mi' }} }
+            limits: { cpu: "1", memory: 1Gi }
+      volumes:
+{% if serving.get('liveness_enabled', True) %}
+        - name: llmb-probe
+          configMap: { name: {{ envelope.name }}-liveness, defaultMode: 0755 }
+{% endif %}
+        - name: model-cache
+          persistentVolumeClaim: { claimName: ${MODEL_CACHE_PVC} }
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 16Gi }
+        - name: etcd-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ envelope.name }}-server
+  namespace: ${NAMESPACE}
+spec:
+  selector: { app: {{ envelope.name }}-server }
+  ports: [{ port: 8000, targetPort: 8000, name: http }]

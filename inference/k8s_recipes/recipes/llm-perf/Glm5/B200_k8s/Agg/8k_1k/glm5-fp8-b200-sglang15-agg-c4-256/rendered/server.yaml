@@ -1,0 +1,159 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+# sglang-agg — one aggregated SGLang OpenAI-compatible server.
+# {{ ... }} = recipe truth; ${ ... } = cluster-profile truth.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glm5-agg-8k1k-sglang15-c4-256-server
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    llmb.nvidia.com/recipe: glm5-agg-8k1k-sglang15-c4-256
+    llmb.nvidia.com/served-model: GLM-5-FP8
+spec:
+  replicas: 1
+  progressDeadlineSeconds: 7200
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: glm5-agg-8k1k-sglang15-c4-256-server } }
+  template:
+    metadata:
+      labels:
+        app: glm5-agg-8k1k-sglang15-c4-256-server
+        app.kubernetes.io/managed-by: llmb-recipe
+        llmb.nvidia.com/recipe: glm5-agg-8k1k-sglang15-c4-256
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 120
+      schedulerName: ${SCHEDULER_NAME}
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      nodeSelector:
+        nvidia.com/gpu.product: ${GPU_PRODUCT}
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+        - { key: dedicated, operator: Exists }
+      initContainers:
+        - name: verify-model
+          image: docker.io/lmsysorg/sglang@sha256:00c53fe4c31bf22d7b37537f28bbdfd924c02de13cdfb4bff7378c9c34d75ab2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -eu
+              MARKER=/model-store/${MODEL_CACHE_SUBPATH}/.llmb_download_done/4f96cc5eec29dcee5d6ded54f7ffe889438f9516
+              MODEL_PATH=/model-store/${MODEL_CACHE_SUBPATH}/hub/models--zai-org--GLM-5-FP8/snapshots/4f96cc5eec29dcee5d6ded54f7ffe889438f9516
+              test -s "$MARKER" || {
+                echo "FATAL: model completion sentinel missing or empty: $MARKER" >&2; exit 64; }
+              test -f "$MODEL_PATH/config.json" || {
+                echo "FATAL: pinned model snapshot missing config.json: $MODEL_PATH" >&2; exit 65; }
+              echo "model verified: zai-org/GLM-5-FP8 @ 4f96cc5eec29dcee5d6ded54f7ffe889438f9516 ($MODEL_PATH)"
+          volumeMounts:
+            - { mountPath: /model-store, name: model-store, readOnly: true }
+      containers:
+        - name: sglang
+          image: docker.io/lmsysorg/sglang@sha256:00c53fe4c31bf22d7b37537f28bbdfd924c02de13cdfb4bff7378c9c34d75ab2
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            capabilities: { add: ["IPC_LOCK", "SYS_RESOURCE"] }
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              ulimit -n 1048576 || true
+              ulimit -l unlimited || true
+              exec python3 -m sglang.launch_server \
+                --model-path /model-store/${MODEL_CACHE_SUBPATH}/hub/models--zai-org--GLM-5-FP8/snapshots/4f96cc5eec29dcee5d6ded54f7ffe889438f9516 \
+                --served-model-name GLM-5-FP8 \
+                --host 0.0.0.0 \
+                --port 8000 \
+                --tensor-parallel-size 8 \
+                --context-length 9600 \
+                --enable-metrics \
+                --data-parallel-size 1 \
+                --expert-parallel-size 1 \
+                --tool-call-parser glm47 \
+                --reasoning-parser glm45 \
+                --trust-remote-code \
+                --quantization fp8 \
+                --kv-cache-dtype fp8_e4m3 \
+                --attention-backend nsa \
+                --nsa-decode-backend trtllm \
+                --nsa-prefill-backend trtllm \
+                --moe-runner-backend flashinfer_trtllm \
+                --mem-fraction-static 0.85 \
+                --chunked-prefill-size 32768 \
+                --max-prefill-tokens 32768 \
+                --max-running-requests 256 \
+                --cuda-graph-max-bs 256 \
+                --enable-flashinfer-allreduce-fusion \
+                --disable-radix-cache \
+                --stream-interval 30 \
+                --model-loader-extra-config '{"enable_multithread_load": true}'
+          ports: [{ containerPort: 8000, name: http, protocol: TCP }]
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 720
+          env:
+            - { name: "PYTHONNOUSERSITE", value: "1" }
+            - { name: "PYTHONUNBUFFERED", value: "1" }
+            - { name: "SGLANG_ENABLE_JIT_DEEPGEMM", value: "1" }
+            - { name: "NCCL_CUMEM_ENABLE", value: "1" }
+            - { name: HF_HOME, value: "/model-store/${MODEL_CACHE_SUBPATH}" }
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: ${HF_SECRET}, key: token }
+          resources:
+            requests:
+              cpu: "64"
+              memory: 768Gi
+              ephemeral-storage: 20Gi
+              nvidia.com/gpu: "8"
+            limits:
+              cpu: "180"
+              memory: 1800Gi
+              ephemeral-storage: 100Gi
+              nvidia.com/gpu: "8"
+          volumeMounts:
+            - { mountPath: /model-store, name: model-store, readOnly: true }
+            - { mountPath: /dev/shm, name: dshm }
+      volumes:
+        - name: model-store
+          persistentVolumeClaim: { claimName: ${MODEL_CACHE_PVC} }
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 100Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: glm5-agg-8k1k-sglang15-c4-256-server
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    llmb.nvidia.com/recipe: glm5-agg-8k1k-sglang15-c4-256
+spec:
+  selector: { app: glm5-agg-8k1k-sglang15-c4-256-server }
+  ports: [{ port: 8000, targetPort: 8000, name: http }]

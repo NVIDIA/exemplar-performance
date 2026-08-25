@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+envelope:
+  name: qwen3-0-6b-b200-vllm-agg-kvbm-pareto
+  model: qwen3-0-6b
+  gpu_type: B200
+  arch: amd64
+  engine: vllm
+  serving_mode: aggregated
+  framework: dynamo
+  scenario: llm-perf
+  distribution: glm5-9600-agentic-code-500s-seed42-sessionfit9000-20260715
+  mode: mooncake-trace
+  launcher: aiperf
+  goal: pareto
+  status: wip
+  results_link: ./RESULTS.md
+  provenance:
+    schema_version: k8s.llm-perf.v1
+    official: false
+    # Source tag: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.1.0 (the KVBM image).
+    # Pinned below to its linux/amd64 platform-manifest digest (B200 = amd64).
+    image_digest: sha256:5acec222634f0d63ed936e8616449f7b4003b82ab8bd1a3f433d3dd96f6736fe
+    image_ref: nvcr.io/nvidia/ai-dynamo/vllm-runtime@sha256:5acec222634f0d63ed936e8616449f7b4003b82ab8bd1a3f433d3dd96f6736fe
+    # Source tag: quay.io/coreos/etcd:v3.5.17 (linux/amd64 platform manifest).
+    etcd_image_digest: sha256:75af419abd4e02411e0df74e3b32f131359839c0994e934c7bcc8eea40cb7298
+    # Source tag: nats:2.10.22-alpine (linux/amd64 platform manifest).
+    nats_image_digest: sha256:aa536352f09b109b909e8bfbf9859a40601481bb3742ebc7a09cfaf638622407
+  exemplar:
+    metric: pareto_geomean
+    unit: geomean(tps/gpu·tps/user)
+    reference: null
+    tolerance_pct: 5
+    comparison: point-by-point geomean g(p)=√(Output-TPS/GPU · Output-TPS/user) per rung; scalar = geomean over rungs; exemplar gate = every shared rung within tolerance
+  requires:
+    gpu: { count: 1, min_memory_gib: 16, whole_node: true }
+    tolerations: [ nvidia.com/gpu, kubernetes.io/arch, dedicated ]
+    storage: [ MODEL_CACHE_PVC ]
+    secrets: [ IMAGE_PULL_SECRET ]
+
+serving:
+  stack: dynamo-vllm-agg-kvbm
+  model_repo: Qwen/Qwen3-0.6B
+  model_revision: c1899de289a04d12100db370d81485cdf75e47ca
+  served_model: qwen3-0-6b
+  telemetry_container: dynamo-vllm
+  tp: 1
+  max_model_len: 32768
+  gpu_mem_util: 0.10
+  offload: false
+  startup_timeout_s: 900
+  env:
+    - { name: DYN_KVBM_CPU_CACHE_GB, value: "20" }
+    - { name: DYN_KVBM_METRICS, value: "true" }
+  extra_args:
+    - "--kv-transfer-config '{\"kv_connector\":\"DynamoConnector\",\"kv_connector_module_path\":\"kvbm.vllm_integration.connector\",\"kv_role\":\"kv_both\"}'"
+    - "--enforce-eager"
+    - "--enable-prefix-caching"
+    - "--max-num-seqs 64"
+
+bench:
+  dataset:
+    id: glm5-9600-agentic-code-500s-seed42-sessionfit9000-20260715
+    subpath: datasets/glm5-9600-agentic-code-500s-seed42-sessionfit9000-20260715/dataset.jsonl
+    sha256: 2730baf16a8693d645b8f9af4ae3efac557c22e91170c32a0f49f293ee28a536
+    artifact: datasets/traces/glm5-9600-agentic-code-500s-seed42-sessionfit9000-20260715/dataset.jsonl.gz
+    config_path: datasets/glm5-9600-agentic-code.json
+    type: mooncake_trace
+    num_sessions: 500
+    seed: 42
+    max_isl: 9600
+  # Supported sweep points for this recipe.
+  sweep_concurrency: [8, 16]
+  sweep_mode: fixed
+  endpoint_type: chat
+  connection_reuse: sticky-user-sessions
+  request_timeout_s: 3600
+  gpu_telemetry: true
+  colocate_with_server: true

@@ -1,0 +1,140 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+# Phase-2 in-cluster resource governor — namespaced manifests (the in-cluster governor contract §4).
+#
+# Applied ONCE per namespace with plain `kubectl apply` (envsubst-resolved ${VARS}, exactly like submit.sh's
+# PVC block — this is NOT a jinja2 recipe cell). The reconcile script itself is delivered as the ConfigMap
+# `llmb-governor-script`, built from serving/governor/reconcile/governor_reconcile.sh by apply-governor.sh
+# and concatenated ahead of this file. All objects are NAMESPACE-SCOPED — no ClusterRole, no CRD, no operator.
+#
+# Required vars:  NAMESPACE, CONTROL_STORAGE_CLASS (an RWX class from the cluster profile).
+# Optional (defaults are applied by apply-governor.sh, NOT by envsubst — plain ${VAR} refs only here):
+#   CONTROL_SIZE (5Gi), GOVERNOR_IMAGE (alpine/k8s:1.34.1), GOVERNOR_SCHEDULE ("*/3 * * * *"),
+#   DRY_RUN (0), STALL_THRESHOLD (1800), HEARTBEAT_DEAD (300), STUCK_THRESHOLD (900),
+#   TIMEOUT_MULT (2), MIN_KILL_SECONDS (3600).
+---
+# --- Shared RWX control PVC (provisioned once per namespace; also created idempotently by submit.sh) --------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: llmb-control
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    app.kubernetes.io/component: control
+spec:
+  accessModes: [ReadWriteMany]                  # the accepted new requirement (mid-run readable)
+  storageClassName: ${CONTROL_STORAGE_CLASS}    # RWX class from the cluster profile (Filestore/EFS/Lustre)
+  resources:
+    requests:
+      storage: ${CONTROL_SIZE}             # small — status files + text logs only
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: llmb-governor
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    app.kubernetes.io/component: governor
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llmb-governor
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    app.kubernetes.io/component: governor
+rules:
+  # enumerate + read Job status; delete on stall/timeout (resp. 2,3). NO patch (progress is on the PVC).
+  - { apiGroups: ["batch"], resources: ["jobs"],              verbs: ["get", "list", "delete"] }
+  # bench-pod liveness / server CrashLoop / stuck-schedule (live reads); orphan child-pods
+  - { apiGroups: [""],      resources: ["pods"],              verbs: ["get", "list", "delete"] }
+  # completion-cleanup / orphan-sweep of the dedicated server (resp. 1)
+  - { apiGroups: ["apps"],  resources: ["deployments"],       verbs: ["get", "list", "delete"] }
+  - { apiGroups: ["apps"],  resources: ["deployments/scale"], verbs: ["get", "update", "patch"] }
+  # server Service + per-session NetworkPolicy orphan sweep on a hard-killed runner (§2B.3-2)
+  - { apiGroups: [""],                  resources: ["services"],        verbs: ["get", "list", "delete"] }
+  - { apiGroups: ["networking.k8s.io"], resources: ["networkpolicies"], verbs: ["get", "list", "delete"] }
+  # NOTE: no configmaps verb, no jobs/patch — the RWX control PVC replaced the annotation + CM channels.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llmb-governor
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    app.kubernetes.io/component: governor
+subjects:
+  - { kind: ServiceAccount, name: llmb-governor, namespace: ${NAMESPACE} }
+roleRef:
+  { kind: Role, name: llmb-governor, apiGroup: rbac.authorization.k8s.io }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: llmb-governor
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    app.kubernetes.io/component: governor
+spec:
+  schedule: "${GOVERNOR_SCHEDULE}"   # every 3 min: responsive stall detection + bounded squat
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 240
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/managed-by: llmb-recipe
+            app.kubernetes.io/component: governor
+        spec:
+          serviceAccountName: llmb-governor
+          restartPolicy: OnFailure
+          containers:
+            - name: governor
+              image: ${GOVERNOR_IMAGE}   # sh + kubectl + jq; NOT bitnami/distroless
+              command: ["/bin/sh", "-c", "/scripts/governor_reconcile.sh"]
+              env:
+                - { name: NAMESPACE,        value: "${NAMESPACE}" }
+                - { name: GOVERNOR_MODE,    value: "enforce" }              # act (the script fail-safe-defaults to observe)
+                - { name: ORPHAN_GRACE,     value: "${ORPHAN_GRACE}" }      # 20m — never-adopted-orphan reap hold (cold-load-safe via availableReplicas gate)
+                - { name: STALL_THRESHOLD,  value: "${STALL_THRESHOLD}" }   # 30m
+                - { name: HEARTBEAT_DEAD,   value: "${HEARTBEAT_DEAD}" }     # 5m
+                - { name: STUCK_THRESHOLD,  value: "${STUCK_THRESHOLD}" }    # 15m
+                - { name: TIMEOUT_MULT,     value: "${TIMEOUT_MULT}" }
+                - { name: MIN_KILL_SECONDS, value: "${MIN_KILL_SECONDS}" }
+                - { name: DRY_RUN,          value: "${DRY_RUN}" }              # 1 = log only, mutate nothing
+              volumeMounts:
+                - { name: control, mountPath: /control }   # RW: governor writes only its own governor.json
+                - { name: script,  mountPath: /scripts }
+          volumes:
+            - { name: control, persistentVolumeClaim: { claimName: llmb-control } }
+            - { name: script,  configMap: { name: llmb-governor-script, defaultMode: 0755 } }

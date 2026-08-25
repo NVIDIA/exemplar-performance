@@ -1,0 +1,145 @@
+# sglang-agg — one aggregated SGLang OpenAI-compatible server.
+# {{ '{{ ... }}' }} = recipe truth; ${ ... } = cluster-profile truth.
+{% set model_store = "/model-store" %}
+{% set model_repo_cache_dir = "models--" ~ (serving.model_repo | replace('/', '--')) %}
+{% set _req = (envelope.get('requires') or {}) %}
+{% set _tols = _req.get('tolerations') %}
+{% set _res = serving.get('resources') or {} %}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ envelope.name }}-server
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    llmb.nvidia.com/recipe: {{ envelope.name }}
+    llmb.nvidia.com/served-model: {{ serving.served_model }}
+spec:
+  replicas: 1
+  progressDeadlineSeconds: {{ serving.get('startup_timeout_s', 7200) }}
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: {{ envelope.name }}-server } }
+  template:
+    metadata:
+      labels:
+        app: {{ envelope.name }}-server
+        app.kubernetes.io/managed-by: llmb-recipe
+        llmb.nvidia.com/recipe: {{ envelope.name }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 120
+      schedulerName: ${SCHEDULER_NAME}
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      nodeSelector:
+        nvidia.com/gpu.product: ${GPU_PRODUCT}
+{% if _tols %}
+      tolerations:
+{% for t in _tols %}
+        - { key: {{ t }}, operator: Exists }
+{% endfor %}
+{% endif %}
+      initContainers:
+        - name: verify-model
+          image: {{ image_ref }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -eu
+              MARKER={{ model_store }}/${MODEL_CACHE_SUBPATH}/.llmb_download_done/{{ serving.model_revision }}
+              MODEL_PATH={{ model_store }}/${MODEL_CACHE_SUBPATH}/hub/{{ model_repo_cache_dir }}/snapshots/{{ serving.model_revision }}
+              test -s "$MARKER" || {
+                echo "FATAL: model completion sentinel missing or empty: $MARKER" >&2; exit 64; }
+              test -f "$MODEL_PATH/config.json" || {
+                echo "FATAL: pinned model snapshot missing config.json: $MODEL_PATH" >&2; exit 65; }
+              echo "model verified: {{ serving.model_repo }} @ {{ serving.model_revision }} ($MODEL_PATH)"
+          volumeMounts:
+            - { mountPath: /model-store, name: model-store, readOnly: true }
+      containers:
+        - name: sglang
+          image: {{ image_ref }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            capabilities: { add: ["IPC_LOCK", "SYS_RESOURCE"] }
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              ulimit -n 1048576 || true
+              ulimit -l unlimited || true
+{% for cmd in serving.get('worker_bootstrap_commands', []) %}
+              {{ cmd }}
+{% endfor %}
+              exec python3 -m sglang.launch_server \
+                --model-path {{ model_store }}/${MODEL_CACHE_SUBPATH}/hub/{{ model_repo_cache_dir }}/snapshots/{{ serving.model_revision }} \
+                --served-model-name {{ serving.served_model }} \
+                --host 0.0.0.0 \
+                --port 8000 \
+                --tensor-parallel-size {{ serving.tp }} \
+                --context-length {{ serving.context_length }} \
+                --enable-metrics \
+{% for a in serving.extra_args %}
+                {{ a }}{{ " \\" if not loop.last else "" }}
+{% endfor %}
+          ports: [{ containerPort: 8000, name: http, protocol: TCP }]
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: {{ (serving.get('startup_timeout_s', 7200) // 10) }}
+{% if serving.get('readiness_enabled', True) %}
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: {{ serving.get('readiness_period_s', 10) }}
+            timeoutSeconds: {{ serving.get('readiness_timeout_s', 5) }}
+            failureThreshold: {{ serving.get('readiness_failure_threshold', 6) }}
+{% endif %}
+{% if serving.get('liveness_enabled', True) %}
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 15
+            timeoutSeconds: {{ serving.get('liveness_timeout_s', 5) }}
+            failureThreshold: {{ serving.get('liveness_failure_threshold', 8) }}
+{% endif %}
+          env:
+{% for e in serving.get('env', []) %}
+            - { name: {{ e.name | string | tojson }}, value: {{ e.value | string | tojson }} }
+{% endfor %}
+            - { name: HF_HOME, value: "/model-store/${MODEL_CACHE_SUBPATH}" }
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: ${HF_SECRET}, key: token }
+          resources:
+            requests:
+              cpu: "{{ _res.get('requests', {}).get('cpu', '64') }}"
+              memory: {{ _res.get('requests', {}).get('memory', '768Gi') }}
+              ephemeral-storage: {{ _res.get('requests', {}).get('ephemeral_storage', '20Gi') }}
+              nvidia.com/gpu: "{{ serving.tp }}"
+            limits:
+              cpu: "{{ _res.get('limits', {}).get('cpu', '180') }}"
+              memory: {{ _res.get('limits', {}).get('memory', '1800Gi') }}
+              ephemeral-storage: {{ _res.get('limits', {}).get('ephemeral_storage', '100Gi') }}
+              nvidia.com/gpu: "{{ serving.tp }}"
+          volumeMounts:
+            - { mountPath: /model-store, name: model-store, readOnly: true }
+            - { mountPath: /dev/shm, name: dshm }
+      volumes:
+        - name: model-store
+          persistentVolumeClaim: { claimName: ${MODEL_CACHE_PVC} }
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 100Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ envelope.name }}-server
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    llmb.nvidia.com/recipe: {{ envelope.name }}
+spec:
+  selector: { app: {{ envelope.name }}-server }
+  ports: [{ port: 8000, targetPort: 8000, name: http }]

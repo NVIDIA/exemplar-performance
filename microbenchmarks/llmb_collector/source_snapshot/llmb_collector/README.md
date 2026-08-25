@@ -364,7 +364,7 @@ uv build
 
 ## Releasing
 
-Version bumps, `CHANGELOG.md`, git tags, and GitLab Release notes are handled by [python-semantic-release](https://python-semantic-release.readthedocs.io/) on merge to `main`. See [docs/releasing.md](docs/releasing.md) for the commit-prefix rules, manual CI jobs (`Release`, `Publish to Artifactory`), and troubleshooting.
+Version bumps, `CHANGELOG.md`, git tags, and GitLab Release notes are handled by [python-semantic-release](https://python-semantic-release.readthedocs.io/) on merge to `main`. The internal release-maintainer guide documents commit prefixes, manual CI jobs, and troubleshooting; it is not included in the external source snapshot.
 
 ## License
 

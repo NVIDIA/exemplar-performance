@@ -1,0 +1,145 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+# sglang-disagg — Dynamo HTTP frontend for disaggregated SGLang serving (rendered from a cell's recipe.yaml).
+# {{ ... }} = recipe truth (baked at render). ${ ... } = cluster truth (envsubst at launch).
+#
+# The frontend is the OpenAI-compatible entrypoint: it discovers prefill/decode workers via etcd + NATS
+# (rendered by infra.yaml) and routes disaggregated requests to them. It holds NO GPUs. The Service is
+# named "glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d-server" so the shared aiperf bench-Job (serving/aiperf/templates) reaches it
+# at http://glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d-server:8000 with no per-stack special-casing.
+apiVersion: v1
+kind: Service
+metadata:
+  name: glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d-server
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/served-model: GLM-5-FP8 }
+spec:
+  selector: { app: glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d-frontend }
+  ports: [{ port: 8000, targetPort: 8000, name: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d-frontend
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/served-model: GLM-5-FP8 }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d-frontend } }
+  template:
+    metadata: { labels: { app: glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d-frontend, llmb.nvidia.com/recipe: glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d } }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      schedulerName: ${SCHEDULER_NAME}
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+        - { key: dedicated, operator: Exists }
+      initContainers:
+        # Dynamo constructs the frontend model card from config/tokenizer metadata. The workers advertise
+        # their pinned local snapshot path, so that path must also exist in the frontend. Never mount the
+        # weights PVC here: an RWO claim would deadlock multi-node disaggregation. Stage only the small
+        # revision-pinned HF metadata into pod-local storage instead.
+        - name: stage-model-metadata
+          image: nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              python3 - <<"PY"
+              import os
+              from pathlib import Path
+              from huggingface_hub import snapshot_download
+
+              target = Path("/model-store/${MODEL_CACHE_SUBPATH}/hub/models--zai-org--GLM-5-FP8/snapshots/4f96cc5eec29dcee5d6ded54f7ffe889438f9516")
+              target.mkdir(parents=True, exist_ok=True)
+              snapshot_download(
+                  repo_id="zai-org/GLM-5-FP8",
+                  revision="4f96cc5eec29dcee5d6ded54f7ffe889438f9516",
+                  local_dir=target,
+                  token=os.environ.get("HF_TOKEN"),
+                  ignore_patterns=["*.safetensors", "*.bin", "*.pt", "*.pth", "*.gguf"],
+              )
+              if not (target / "config.json").is_file():
+                  raise SystemExit(f"pinned model metadata missing config.json: {target}")
+              print(f"frontend metadata staged: {target}")
+              PY
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: ${HF_SECRET}, key: token }
+          volumeMounts:
+            - { mountPath: /model-store, name: model-metadata }
+      containers:
+        - name: frontend
+          image: nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -eu
+              # High-concurrency profiles can exceed the container default of 1024 open files.
+              ulimit -n 524288 || true
+              # Bind the frontend to the same explicit model identity and pinned local metadata path
+              # advertised by the workers. Without this, discovery may reinterpret an absolute worker
+              # path as a Hugging Face repository ID while reconciling the model registration.
+              exec python3 -m dynamo.frontend \
+                --http-port=8000 \
+                --enforce-disagg \
+                --model-name "GLM-5-FP8" \
+                --model-path /model-store/${MODEL_CACHE_SUBPATH}/hub/models--zai-org--GLM-5-FP8/snapshots/4f96cc5eec29dcee5d6ded54f7ffe889438f9516
+          ports: [{ containerPort: 8000, name: http, protocol: TCP }]
+          env:
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: ETCD_ENDPOINTS, value: "http://glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d-etcd:2379" }
+            - { name: NATS_SERVER, value: "nats://glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d-nats:4222" }
+            - { name: DYN_REQUEST_PLANE, value: "nats" }
+            - { name: DYN_SKIP_SGLANG_LOG_FORMATTING, value: "1" }
+            - name: POD_UID
+              valueFrom:
+                fieldRef: { fieldPath: metadata.uid }
+          volumeMounts:
+            - { mountPath: /model-store, name: model-metadata, readOnly: true }
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 180   # 30-min budget: workers must register before the frontend is ready
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 8
+          resources:
+            requests: { cpu: "4", memory: 16Gi }
+            limits:   { cpu: "16", memory: 64Gi }
+      volumes:
+        - name: model-metadata
+          emptyDir: { sizeLimit: 16Gi }

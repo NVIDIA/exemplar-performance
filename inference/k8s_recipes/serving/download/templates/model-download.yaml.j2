@@ -1,0 +1,263 @@
+# model-download.yaml.j2 — Kubernetes Job to download a single HuggingFace model revision onto a PVC.
+#
+# Variable split (mirrors serving/vllm-agg/templates/server.yaml.j2 convention):
+#   Jinja2 blocks  = recipe / model truth — baked at render time by install.py (model_repo,
+#                    model_revision, model_name, model_cache_subpath).
+#   ${VAR} blocks  = cluster truth — provided by the profile, substituted by install.py at launch time
+#                    (NAMESPACE, MODEL_CACHE_PVC, HF_SECRET, IMAGE_PULL_SECRET).
+#
+# Rendered and applied by `scripts/install.py`.  Do NOT apply by hand — the idempotency guard and
+# sha256 sentinel are managed by install.py.
+#
+# Design notes:
+#   - activeDeadlineSeconds: 7200  (2h budget; a ~400 GB model can take 45+ min)
+#   - ttlSecondsAfterFinished: 3600 (auto-cleanup 1h after success/failure)
+#   - Downloads via huggingface_hub snapshot_download (resume-capable, atomic per-shard)
+#   - sha256 sentinel: writes .llmb_download_done/<model_revision> only after snapshot_download succeeds
+#   - HF_HUB_CACHE set to <MODEL_CACHE_SUBPATH>/hub so weights land where the server + preflight read them
+#     (server.yaml.j2 snapshot_download(cache_dir='/data/hf-cache/hub'); install.py probe checks <subpath>/hub/)
+
+# Sanitize model_name into a valid k8s label value (audit #11):
+#   lowercase → replace any char outside [a-z0-9-_.] with '-' → truncate to 63 → trim edge separators.
+# Uses a list-append accumulator (not namespace()) because the render passes a `namespace` kwarg
+# that shadows Jinja's namespace() global. Stock Jinja2 lacks regex_replace, so we build char-by-char.
+{# Preserve the newline before apiVersion; whitespace control here would comment out the rendered field. #}
+{% set _label_chars = [] -%}
+{%- for _ch in (model_name | lower) -%}
+{%-   if _ch in "abcdefghijklmnopqrstuvwxyz0123456789-_." -%}
+{%-     set _ = _label_chars.append(_ch) -%}
+{%-   else -%}
+{%-     set _ = _label_chars.append("-") -%}
+{%-   endif -%}
+{%- endfor -%}
+{%- set model_name_label = (_label_chars | join)[:63] | trim("-_.") -%}
+# ── PVC STAMPING RBAC ────────────────────────────────────────────────────────────────────────────
+# The Job labels its model-cache PVC on SUCCESS so "is this model downloaded?" is answerable from an API
+# object that fleet already reads — and that SURVIVES this Job's ttlSecondsAfterFinished GC. Before this,
+# a GC'd Job silently downgraded a genuinely-complete model to "contents unverified".
+# Least privilege: patch, on PVCs only, in this namespace only.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: llmb-download-{{ job_name_slug }}
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/component: model-download }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llmb-download-{{ job_name_slug }}
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/component: model-download }
+rules:
+  - { apiGroups: [""], resources: ["persistentvolumeclaims"], verbs: ["get", "patch"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llmb-download-{{ job_name_slug }}
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/component: model-download }
+subjects:
+  - kind: ServiceAccount
+    name: llmb-download-{{ job_name_slug }}
+    namespace: ${NAMESPACE}
+roleRef: { kind: Role, name: llmb-download-{{ job_name_slug }}, apiGroup: rbac.authorization.k8s.io }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: llmb-download-{{ job_name_slug }}-{{ model_revision[:12] }}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    llmb.nvidia.com/component: model-download
+    llmb.nvidia.com/model-name: "{{ model_name_label }}"
+    llmb.nvidia.com/model-revision: "{{ model_revision[:12] }}"
+spec:
+  # Never retry — a failed download stays visible for debugging.
+  backoffLimit: 0
+  # Size the deadline from the model estimate; unknown sizes use a conservative floor.
+  activeDeadlineSeconds: {{ active_deadline_s | default(7200) }}
+  # Auto-delete 1h after completion so stale Jobs don't accumulate.
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: llmb-recipe
+        llmb.nvidia.com/component: model-download
+        llmb.nvidia.com/model-name: "{{ model_name_label }}"
+    spec:
+      serviceAccountName: llmb-download-{{ job_name_slug }}
+      restartPolicy: Never
+      # Tolerate scheduling taints while preserving default NoExecute eviction behavior.
+      tolerations:
+        - { operator: Exists, effect: NoSchedule }
+        - { operator: Exists, effect: PreferNoSchedule }
+{% if model_cache_node_selector %}
+      # Pin the downloader when the profile restricts where the cache can be mounted.
+      nodeSelector:
+{{ model_cache_node_selector }}
+{% endif %}
+{% if image_pull_secret %}
+      imagePullSecrets:
+        - name: ${IMAGE_PULL_SECRET}
+{% endif %}
+      containers:
+        - name: downloader
+          # lightweight Python image — no GPU needed; huggingface_hub is pre-installed
+          image: python:3.11-slim
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - -euo
+            - pipefail
+            - -c
+            - |
+              set -euo pipefail
+
+              MODEL_REPO="{{ model_repo }}"
+              MODEL_REVISION="{{ model_revision }}"
+              CACHE_ROOT="/model-cache/{{ model_cache_subpath }}"
+              SENTINEL_DIR="${CACHE_ROOT}/.llmb_download_done"
+              SENTINEL="${SENTINEL_DIR}/${MODEL_REVISION}"
+
+              echo "=== llmb model-download ==="
+              echo "  model_repo:     ${MODEL_REPO}"
+              echo "  model_revision: ${MODEL_REVISION}"
+              echo "  cache_root:     ${CACHE_ROOT}"
+
+              # install.py already ran the full cache-integrity probe before creating this Job. Do not
+              # short-circuit on the sentinel here: an older buggy probe could have stamped a partial
+              # cache, and a quota/interruption failure can leave that stale file behind. snapshot_download
+              # is resume-capable and content-addressed, so calling it again is the safe idempotent action.
+
+              echo "  installing huggingface_hub..."
+              pip install --quiet --no-cache-dir "huggingface_hub>=0.25.0"
+
+              echo "  downloading ${MODEL_REPO} @ ${MODEL_REVISION} ..."
+              python3 - <<'PYEOF'
+              import os, sys
+              from huggingface_hub import snapshot_download
+
+              repo_id   = os.environ["HF_MODEL_REPO"]
+              revision  = os.environ["HF_MODEL_REVISION"]
+              cache_dir = os.environ["HF_HUB_CACHE"]
+
+              print(f"  huggingface_hub.snapshot_download(repo_id={repo_id!r}, revision={revision!r})",
+                    flush=True)
+              local_path = snapshot_download(
+                  repo_id=repo_id,
+                  revision=revision,
+                  cache_dir=cache_dir,
+                  resume_download=True,
+                  local_files_only=False,
+              )
+              print(f"  download complete: {local_path}", flush=True)
+
+              # Verify the snapshot dir looks healthy (must contain config.json or *.safetensors)
+              import pathlib
+              snap = pathlib.Path(local_path)
+              has_config  = (snap / "config.json").exists()
+              has_weights = bool(list(snap.glob("*.safetensors"))) or bool(list(snap.glob("*.bin")))
+              if not has_config and not has_weights:
+                  print(f"  ERROR: snapshot {local_path} has neither config.json nor weight files — "
+                        "download may be incomplete.", file=sys.stderr)
+                  sys.exit(1)
+              print(f"  ✓ snapshot verified (config={has_config}, weights={has_weights})", flush=True)
+              PYEOF
+
+              # Write sentinel so subsequent install runs skip this model.
+              mkdir -p "${SENTINEL_DIR}"
+              # Sentinel content: sha256 of the revision string (lightweight, not of all weights)
+              printf '%s  %s\n' \
+                "$(printf '%s' "${MODEL_REVISION}" | sha256sum | cut -d' ' -f1)" \
+                "${MODEL_REVISION}" \
+                > "${SENTINEL}"
+              echo "  ✓ sentinel written: ${SENTINEL}"
+
+              # ── STAMP THE PVC (SUCCESS ONLY) ──────────────────────────────────────────────────────
+              # Stamp the claim only after the download and sentinel succeed. A patch failure is non-fatal.
+              python3 - <<'STAMP' || echo "  ⚠ PVC stamp failed (non-fatal) — fleet will fall back to the Job record"
+              import json, os, ssl, urllib.request
+              ns  = open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read().strip()
+              tok = open("/var/run/secrets/kubernetes.io/serviceaccount/token").read().strip()
+              pvc = os.environ["MODEL_CACHE_PVC_NAME"]
+              host = os.environ.get("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
+              port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
+              # Keep compatibility labels and add one revision label per model so shared caches retain
+              # evidence for every model. The model portion is bounded for Kubernetes label syntax.
+              _mn = os.environ["MODEL_NAME_LABEL"]
+              _rev = os.environ["MODEL_REVISION_LABEL"]
+              _mn_key = _mn[:57].rstrip("-._") or "unknown"
+              body = json.dumps({"metadata": {"labels": {
+                  "llmb.nvidia.com/model-name": _mn,
+                  "llmb.nvidia.com/model-revision": _rev,
+                  "llmb.nvidia.com/model." + _mn_key: _rev,
+                  "llmb.nvidia.com/download-complete": "true",
+              }}}).encode()
+              req = urllib.request.Request(
+                  f"https://{host}:{port}/api/v1/namespaces/{ns}/persistentvolumeclaims/{pvc}",
+                  data=body, method="PATCH",
+                  headers={"Authorization": f"Bearer {tok}",
+                           "Content-Type": "application/merge-patch+json"})
+              ctx = ssl.create_default_context(
+                  cafile="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+              with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
+                  assert r.status == 200, r.status
+              print(f"  \u2713 PVC {pvc} stamped: model={os.environ['MODEL_NAME_LABEL']} "
+                    f"revision={os.environ['MODEL_REVISION_LABEL']} download-complete=true")
+              STAMP
+              echo "=== download complete ==="
+
+          env:
+            - name: HF_MODEL_REPO
+              value: "{{ model_repo }}"
+            - name: HF_MODEL_REVISION
+              value: "{{ model_revision }}"
+            # HF_HUB_CACHE ends in /hub to match the offline server lookup. The completion sentinel remains
+            # at the cache subpath root, matching the cache probe.
+            - name: HF_HUB_CACHE
+              value: "/model-cache/{{ model_cache_subpath }}/hub"
+            # HF token from cluster secret.
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ${HF_SECRET}
+                  key: token
+                  # 'optional: true' so jobs for public models don't fail if the secret is absent.
+                  optional: true
+            # Identity the PVC stamp writes back (must match the Job's own labels).
+            - name: MODEL_CACHE_PVC_NAME
+              value: "${MODEL_CACHE_PVC}"
+            - name: MODEL_NAME_LABEL
+              value: "{{ model_name_label }}"
+            - name: MODEL_REVISION_LABEL
+              value: "{{ model_revision[:12] }}"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            # Disable progress bars to avoid polluting logs.
+            - name: HF_HUB_DISABLE_PROGRESS_BARS
+              value: "1"
+
+          volumeMounts:
+            - name: model-cache
+              mountPath: /model-cache
+
+          # Memory floor: huggingface_hub snapshot_download + hf_transfer buffer shards in RAM, and that
+          # working set scales with download PARALLELISM × chunk size — NOT total model size. The old
+          # req 4Gi / limit 8Gi OOMKilled a ~400 GB model (nemotron-ultra-3) download (backoffLimit=0 →
+          # terminal). install.py:download_mem_limit_gib() sets a 32Gi floor (req 8Gi) so large-model
+          # downloads have headroom; defaults here keep the template valid if rendered standalone.
+          resources:
+            requests:
+              cpu: "2"
+              memory: "{{ download_mem_request | default('8Gi') }}"
+            limits:
+              cpu: "4"
+              memory: "{{ download_mem_limit | default('32Gi') }}"
+
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: ${MODEL_CACHE_PVC}

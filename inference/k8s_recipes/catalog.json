@@ -1,0 +1,1554 @@
+[
+  {
+    "name": "glm5-agg-16k512-sglang15-c4-256",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "aggregated",
+    "framework": "none",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "lmsysorg/sglang:v0.5.15.post1-cu130",
+      "image_digest": "sha256:00c53fe4c31bf22d7b37537f28bbdfd924c02de13cdfb4bff7378c9c34d75ab2",
+      "image_ref": "docker.io/lmsysorg/sglang@sha256:00c53fe4c31bf22d7b37537f28bbdfd924c02de13cdfb4bff7378c9c34d75ab2"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 8
+      },
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Agg/16k_512/glm5-fp8-b200-sglang15-agg-c4-256",
+    "recipe_hash": "ffd0650b40ad930a59662e82d2ffbb829994b5f848379ba19e2cdd93209fe1ef",
+    "benchmark_id": "9e5a169d1a950f4726e7ea57821810a0b99fe768067423bca047bb8b068cc975",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-agg-1k1k-sglang15-c4-1024",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "aggregated",
+    "framework": "none",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "lmsysorg/sglang:v0.5.15.post1-cu130",
+      "image_digest": "sha256:00c53fe4c31bf22d7b37537f28bbdfd924c02de13cdfb4bff7378c9c34d75ab2",
+      "image_ref": "docker.io/lmsysorg/sglang@sha256:00c53fe4c31bf22d7b37537f28bbdfd924c02de13cdfb4bff7378c9c34d75ab2"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 8
+      },
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Agg/1k_1k/glm5-fp8-b200-sglang15-agg-c4-1024",
+    "recipe_hash": "9780c34d907a70aba1bd27ddfcc13ae58d09353bdbaee002b8a77650d1c1592b",
+    "benchmark_id": "06399fbaa6f723923d8bcecfa3a8e201f9022fa5da2dc6aa2405494be9e11f0e",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-agg-8k1k-sglang15-c4-256",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "aggregated",
+    "framework": "none",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "lmsysorg/sglang:v0.5.15.post1-cu130",
+      "image_digest": "sha256:00c53fe4c31bf22d7b37537f28bbdfd924c02de13cdfb4bff7378c9c34d75ab2",
+      "image_ref": "docker.io/lmsysorg/sglang@sha256:00c53fe4c31bf22d7b37537f28bbdfd924c02de13cdfb4bff7378c9c34d75ab2"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 8
+      },
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Agg/8k_1k/glm5-fp8-b200-sglang15-agg-c4-256",
+    "recipe_hash": "7b78a0a2010d47551f95600a2e956cce851165b0fee37d7240f85db5deaf472b",
+    "benchmark_id": "4388f43080d7f13cf3e2547c9ae125e0d86d2839c545c2cb5b60d7fe5e5d539c",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c224-1p2d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 24
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c224-1p2d",
+    "recipe_hash": "198cda36e06da213ea32d310bb989aeb0d8c4aa950936db22e6209f2a85fe9ff",
+    "benchmark_id": "636b4bea01d0cfce27763b61d95c76328375d46b8ca15b55c87b4951cdbbd7a2",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-16k512-hightpt-dynamo14-c240-1p1d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 16
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c240-1p1d",
+    "recipe_hash": "a1a3465a458a509e0703738b3b99cf9401d5601bc547e244f321bdafb9edfbad",
+    "benchmark_id": "ddc55b211bbecf79be68dbdca78537f365d73845d2bc5a24a73291e164da80bc",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c304-2p1d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 24
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c304-2p1d",
+    "recipe_hash": "e71482135c31086f82e13dd91f03cd6ebc87efd9c76084b05a4102ad7189938b",
+    "benchmark_id": "4939baeeec3d58dc464f4afced0b79d48dae15ce01546e8c72c1da53e5be7570",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 24
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d",
+    "recipe_hash": "0b4f0d07464702f9bd40c64ad96b5dd2dd830f1b8b446699ed54cd287af9d0c3",
+    "benchmark_id": "a43d9a5ea0fc01879c49922ae2c4946c8a1b0413010a9a76bbceb72bb943e059",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p3d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 32
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p3d",
+    "recipe_hash": "e7adb48d8a5a43273989425342a9641eb8668038eb9c7604912765581c5e0440",
+    "benchmark_id": "034d730aa00bfb2e9eebea4995bbe80078aac8f36bbec0b979860ff6ea7fdf50",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c32-1p7d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 64
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c32-1p7d",
+    "recipe_hash": "6ccd9959fd5dc8d1fb7c8ebf42a79f7a91ea061042849507091f72fd291a8a5c",
+    "benchmark_id": "d7366f36ae80589ebf7bb414266c5567a623fd86eb483c71c3a8f088038f8438",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c64-1p5d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 48
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c64-1p5d",
+    "recipe_hash": "86e0722e12d65f8bb260a12e44f0ec6430bbc82cfbaaf9167b4199904ff3ad8c",
+    "benchmark_id": "4e56b4f775ccd10084b3e636a1107083e4961e5fa5d0fb80fa94292982b18fd2",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c8-1p8d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 72
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c8-1p8d",
+    "recipe_hash": "c4655d8cd46904fc26e3aec2253a9fb57bc22652c6b6cffd2d7429b5177c59b6",
+    "benchmark_id": "c67c34b422d2df0377ab9b8cc92951be529569022fffdb3db5fe1305b99c0ef4",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c96-1p4d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 40
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c96-1p4d",
+    "recipe_hash": "28df2b98d321b7356d5a8fcaffc2e21a1c2f1c587dcadf68cd00300d02e71735",
+    "benchmark_id": "ac567418ce9ee3280f0862c7924114ba005969e5dc4d8d4c9edb1a335dc0ed8c",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c1248-1p2d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 24
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c1248-1p2d",
+    "recipe_hash": "5748dbc318d5b9e730afc11d96f820efd5b9360f7cab6f90f39bcd0ff67c6e11",
+    "benchmark_id": "cab044a1772a093acc45c15998640737c0f135273c8ba3ad18fdc3a62ca6f6be",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-1k1k-hightpt-dynamo14-c2576-1p1d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 16
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c2576-1p1d",
+    "recipe_hash": "24212feecd36a8ce30178a739f3e0b2967447546576958720863ffc4202688e0",
+    "benchmark_id": "719a5a33c9478c21ead657387a9247ad6002cde08631600639ca52814602714f",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c576-1p4d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 40
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c576-1p4d",
+    "recipe_hash": "d79e2c2329dd45bc5a4305179c65289a62cfeb407b82070088500c1c1071be26",
+    "benchmark_id": "5c0a5734f9c04155e85374acc8307399906f001e07e585e7344eea73be860aea",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 32
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d",
+    "recipe_hash": "d65630005ed74b60d5ef1a2411322167feff93283363cc12394d028805b50d90",
+    "benchmark_id": "de276ba22abd84d54c7a7698f7df95221972550b4342e736e98c53b02cc0eac8",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 72
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d",
+    "recipe_hash": "eb4b613d807da2bca46f624c05d06322f51756429e7a59d80047cfbd709ac999",
+    "benchmark_id": "97aa11d008e50349d0cbcc215eaa528749fe99a2f99ced1b1bf6dccd74c1e0ba",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c512x256x128x64x32-1p8d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 72
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c512x256x128x64x32-1p8d",
+    "recipe_hash": "457e23ee62246073269288b251a50ef31024acf74d0fca66febc6ef5db9fffa4",
+    "benchmark_id": "baa1c238bc3597812ae57afcb5d6453ef1c0726e7d8687591906820cb0315353",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c224-1p2d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 24
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c224-1p2d",
+    "recipe_hash": "5744224d58cb01f66aeed75df35d5634da923d16e53d6283a7bfa14109a96716",
+    "benchmark_id": "434af2573699781ca54dc593bc0be472d7498d7041a9797fea38de27a2d3b6f5",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-8k1k-hightpt-dynamo14-c240-1p1d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 16
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c240-1p1d",
+    "recipe_hash": "3f177e600f41863d0a71e46546c358da1e5784190214c86214e83bb270c3da48",
+    "benchmark_id": "b1ac06c0546e6ca09b9b643491af855e501764df8666fdb080e16f1460546bbf",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c560-2p1d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 24
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c560-2p1d",
+    "recipe_hash": "75f81c9a4f300e0a45ba958a698a1847706b02ac41f141be1f639e3e6cb97bf4",
+    "benchmark_id": "a39a60cc20386dc8b90347b48d33b88319f5e71ccc8deb783aaf3e3b5dc54445",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c12-1p8d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 72
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c12-1p8d",
+    "recipe_hash": "102235fe74da31bf788e7916efdb8984a5c0fba7bc57bbf12e5ee52be2618b68",
+    "benchmark_id": "baf77c9f1e9bebd5c69bb96b868bb8029c10ed9a21e95f606eb3f22df26b2522",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c128-1p5d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 48
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c128-1p5d",
+    "recipe_hash": "2b7e30967def7956c5963b46e837a2ca96cc28022555e2da9061077c767ea28a",
+    "benchmark_id": "1ee2e4a8535596e4224f89d2bf6abc6e35c12c87620eadbf8ac885a60fab0d18",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c200-1p4d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 40
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c200-1p4d",
+    "recipe_hash": "3c038dbf0307316c7e0020b375792a20dc8a4824ba4114175124faec1d7e5879",
+    "benchmark_id": "d6fce654a1f8129bdc2025d499f2b710b5ce6440d8d1abb32b895e9bb6c9495a",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c256-1p2d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 24
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c256-1p2d",
+    "recipe_hash": "4bb529a24f8501ef8625d673fe8c13eb663d8732fef27550ec7117967e313b0a",
+    "benchmark_id": "09c404d1052fe9ad9d7c7d02da57bc30c5aef05cb8d5bc5a84f06fae85bff8a7",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c256-1p3d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 32
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c256-1p3d",
+    "recipe_hash": "62a85e106a7aae67eb293c8b42e003e456553cd63702b014b2b1f06e956c49dd",
+    "benchmark_id": "7bf69c8bf84439ad288404e5a6daf5fb50dafc3823eeaf2fd5d88f83a4715832",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c64-1p7d",
+    "model": "glm5-fp8",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 64
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c64-1p7d",
+    "recipe_hash": "9c3e6cb6cf31de57b788272e4d82430ecfbed51df2eac9e84612da4ff25fb981",
+    "benchmark_id": "b8c65d1bb5bf1908ea2b67cd789aef15b8b2cd4fd03674faf5490689bcd748a7",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "qwen3-0-6b-b200-vllm-agg-kvbm-pareto",
+    "model": "qwen3-0-6b",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "vllm",
+    "serving_mode": "aggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "glm5-9600-agentic-code-500s-seed42-sessionfit9000-20260715",
+    "mode": "mooncake-trace",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "image_digest": "sha256:5acec222634f0d63ed936e8616449f7b4003b82ab8bd1a3f433d3dd96f6736fe",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/vllm-runtime@sha256:5acec222634f0d63ed936e8616449f7b4003b82ab8bd1a3f433d3dd96f6736fe",
+      "etcd_image_digest": "sha256:75af419abd4e02411e0df74e3b32f131359839c0994e934c7bcc8eea40cb7298",
+      "nats_image_digest": "sha256:aa536352f09b109b909e8bfbf9859a40601481bb3742ebc7a09cfaf638622407"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu·tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=√(Output-TPS/GPU · Output-TPS/user) per rung; scalar = geomean over rungs; exemplar gate = every shared rung within tolerance"
+    },
+    "requires": {
+      "gpu": {
+        "count": 1,
+        "min_memory_gib": 16,
+        "whole_node": true
+      },
+      "tolerations": [
+        "nvidia.com/gpu",
+        "kubernetes.io/arch",
+        "dedicated"
+      ],
+      "storage": [
+        "MODEL_CACHE_PVC"
+      ],
+      "secrets": [
+        "IMAGE_PULL_SECRET"
+      ]
+    },
+    "_path": "recipes/llm-perf/kvbm/qwen3-0-6b-b200-vllm-agg-kvbm-pareto",
+    "recipe_hash": "b5427e6cfa09706e0c2d8d9c0fe013ff17cedb445a0b62f37ceae259c28e834d",
+    "benchmark_id": "2f9d41edfe499005dad239619cc868ca25ffc8c49b8ced8790853eb62620aed2",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "nemotron-ultra-nvfp4-b200-sglang-dynamo14-10k16k-1p1d",
+    "model": "nemotron-ultra-nvfp4",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 16
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "cache": {
+        "size": "800Gi",
+        "access_mode": "rwx"
+      },
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/nemotron_ultra_disagg/sglang_dynamo/10k16k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-10k16k-1p1d",
+    "recipe_hash": "619fd2fb855dcf095a5ecf4a1f9cb2aa7989c45d436195ab40b051825c98c793",
+    "benchmark_id": "baf8a32834a756eff8fc71b4f7be563f68522a12ba42b64a2bdbda55b125694b",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "nemotron-ultra-nvfp4-b200-sglang-dynamo14-50k2k-1p1d",
+    "model": "nemotron-ultra-nvfp4",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 16
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "cache": {
+        "size": "800Gi",
+        "access_mode": "rwx"
+      },
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/nemotron_ultra_disagg/sglang_dynamo/50k2k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-50k2k-1p1d",
+    "recipe_hash": "6281dca0bc24263cf1f49ca385751683bf176ccb6546aaffa7de8d33cf82df9a",
+    "benchmark_id": "46f50067f0b5cf257f8c6b6e5674cafc4313af0474be189284fdb801f26121c4",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  },
+  {
+    "name": "nemotron-ultra-nvfp4-b200-sglang-dynamo14-8k64k-1p1d",
+    "model": "nemotron-ultra-nvfp4",
+    "gpu_type": "B200",
+    "arch": "amd64",
+    "engine": "sglang",
+    "serving_mode": "disaggregated",
+    "framework": "dynamo",
+    "scenario": "llm-perf",
+    "distribution": "synthetic",
+    "mode": "synthetic",
+    "launcher": "aiperf",
+    "goal": "pareto",
+    "status": "wip",
+    "results_link": "./RESULTS.md",
+    "provenance": {
+      "schema_version": "k8s.llm-perf.v1",
+      "official": false,
+      "source_image_tag": "nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1",
+      "image_digest": "sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9",
+      "image_ref": "nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9"
+    },
+    "exemplar": {
+      "metric": "pareto_geomean",
+      "unit": "geomean(tps/gpu*tps/user)",
+      "reference": null,
+      "tolerance_pct": 5,
+      "comparison": "point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs"
+    },
+    "requires": {
+      "gpu": {
+        "count": 16
+      },
+      "rdma": true,
+      "infra": [
+        "etcd",
+        "nats"
+      ],
+      "cache": {
+        "size": "800Gi",
+        "access_mode": "rwx"
+      },
+      "tolerations": [
+        "nvidia.com/gpu",
+        "dedicated"
+      ]
+    },
+    "_path": "recipes/llm-perf/nemotron_ultra_disagg/sglang_dynamo/8k64k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-8k64k-1p1d",
+    "recipe_hash": "826577c5ab08e60431410931937a6be5d660147db95b81a15e8bb8a92110e758",
+    "benchmark_id": "3bd5b03ce3e9527e07180aa3445a300998013f4b91d6b234106df4f8c57621c8",
+    "_tuning": false,
+    "_wall_h": "",
+    "_gpu_h": ""
+  }
+]

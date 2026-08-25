@@ -1,0 +1,1223 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+# vllm-agg — aiperf concurrency sweep Job (rendered from a cell's recipe.yaml).
+# {{ .. }} = recipe truth (baked at render). ${ .. } = cluster/runtime (envsubst in run.sh).
+# The runner is environment-driven. Update this template and regenerate rendered manifests.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d-bench
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/recipe: glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d-bench
+  namespace: ${NAMESPACE}
+rules:
+  - { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "watch"] }
+  # pods/exec: only for exec-based GPU telemetry (nvidia-smi in the server container; no state change).
+  # Omitted when gpu_telemetry is "dcgm" (HTTP scrape, no exec) or false/"off" (disabled).
+  - { apiGroups: [""], resources: ["pods/exec"], verbs: ["create"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d-bench
+  namespace: ${NAMESPACE}
+subjects:
+  - { kind: ServiceAccount, name: glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d-bench, namespace: ${NAMESPACE} }
+roleRef: { kind: Role, name: glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d-bench, apiGroup: rbac.authorization.k8s.io }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d-bench-${RUN_ID}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    llmb.nvidia.com/recipe: glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d
+    llmb.nvidia.com/cell: glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d
+    llmb.nvidia.com/run-id: ${RUN_ID}
+    llmb.nvidia.com/owner: ${OWNER}
+spec:
+  backoffLimit: 0
+  completions: 1
+  parallelism: 1
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: 36000
+  template:
+    metadata:
+      labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/recipe: glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d, llmb.nvidia.com/run-id: ${RUN_ID} }
+    spec:
+      restartPolicy: Never
+      serviceAccountName: glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d-bench
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      nodeSelector: { ${BENCH_NODE_SELECTOR} }   # pin the CPU bench pod off GPU nodes (from profile; empty = any)
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+        - { key: dedicated, operator: Exists }
+      containers:
+        - name: bench
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          env:
+            - { name: RUN_ID, value: "${RUN_ID}" }
+            - { name: NAMESPACE, value: "${NAMESPACE}" }
+            - { name: RECIPE_SHORTNAME, value: "glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d" }
+            - { name: SERVER_URL, value: "http://glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d-server:8000" }
+            # Disaggregated traffic and HTTP metrics use the frontend Service,
+            # but GPU telemetry/fingerprinting must exec into a GPU worker.
+            - { name: SERVER_LABEL_SELECTOR, value: "app=glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d-decode" }
+            - { name: SERVER_SERVICE, value: "glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d-server" }
+            - { name: SERVER_CONTAINER, value: "sglang" }
+            - { name: SERVER_RUNTIME, value: "sglang" }
+            - { name: GPU_TELEMETRY, value: "auto" }
+            # true GPU count from the recipe → stamped into run_meta so aggregate_metrics never guesses the
+            # TPS/GPU denominator when DCGM telemetry is absent (default 8 would halve a 4-GPU node's TPS/GPU).
+            - { name: GPU_COUNT, value: "24" }
+            - { name: DCGM_EXPORTER_URL, value: "${DCGM_EXPORTER_URL}" }
+            # SYNTHETIC load (envelope.mode: synthetic): no trace file. DATASET_* left empty so run_meta records
+            # a null dataset; SYN_* drive aiperf's random ISL/OSL generation (see the argv branch below).
+            - { name: DATASET_PATH, value: "" }
+            - { name: DATASET_TYPE, value: "synthetic" }
+            - { name: DATASET_SUBPATH, value: "" }
+            - { name: DATASET_CONFIG_PATH, value: "" }
+            - { name: DATASET_NUM_SESSIONS, value: "" }
+            - { name: DATASET_SEED, value: "" }
+            - { name: DATASET_MAX_ISL, value: "" }
+            - { name: SYN_ISL, value: "14746" }
+            - { name: SYN_ISL_STDDEV, value: "946" }
+            - { name: SYN_OSL, value: "461" }
+            - { name: SYN_OSL_STDDEV, value: "30" }
+            - { name: SYN_SEED, value: "42" }
+            - { name: AIPERF_ENDPOINT_TYPE, value: "completions" }
+            # sweep_mode=fixed: CONCURRENCIES is the exact list; adaptive path in the shell is inactive.
+            # sweep_mode=adaptive: CONCURRENCIES is empty; the shell's exponential ramp + binary search runs.
+            - { name: SWEEP_MODE_RECIPE, value: "fixed" }
+            - { name: CONCURRENCIES, value: "128" }
+            - { name: CONCURRENCY_START, value: "16" }
+            - { name: CONCURRENCY_MULTIPLIER, value: "2" }
+            - { name: CONCURRENCY_MAX, value: "512" }
+            - { name: BINARY_SEARCH, value: "true" }
+            - { name: BINARY_SEARCH_MAX_STEPS, value: "4" }
+            - { name: BINARY_SEARCH_MIN_GAP, value: "16" }
+            - { name: REFINE_LOWER_FRAC, value: "0.85" }
+            - { name: REFINE_UPPER_FRAC, value: "1.15" }
+            - { name: BENCH_DURATION, value: "" }
+            # synthetic: fixed request-count per rung = request_count_multiplier × concurrency (measured_prompts_rule).
+            - { name: REQUEST_COUNT_MULTIPLIER, value: "10" }
+            - { name: WARMUP_REQUEST_MULTIPLIER, value: "2" }
+            - { name: CONCURRENCY_RAMP_DURATION, value: "600" }
+            - { name: BENCHMARK_GRACE_PERIOD, value: "1800" }
+            - { name: REQUEST_TIMEOUT_SECONDS, value: "3600" }
+            - { name: PRE_SWEEP_SMOKE_PROMPT_TOKENS, value: "11059" }
+            - { name: PRE_SWEEP_SMOKE_TIMEOUT_SECONDS, value: "1200" }
+            - { name: NUM_DATASET_ENTRIES, value: "1280" }
+            - { name: NUM_PROFILE_RUNS, value: "1" }
+            - { name: CACHE_BUST, value: "${CACHE_BUST}" }
+            - { name: CLEAN_ARTIFACTS_ROOT, value: "true" }
+            - { name: AIPERF_REF, value: "git+https://github.com/ai-dynamo/aiperf.git@38687855e98044fcf12ee48c6794128f10b6780b" }
+            - { name: AIPERF_SCENARIO, value: "" }
+            - { name: AIPERF_EXTRA_INPUTS, value: "ignore_eos:true" }
+            - { name: CONNECTION_REUSE_STRATEGY, value: "sticky-user-sessions" }
+            - { name: MODEL_NAME, value: "GLM-5-FP8" }
+            - { name: MODEL_REPO, value: "zai-org/GLM-5-FP8" }
+            - { name: AIPERF_MODEL_ID, value: "GLM-5-FP8" }
+            - { name: AIPERF_TOKENIZER_ID, value: "zai-org/GLM-5-FP8" }
+            - { name: KUBECTL_VERSION, value: "v1.34.7" }
+            - { name: ARTIFACTS_ROOT, value: "/artifacts/${RUN_ID}" }
+            - { name: PYTHONUNBUFFERED, value: "1" }
+          args:
+            - |
+
+              set -eu
+
+              # ------- Bootstrap: kubectl, git, curl, aiperf ----------------
+              echo "[$(date -u +%H:%M:%S)] Installing OS deps + kubectl + aiperf..."
+              apt-get update -qq
+              # build-essential + python3-dev are needed because some AIPerf
+              # transitive deps (notably `crick`) ship no aarch64 wheel on
+              # PyPI and pip falls back to a source build. Cost on amd64
+              # where wheels exist: ~20s extra apt install. Keeps the bench
+              # portable to clusters whose only user-schedulable nodes are
+              # arm64 (e.g. an arm64-only cluster, where the few amd64 nodes are
+              # all tainted dedicated=system-workload).
+              apt-get install -y -qq --no-install-recommends \
+                curl git ca-certificates build-essential python3-dev
+              ARCH=$(uname -m)
+              case "$ARCH" in
+                x86_64)  KARCH=amd64 ;;
+                aarch64) KARCH=arm64 ;;
+                *) echo "Unsupported arch: $ARCH"; exit 1 ;;
+              esac
+              curl -fsSL -o /usr/local/bin/kubectl \
+                "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KARCH}/kubectl"
+              chmod +x /usr/local/bin/kubectl
+              pip install --no-cache-dir --quiet "$AIPERF_REF"
+              echo "[$(date -u +%H:%M:%S)] Bootstrap complete."
+              aiperf --version || true
+              kubectl version --client=true || true
+
+              kube() {
+                local host port server ca token
+                host="${KUBERNETES_SERVICE_HOST:-kubernetes.default.svc}"
+                port="${KUBERNETES_SERVICE_PORT:-443}"
+                # Bracket bare IPv6 service IPs so the --server URL is valid on
+                # dual-stack / IPv6 clusters (unbracketed "fd00::1:443" is
+                # ambiguous and makes every kubectl call fail -> silently empty
+                # telemetry + broken restart guard).
+                case "$host" in *:*) host="[$host]" ;; esac
+                server="https://${host}:${port}"
+                ca="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+                token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null || true)
+                if [ -n "$token" ] && [ -f "$ca" ]; then
+                  kubectl --server="$server" --certificate-authority="$ca" --token="$token" "$@"
+                else
+                  # Use the pod's in-cluster configuration when no explicit
+                  # service-account token is available.
+                  kubectl "$@"
+                fi
+              }
+
+              # ------- Wait for server to be reachable ----------------------
+              echo "[$(date -u +%H:%M:%S)] Waiting for $SERVER_URL/health ..."
+              ATTEMPTS=0
+              MAX_ATTEMPTS=120  # 10 min
+              until curl -fsS --connect-timeout 5 --max-time 10 "$SERVER_URL/health" >/dev/null 2>&1; do
+                ATTEMPTS=$((ATTEMPTS + 1))
+                if [ $ATTEMPTS -ge $MAX_ATTEMPTS ]; then
+                  echo "ERROR: server $SERVER_URL/health not ready after $((MAX_ATTEMPTS * 5))s"
+                  exit 1
+                fi
+                sleep 5
+              done
+              echo "[$(date -u +%H:%M:%S)] Server is healthy."
+
+              # ------- Verify model is loaded -------------------------------
+              echo "[$(date -u +%H:%M:%S)] Listing models at $SERVER_URL/v1/models..."
+              MODELS_JSON=$(curl -fsS "$SERVER_URL/v1/models" || true)
+              printf '%s\n' "$MODELS_JSON"
+              echo
+              MODEL_LIST_JSON="$MODELS_JSON" python3 - <<'PY'
+              import json
+              import os
+              import sys
+
+              target = os.environ.get("AIPERF_MODEL_ID", "")
+              raw = os.environ.get("MODEL_LIST_JSON", "")
+              try:
+                  data = json.loads(raw)
+                  ids = {
+                      item.get("id")
+                      for item in data.get("data", [])
+                      if isinstance(item, dict) and item.get("id")
+                  }
+              except Exception as exc:
+                  print(f"FATAL: could not parse /v1/models response: {exc}", file=sys.stderr)
+                  raise SystemExit(66)
+              if target not in ids:
+                  print(
+                      f"FATAL: AIPerf model {target!r} is not served; available={sorted(ids)!r}",
+                      file=sys.stderr,
+                  )
+                  raise SystemExit(66)
+              print(f"AIPerf will request served model: {target}")
+              PY
+              echo "AIPerf tokenizer source: $AIPERF_TOKENIZER_ID"
+
+              smoke_test_model() {
+                local out="${1:-/tmp/aiperf_smoke_response.json}"
+                local body http
+                body=$(python3 -c 'import json, os; print(json.dumps({"model": os.environ["AIPERF_MODEL_ID"], "messages": [{"role": "user", "content": "Reply with exactly: ok"}], "max_tokens": 1, "temperature": 0, "stream": False}))')
+                echo "[$(date -u +%H:%M:%S)] Smoke-testing chat completion with model=$AIPERF_MODEL_ID ..."
+                http=$(curl -sS --max-time 300 -o "$out" -w '%{http_code}' \
+                  -H 'Content-Type: application/json' \
+                  "$SERVER_URL/v1/chat/completions" \
+                  -d "$body" || true)
+                SMOKE_HTTP="$http" python3 - "$out" <<'PY'
+              import json
+              import os
+              import sys
+
+              path = sys.argv[1]
+              raw_code = os.environ.get("SMOKE_HTTP", "")
+              try:
+                  code = int(raw_code)
+              except ValueError:
+                  print(f"FATAL: smoke request did not return an HTTP status: {raw_code!r}", file=sys.stderr)
+                  raise SystemExit(67)
+              try:
+                  with open(path) as f:
+                      data = json.load(f)
+              except Exception as exc:
+                  print(f"FATAL: smoke response is not valid JSON: {exc}", file=sys.stderr)
+                  raise SystemExit(67)
+              if code < 200 or code >= 300:
+                  print(f"FATAL: smoke request failed HTTP {code}: {data}", file=sys.stderr)
+                  raise SystemExit(67)
+              if isinstance(data, dict) and data.get("error"):
+                  print(f"FATAL: smoke request returned API error: {data['error']}", file=sys.stderr)
+                  raise SystemExit(67)
+              choices = data.get("choices") if isinstance(data, dict) else None
+              if not isinstance(choices, list) or not choices:
+                  print(f"FATAL: smoke response missing choices: {data}", file=sys.stderr)
+                  raise SystemExit(67)
+              print(f"Smoke request passed HTTP {code}.")
+              PY
+              }
+
+              smoke_test_large_context() {
+                local out="${1:-/tmp/aiperf_large_context_smoke.json}"
+                local tokens="${PRE_SWEEP_SMOKE_PROMPT_TOKENS:-0}"
+                local timeout="${PRE_SWEEP_SMOKE_TIMEOUT_SECONDS:-1200}"
+                if [ -z "$tokens" ] || [ "$tokens" = "0" ]; then
+                  echo "[$(date -u +%H:%M:%S)] Large-context smoke disabled."
+                  return 0
+                fi
+                echo "[$(date -u +%H:%M:%S)] Smoke-testing /v1/completions with model=$AIPERF_MODEL_ID prompt_tokens_target=$tokens ..."
+                SERVER_URL="$SERVER_URL" \
+                AIPERF_MODEL_ID="$AIPERF_MODEL_ID" \
+                SMOKE_PROMPT_TOKENS="$tokens" \
+                SMOKE_TIMEOUT_SECONDS="$timeout" \
+                SMOKE_OUT="$out" \
+                python3 - <<'PY'
+              import json
+              import os
+              import sys
+              import time
+              import urllib.error
+              import urllib.request
+
+              server = os.environ["SERVER_URL"].rstrip("/")
+              model = os.environ["AIPERF_MODEL_ID"]
+              tokens = int(os.environ["SMOKE_PROMPT_TOKENS"])
+              timeout = float(os.environ.get("SMOKE_TIMEOUT_SECONDS") or 1200)
+              out = os.environ["SMOKE_OUT"]
+              prompt = " banana" * tokens
+              body = json.dumps({
+                  "model": model,
+                  "prompt": prompt,
+                  "max_tokens": 1,
+                  "temperature": 0,
+              }).encode("utf-8")
+              req = urllib.request.Request(
+                  f"{server}/v1/completions",
+                  data=body,
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              started = time.time()
+              try:
+                  with urllib.request.urlopen(req, timeout=timeout) as resp:
+                      raw = resp.read().decode("utf-8", errors="replace")
+                      data = json.loads(raw)
+                      summary = {
+                          "http_status": resp.status,
+                          "elapsed_sec": round(time.time() - started, 1),
+                          "target_prompt_tokens": tokens,
+                          "usage": data.get("usage") if isinstance(data, dict) else None,
+                          "finish_reason": (data.get("choices") or [{}])[0].get("finish_reason")
+                          if isinstance(data, dict)
+                          else None,
+                      }
+              except urllib.error.HTTPError as exc:
+                  summary = {
+                      "http_status": exc.code,
+                      "elapsed_sec": round(time.time() - started, 1),
+                      "target_prompt_tokens": tokens,
+                      "body": exc.read(4000).decode("utf-8", errors="replace"),
+                  }
+                  print(f"FATAL: large-context smoke failed HTTP {exc.code}: {summary['body']}", file=sys.stderr)
+                  with open(out, "w") as f:
+                      json.dump(summary, f, indent=2)
+                  raise SystemExit(67)
+              except Exception as exc:
+                  summary = {
+                      "exception": type(exc).__name__,
+                      "error": str(exc),
+                      "elapsed_sec": round(time.time() - started, 1),
+                      "target_prompt_tokens": tokens,
+                  }
+                  print(f"FATAL: large-context smoke failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+                  with open(out, "w") as f:
+                      json.dump(summary, f, indent=2)
+                  raise SystemExit(67)
+              if summary.get("http_status") != 200:
+                  print(f"FATAL: large-context smoke returned HTTP {summary.get('http_status')}: {summary}", file=sys.stderr)
+                  with open(out, "w") as f:
+                      json.dump(summary, f, indent=2)
+                  raise SystemExit(67)
+              with open(out, "w") as f:
+                  json.dump(summary, f, indent=2)
+              print(f"Large-context smoke passed HTTP 200: {json.dumps(summary, sort_keys=True)}")
+              PY
+              }
+
+              echo "[$(date -u +%H:%M:%S)] Synthetic load (mode: synthetic): aiperf generates random ISL≈$SYN_ISL / OSL≈$SYN_OSL prompts; no dataset file to stage."
+
+              # ------- Record server pod identity (sweep start) -------------
+              # Select containerStatuses by name="sglang" rather than index
+              # [0]: if the SGLang Pod ever sprouts a sidecar (istio-proxy,
+              # log forwarder, etc.) the array order is implementation
+              # defined and [0] could be the sidecar's status — restart
+              # count would then be unrelated to the model server.
+              get_server_id() {
+                kube -n "$NAMESPACE" get pod -l "$SERVER_LABEL_SELECTOR" \
+                  --field-selector=status.phase=Running \
+                  -o jsonpath='{.items[0].metadata.uid}|{.items[0].status.containerStatuses[?(@.name=="sglang")].restartCount}' \
+                  2>/dev/null || echo "unknown|0"
+              }
+              # Resolve the (single) running server Pod name for kubectl exec into.
+              # Resolve by recipe labels first, then use the Service endpoint
+              # when the server pod uses a different label set.
+              resolve_server_pod() {
+                local pod
+                pod=$(kube -n "$NAMESPACE" get pod -l "$SERVER_LABEL_SELECTOR" \
+                  --field-selector=status.phase=Running -o name 2>/dev/null \
+                  | head -n1 | sed 's|^pod/||')
+                if [ -z "$pod" ] && [ -n "${SERVER_SERVICE:-}" ]; then
+                  pod=$(kube -n "$NAMESPACE" get endpoints "$SERVER_SERVICE" \
+                    -o jsonpath='{.subsets[0].addresses[0].targetRef.name}' \
+                    2>/dev/null || true)
+                fi
+                printf '%s' "$pod"
+              }
+
+              # Time-series scrape loop. Runs in the background during each
+              # concurrency step; killed when aiperf exits. Two streams:
+              #   - server_metrics_timeseries/<unix>.prom: server /metrics
+              #     snapshots, one per tick. Used for SGLang HiCache or vLLM
+              #     prefix-cache curves, generation throughput, and queue depth.
+              #   - gpu_stats.csv: nvidia-smi rows tagged with our wallclock,
+              #     one row per GPU per tick. Used for GPU util/mem/power
+              #     time-series in the HTML dashboard.
+              # Tick interval defaults to 10s and is tunable via the
+              # SCRAPE_INTERVAL env var on the Job. Both streams are
+              # best-effort and never fail the bench.
+              SERVER_POD=""
+              GPU_TELEMETRY="$(printf '%s' "${GPU_TELEMETRY:-auto}" | tr '[:upper:]' '[:lower:]')"
+              SERVER_CONTAINER="${SERVER_CONTAINER:-sglang}"
+              GPU_QUERY="index,timestamp,utilization.gpu,memory.used,memory.total,power.draw,clocks.sm"
+
+              # GPU telemetry source #1: exec nvidia-smi in the server Pod.
+              # The bench Pod is CPU-only, so collect GPU telemetry from the
+              # server pod. Bound each exec and try the default container when
+              # the configured container name is not present.
+              # Appends one gpu_stats row per GPU; returns non-zero on no rows.
+              gpu_scrape_exec() {
+                local out="$1" iso="$2" rows
+                [ -n "$SERVER_POD" ] || return 1
+                rows=$(kube --request-timeout=15s -n "$NAMESPACE" exec \
+                  "$SERVER_POD" -c "$SERVER_CONTAINER" -- \
+                  nvidia-smi --query-gpu="$GPU_QUERY" \
+                  --format=csv,noheader,nounits 2>/dev/null || true)
+                if [ -z "$rows" ]; then
+                  rows=$(kube --request-timeout=15s -n "$NAMESPACE" exec \
+                    "$SERVER_POD" -- \
+                    nvidia-smi --query-gpu="$GPU_QUERY" \
+                    --format=csv,noheader,nounits 2>/dev/null || true)
+                fi
+                [ -n "$rows" ] || return 1
+                printf '%s\n' "$rows" \
+                  | awk -v iso="$iso" 'NF { print iso "," $0 }' >> "$out/gpu_stats.csv"
+              }
+
+              # GPU telemetry source #2 (portability escape hatch for clusters
+              # that forbid exec into application containers): scrape a
+              # DCGM-exporter Prometheus endpoint and map DCGM field IDs onto
+              # the gpu_stats schema (timestamp + memory.total left empty).
+              # Enable via DCGM_EXPORTER_URL.
+              gpu_scrape_dcgm() {
+                local out="$1" iso="$2" body
+                [ -n "${DCGM_EXPORTER_URL:-}" ] || return 1
+                body=$(curl -fsS --max-time 8 "$DCGM_EXPORTER_URL" 2>/dev/null || true)
+                [ -n "$body" ] || return 1
+                printf '%s\n' "$body" | awk -v iso="$iso" '
+                  function gidx(s){ if (match(s, /gpu="[0-9]+"/)) return substr(s, RSTART+5, RLENGTH-6); return "" }
+                  function lastf(s,   n,f){ n=split(s,f," "); return f[n] }
+                  /^DCGM_FI_DEV_POWER_USAGE[ {]/ { g=gidx($0); if(g!=""){pw[g]=lastf($0); seen[g]=1} }
+                  /^DCGM_FI_DEV_GPU_UTIL[ {]/    { g=gidx($0); if(g!=""){ut[g]=lastf($0); seen[g]=1} }
+                  /^DCGM_FI_DEV_FB_USED[ {]/     { g=gidx($0); if(g!=""){mu[g]=lastf($0); seen[g]=1} }
+                  /^DCGM_FI_DEV_SM_CLOCK[ {]/    { g=gidx($0); if(g!=""){sm[g]=lastf($0); seen[g]=1} }
+                  END { for (g in seen) printf "%s,%s,,%s,%s,,%s,%s\n", iso, g, ut[g], mu[g], pw[g], sm[g] }
+                ' >> "$out/gpu_stats.csv"
+              }
+
+              # Dispatch to the configured GPU-telemetry source. Best-effort:
+              # never fails the tick. "auto" prefers DCGM when configured.
+              gpu_scrape() {
+                local out="$1" iso="$2"
+                case "$GPU_TELEMETRY" in
+                  off|none|disabled) return 0 ;;
+                  dcgm) gpu_scrape_dcgm "$out" "$iso" || true ;;
+                  exec|nvidia-smi) gpu_scrape_exec "$out" "$iso" || true ;;
+                  *) if [ -n "${DCGM_EXPORTER_URL:-}" ]; then
+                       gpu_scrape_dcgm "$out" "$iso" || gpu_scrape_exec "$out" "$iso" || true
+                     else
+                       gpu_scrape_exec "$out" "$iso" || true
+                     fi ;;
+                esac
+              }
+
+              scrape_tick() {
+                local out="$1"
+                local ts iso
+                ts=$(date -u +%s)
+                iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+                curl -fsS --max-time 8 "$SERVER_URL/metrics" \
+                  > "$out/server_metrics_timeseries/${ts}.prom" 2>/dev/null || true
+                gpu_scrape "$out" "$iso"
+              }
+
+              # One-shot telemetry self-test. Runs BEFORE the sweep so an empty
+              # capture is visible immediately (Job log + gpu_stats.status)
+              # instead of being discovered as a header-only gpu_stats.csv after
+              # the run. Non-fatal. Seeds the global SERVER_POD.
+              telemetry_preflight() {
+                local status_file="$1" probe rows
+                case "$GPU_TELEMETRY" in
+                  off|none|disabled)
+                    echo "gpu_telemetry=off (disabled via GPU_TELEMETRY)" | tee "$status_file"
+                    return 0 ;;
+                esac
+                SERVER_POD=$(resolve_server_pod)
+                probe=$(mktemp)
+                printf 'wallclock_iso,gpu_index,timestamp,utilization_gpu_pct,memory_used_mib,memory_total_mib,power_draw_w,clocks_sm_mhz\n' > "$probe"
+                gpu_scrape "$probe" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                rows=$(( $(wc -l < "$probe") - 1 ))
+                rm -f "$probe"
+                if [ "$rows" -gt 0 ] 2>/dev/null; then
+                  echo "gpu_telemetry=ok mode=$GPU_TELEMETRY pod=${SERVER_POD:-<none>} container=$SERVER_CONTAINER gpus=$rows" | tee "$status_file"
+                else
+                  {
+                    echo "gpu_telemetry=EMPTY mode=$GPU_TELEMETRY pod=${SERVER_POD:-<none>} container=$SERVER_CONTAINER dcgm=${DCGM_EXPORTER_URL:-<unset>}"
+                    echo "  gpu_stats.csv will be header-only for this run. Likely causes:"
+                    echo "  - server Pod not resolvable (label selector matched none AND Service '${SERVER_SERVICE:-<unset>}' has no endpoints)"
+                    echo "  - pods/exec RBAC missing, or nvidia-smi/container '$SERVER_CONTAINER' absent in the server Pod"
+                    echo "  - remediate: set DCGM_EXPORTER_URL for DCGM-exporter, or GPU_TELEMETRY=off to silence"
+                  } | tee "$status_file"
+                fi
+              }
+              scrape_loop() {
+                # Process-group cleanup. When the parent kills this
+                # background subshell (via `kill $SCRAPE_PID` after
+                # aiperf exits), the in-flight `kubectl exec` child
+                # would otherwise reparent to PID 1 and leak. Trapping
+                # EXIT here ensures the subshell's whole process group
+                # dies together. Combined with the per-exec
+                # `--request-timeout=15s` above, the scrape loop has
+                # both a soft (per-tick) and hard (loop-exit) cleanup.
+                trap 'kill 0 2>/dev/null || true' EXIT
+                local out="$1"
+                local interval="${SCRAPE_INTERVAL:-10}"
+                mkdir -p "$out/server_metrics_timeseries"
+                # CSV header (the awk above prepends wallclock_iso to nvidia-smi's
+                # 7 fields). Write once per step so re-runs start clean.
+                printf 'wallclock_iso,gpu_index,timestamp,utilization_gpu_pct,memory_used_mib,memory_total_mib,power_draw_w,clocks_sm_mhz\n' \
+                  > "$out/gpu_stats.csv"
+                while :; do
+                  scrape_tick "$out"
+                  sleep "$interval"
+                done
+              }
+
+              # Capture a fingerprint from inside the server container for reproducibility.
+              # Records: framework versions, Python version, GPU info (name/driver/compute_cap),
+              # HF model revision SHA from the snapshot cache, and full pip freeze.
+              # Best-effort via kubectl exec -i (stdin pipe). Never blocks the sweep.
+              # Writes fingerprint.json to the artifacts root; compare runs with `diff` to spot changes.
+              capture_fingerprint() {
+                local out_file="$1"
+                local pod="${SERVER_POD:-}"
+                local container="${SERVER_CONTAINER:-}"
+                local probe fp
+
+                if [ -z "$pod" ]; then
+                  printf '{"_skipped": "server pod not resolved; set GPU_TELEMETRY to exec or auto to enable fingerprinting"}\n' \
+                    > "$out_file"
+                  return 0
+                fi
+
+                # The probe runs inside the server container via kubectl exec -i (stdin).
+                # Each top-level probe is wrapped in safe() so one failure doesn't abort the rest.
+                probe=$(cat <<'ENDPROBE'
+              import json, subprocess, sys, os, platform, socket
+
+              def safe(fn):
+                  try: return fn()
+                  except Exception as e: return {"_error": str(e)}
+
+              def fw_versions():
+                  try:
+                      import importlib.metadata as im
+                      result = {}
+                      for n in ["vllm", "sglang", "torch", "transformers", "flash_attn", "triton", "tensorrt_llm"]:
+                          try: result[n] = im.version(n)
+                          except Exception: pass
+                      return result
+                  except Exception as e: return {"_error": str(e)}
+
+              def model_rev():
+                  import glob, re
+                  for root in ["/model-cache/hub", "/data/hf-cache/hub",
+                               os.path.expanduser("~/.cache/huggingface/hub")]:
+                      for p in sorted(glob.glob(root + "/models--*/snapshots/*/config.json")):
+                          m = re.search(r"/snapshots/([a-f0-9]{40})/", p)
+                          if m: return {"snapshot_sha": m.group(1), "source": p}
+                  return None
+
+              def gpu_info():
+                  out = subprocess.check_output(
+                      ["nvidia-smi", "--query-gpu=index,name,driver_version,memory.total,compute_cap",
+                       "--format=csv,noheader,nounits"], text=True, timeout=15)
+                  rows = []
+                  for r in out.strip().splitlines():
+                      p = [x.strip() for x in r.split(",")]
+                      rows.append({"index": p[0] if len(p) > 0 else None,
+                                   "name": p[1] if len(p) > 1 else None,
+                                   "driver": p[2] if len(p) > 2 else None,
+                                   "memory_mib": p[3] if len(p) > 3 else None,
+                                   "compute_cap": p[4] if len(p) > 4 else None})
+                  return rows
+
+              def pip_freeze():
+                  return subprocess.check_output(
+                      [sys.executable, "-m", "pip", "freeze"], text=True, timeout=60
+                  ).strip().splitlines()
+
+              print(json.dumps({
+                  "hostname": safe(socket.gethostname),
+                  "arch": platform.machine(),
+                  "python_version": platform.python_version(),
+                  "frameworks": safe(fw_versions),
+                  "model_revision": safe(model_rev),
+                  "gpus": safe(gpu_info),
+                  "pip_packages": safe(pip_freeze),
+              }, default=str))
+              ENDPROBE
+              )
+
+                set +e
+                # Try named container first, then default container (handles backend naming variations).
+                if [ -n "$container" ]; then
+                  fp=$(printf '%s\n' "$probe" | kube --request-timeout=90s -n "$NAMESPACE" exec -i \
+                    "$pod" -c "$container" -- python3 2>/dev/null)
+                fi
+                if [ -z "$fp" ]; then
+                  fp=$(printf '%s\n' "$probe" | kube --request-timeout=90s -n "$NAMESPACE" exec -i \
+                    "$pod" -- python3 2>/dev/null || true)
+                fi
+                set -e
+
+                if [ -n "$fp" ]; then
+                  printf '%s\n' "$fp" > "$out_file"
+                  echo "[$(date -u +%H:%M:%S)] Server fingerprint captured → $out_file"
+                else
+                  printf '{"_error": "fingerprint probe empty (pods/exec unavailable, Python absent in container, or container not yet Ready)"}\n' \
+                    > "$out_file"
+                  echo "[$(date -u +%H:%M:%S)] WARN: server fingerprint probe returned empty — check pods/exec RBAC and GPU_TELEMETRY mode"
+                fi
+              }
+
+              json_field() {
+                local file="$1"
+                local field="$2"
+                python3 - "$file" "$field" <<'PY'
+              import json
+              import sys
+
+              with open(sys.argv[1]) as f:
+                  data = json.load(f)
+              value = data.get(sys.argv[2])
+              if value is None:
+                  raise SystemExit(0)
+              if isinstance(value, bool):
+                  print("true" if value else "false")
+              else:
+                  print(value)
+              PY
+              }
+
+              classify_step() {
+                local out="$1"
+                local n="$2"
+                local phase="$3"
+                local aiperf_rc="$4"
+                STEP_CONCURRENCY="$n" STEP_PHASE="$phase" AIPERF_RC="$aiperf_rc" \
+                  python3 - "$out/logs/aiperf/profile_export_aiperf.json" <<'PY'
+              import json
+              import os
+              import sys
+
+              path = sys.argv[1]
+              stat = os.environ.get("STOP_STAT", "p50")
+              ttft_limit = float(os.environ.get("TTFT_LIMIT_MS", "10000"))
+              tpot_limit = float(os.environ.get("TPOT_LIMIT_MS", "100"))
+              rc = int(os.environ.get("AIPERF_RC", "0"))
+              result = {
+                  "phase": os.environ.get("STEP_PHASE", ""),
+                  "concurrency": int(os.environ.get("STEP_CONCURRENCY", "0")),
+                  "aiperf_exit": rc,
+                  "stop_stat": stat,
+                  "ttft_limit_ms": ttft_limit,
+                  "tpot_limit_ms": tpot_limit,
+                  "parse_ok": False,
+                  "passed": False,
+                  "stop_reason": "unparseable_metrics",
+                  "breaches": [],
+              }
+
+              def metric(data, key):
+                  node = data.get(key)
+                  if not isinstance(node, dict):
+                      return None
+                  value = node.get(stat)
+                  try:
+                      return float(value)
+                  except (TypeError, ValueError):
+                      return None
+
+              try:
+                  with open(path) as f:
+                      data = json.load(f)
+                  ttft = metric(data, "time_to_first_token")
+                  tpot = metric(data, "inter_token_latency")
+                  if ttft is None or tpot is None:
+                      raise ValueError(f"missing {stat} metrics")
+                  result.update({
+                      "parse_ok": True,
+                      "ttft_ms": ttft,
+                      "tpot_ms": tpot,
+                      "gating_ratio": max(ttft / ttft_limit, tpot / tpot_limit),
+                  })
+                  breaches = []
+                  if ttft > ttft_limit:
+                      breaches.append("ttft")
+                  if tpot > tpot_limit:
+                      breaches.append("tpot")
+                  result["breaches"] = breaches
+                  if rc != 0:
+                      result["stop_reason"] = "unparseable_metrics"
+                  elif breaches:
+                      result["stop_reason"] = "threshold_exceeded"
+                  else:
+                      result["passed"] = True
+                      result["stop_reason"] = ""
+              except Exception as exc:
+                  result["parse_error"] = str(exc)
+
+              print(json.dumps(result, sort_keys=True))
+              PY
+              }
+
+              write_sweep_files() {
+                local status="$1"
+                local completed_at="${2:-}"
+                local wall_seconds="${3:-}"
+                SWEEP_STATUS="$status" \
+                RUN_COMPLETED_AT_VALUE="$completed_at" \
+                RUN_WALL_SECONDS_VALUE="$wall_seconds" \
+                COARSE_MAX_VALUE="${COARSE_MAX:-}" \
+                REFINED_MAX_VALUE="${REFINED_MAX:-}" \
+                SWEEP_STOP_REASON_VALUE="${SWEEP_STOP_REASON:-}" \
+                REFINE_SKIP_REASON_VALUE="${REFINE_SKIP_REASON:-}" \
+                SWEEP_MODE_VALUE="${SWEEP_MODE:-adaptive}" \
+                LO_VALUE="${LO:-}" \
+                HI_VALUE="${HI:-}" \
+                  python3 - "$RUN_META" "$SWEEP_DECISIONS_JSONL" "$SWEEP_DECISIONS" <<'PY'
+              import json
+              import os
+              import sys
+
+              run_meta_path, decisions_jsonl, decisions_path = sys.argv[1:4]
+
+              def maybe_int_env(name):
+                  raw = os.environ.get(name, "")
+                  if raw == "":
+                      return None
+                  try:
+                      return int(raw)
+                  except ValueError:
+                      return raw
+
+              def maybe_float_env(name):
+                  raw = os.environ.get(name, "")
+                  if raw == "":
+                      return None
+                  try:
+                      return float(raw)
+                  except ValueError:
+                      return raw
+
+              steps = []
+              try:
+                  with open(decisions_jsonl) as f:
+                      for line in f:
+                          line = line.strip()
+                          if line:
+                              steps.append(json.loads(line))
+              except FileNotFoundError:
+                  pass
+
+              executed = [s.get("concurrency") for s in steps if s.get("concurrency") is not None]
+              summary = {
+                  "mode": os.environ.get("SWEEP_MODE_VALUE", "adaptive"),
+                  "status": os.environ.get("SWEEP_STATUS", ""),
+                  "stop_reason": os.environ.get("SWEEP_STOP_REASON_VALUE", ""),
+                  "refine_skip_reason": os.environ.get("REFINE_SKIP_REASON_VALUE", ""),
+                  "coarse_max": maybe_int_env("COARSE_MAX_VALUE"),
+                  "refined_max": maybe_int_env("REFINED_MAX_VALUE"),
+                  "lo": maybe_int_env("LO_VALUE"),
+                  "hi": maybe_int_env("HI_VALUE"),
+                  "executed_sequence": executed,
+                  "thresholds": {
+                      "stat": os.environ.get("STOP_STAT", "p50"),
+                      "ttft_limit_ms": maybe_float_env("TTFT_LIMIT_MS"),
+                      "tpot_limit_ms": maybe_float_env("TPOT_LIMIT_MS"),
+                  },
+                  "adaptive": {
+                      "start": maybe_int_env("CONCURRENCY_START"),
+                      "multiplier": maybe_int_env("CONCURRENCY_MULTIPLIER"),
+                      "max": maybe_int_env("CONCURRENCY_MAX"),
+                  },
+                  "binary_search": {
+                      "enabled": os.environ.get("BINARY_SEARCH", "true").lower() == "true",
+                      "max_steps": maybe_int_env("BINARY_SEARCH_MAX_STEPS"),
+                      "min_gap": maybe_int_env("BINARY_SEARCH_MIN_GAP"),
+                      "refine_lower_frac": maybe_float_env("REFINE_LOWER_FRAC"),
+                      "refine_upper_frac": maybe_float_env("REFINE_UPPER_FRAC"),
+                  },
+                  "steps": steps,
+              }
+
+              with open(decisions_path, "w") as f:
+                  json.dump(summary, f, indent=2, sort_keys=True)
+                  f.write("\n")
+
+              try:
+                  with open(run_meta_path) as f:
+                      meta = json.load(f)
+              except (FileNotFoundError, json.JSONDecodeError):
+                  meta = {}
+              meta.update({
+                  "run_id": os.environ.get("RUN_ID", ""),
+                  "started_at_utc": os.environ.get("RUN_STARTED_AT", ""),
+                  "concurrencies": os.environ.get("CONCURRENCIES", ""),
+                  "server_runtime": os.environ.get("SERVER_RUNTIME", ""),
+                  "gpu_count": maybe_int_env("GPU_COUNT"),
+                  "model_name": os.environ.get("MODEL_NAME", ""),
+                  "model_repo": os.environ.get("MODEL_REPO", ""),
+                  "aiperf_model_id": os.environ.get("AIPERF_MODEL_ID", ""),
+                  "aiperf_tokenizer_id": os.environ.get("AIPERF_TOKENIZER_ID", ""),
+                  "aiperf_ref": os.environ.get("AIPERF_REF", ""),
+                  "aiperf_scenario": os.environ.get("AIPERF_SCENARIO", ""),
+                  "aiperf_extra_inputs": os.environ.get("AIPERF_EXTRA_INPUTS", ""),
+                  "dataset_type": os.environ.get("DATASET_TYPE", ""),
+                  "dataset_path": os.environ.get("DATASET_PATH", ""),
+                  "dataset_subpath": os.environ.get("DATASET_SUBPATH", ""),
+                  "dataset_config_path": os.environ.get("DATASET_CONFIG_PATH", ""),
+                  "dataset_num_sessions": maybe_int_env("DATASET_NUM_SESSIONS"),
+                  "dataset_seed": maybe_int_env("DATASET_SEED"),
+                  "dataset_max_isl": maybe_int_env("DATASET_MAX_ISL"),
+                  "num_dataset_entries": maybe_int_env("NUM_DATASET_ENTRIES"),
+                  "bench_duration": maybe_int_env("BENCH_DURATION"),
+                  "sweep_mode": summary["mode"],
+                  "sweep_stop_reason": summary["stop_reason"],
+                  "coarse_max": summary["coarse_max"],
+                  "refined_max": summary["refined_max"],
+                  "executed_sequence": executed,
+                  "sweep_steps": steps,
+                  "sweep_decisions_path": "sweep_decisions.json",
+              })
+              if os.environ.get("RUN_COMPLETED_AT_VALUE"):
+                  meta["completed_at_utc"] = os.environ["RUN_COMPLETED_AT_VALUE"]
+              if os.environ.get("RUN_WALL_SECONDS_VALUE"):
+                  meta["wall_seconds_total"] = maybe_int_env("RUN_WALL_SECONDS_VALUE")
+              with open(run_meta_path, "w") as f:
+                  json.dump(meta, f, indent=2, sort_keys=True)
+                  f.write("\n")
+              PY
+              }
+
+              should_refine() {
+                local lo_ratio="$1"
+                local hi_ratio="$2"
+                python3 - "$lo_ratio" "$hi_ratio" "$REFINE_LOWER_FRAC" "$REFINE_UPPER_FRAC" <<'PY'
+              import sys
+
+              def as_float(raw):
+                  if raw in ("", "None"):
+                      return None
+                  try:
+                      return float(raw)
+                  except ValueError:
+                      return None
+
+              lo, hi, lower, upper = [as_float(v) for v in sys.argv[1:5]]
+              if lo is None or hi is None:
+                  print("missing_refine_metrics")
+              elif lo <= lower and hi >= upper:
+                  print("run")
+              else:
+                  print("refine_gate_not_met")
+              PY
+              }
+
+              run_step() {
+                local N="$1"
+                local PHASE="$2"
+                local OUT="$ARTIFACTS_ROOT/concurrency_$N"
+                if [ -d "$OUT" ]; then
+                  echo "[$(date -u +%H:%M:%S)] Cleaning previous step artifacts: $OUT"
+                  rm -rf "$OUT"
+                fi
+                mkdir -p "$OUT/logs/aiperf"
+
+                # config.yaml stub parsed by extract_metrics.sh; format mirrors
+                # the slurm `benchmark:` block so the same parser works.
+                printf '%s\n' \
+                  '# Stub config for extract_metrics.sh -- only the `--concurrency N`' \
+                  '# token under the `benchmark:` block is consumed.' \
+                  'benchmark:' \
+                  '  type: "custom"' \
+                  '  command: |' \
+                  "    aiperf profile --concurrency $N" \
+                  > "$OUT/config.yaml"
+
+                # Pre-run pod identity check
+                PRE_ID=$(get_server_id)
+                if [ "$PRE_ID" != "$INITIAL_ID" ]; then
+                  echo "WARNING: server pod identity changed before concurrency=$N (was $INITIAL_ID, now $PRE_ID)"
+                  echo "RESTART_BEFORE_RUN initial=$INITIAL_ID current=$PRE_ID" >> "$OUT/dirty.flag"
+                fi
+
+                # Resolve server pod name once per step (handles the case
+                # where the server Pod was rescheduled between steps).
+                SERVER_POD=$(resolve_server_pod)
+                echo "[$(date -u +%H:%M:%S)] Telemetry target pod: ${SERVER_POD:-<none>}"
+
+                # Start background telemetry scrape for this step.
+                scrape_loop "$OUT" &
+                SCRAPE_PID=$!
+
+                echo "[$(date -u +%H:%M:%S)] Running aiperf at concurrency=$N ($PHASE)..."
+                set +e
+                set -- profile \
+                  --url "$SERVER_URL" \
+                  --model "$AIPERF_MODEL_ID" \
+                  --tokenizer "$AIPERF_TOKENIZER_ID" \
+                  --use-server-token-count \
+                  --endpoint-type "$AIPERF_ENDPOINT_TYPE" \
+                  --streaming \
+                  --isl "$SYN_ISL" \
+                  --osl "$SYN_OSL" \
+                  --isl-stddev "$SYN_ISL_STDDEV" \
+                  --osl-stddev "$SYN_OSL_STDDEV" \
+                  --random-seed "$SYN_SEED" \
+                  --concurrency "$N" \
+                  --num-profile-runs "$NUM_PROFILE_RUNS" \
+                  --ui simple \
+                  --artifact-dir "$OUT/logs/aiperf"
+                if [ -n "$CACHE_BUST" ]; then
+                  set -- "$@" --cache-bust "$CACHE_BUST"
+                fi
+                if [ -n "$AIPERF_SCENARIO" ]; then
+                  set -- "$@" --scenario "$AIPERF_SCENARIO"
+                fi
+                if [ -n "$NUM_DATASET_ENTRIES" ]; then
+                  set -- "$@" --num-dataset-entries "$NUM_DATASET_ENTRIES"
+                fi
+                # Excluded warmup ramp (WARMUP_REQUEST_MULTIPLIER x concurrency
+                # requests, dropped from metrics). Works in every workload mode.
+                if [ -n "$WARMUP_REQUEST_MULTIPLIER" ] && [ "$WARMUP_REQUEST_MULTIPLIER" -gt 0 ] 2>/dev/null; then
+                  WARMUP_COUNT=$(( WARMUP_REQUEST_MULTIPLIER * N ))
+                  set -- "$@" --warmup-request-count "$WARMUP_COUNT"
+                  echo "  warmup (excluded): $WARMUP_COUNT requests"
+                fi
+                # Workload cap, in priority order:
+                #  1. REQUEST_COUNT_MULTIPLIER>0 -> fixed --request-count (synthetic
+                #     datasets only; IGNORED by mooncake fixed_schedule replay).
+                #  2. BENCH_DURATION>0 -> fixed --benchmark-duration + ramp/grace.
+                #  3. neither -> FULL-TRACE REPLAY: every rung replays the entire
+                #     dataset, so the cISL/nISL/OSL work distribution is identical
+                #     across concurrencies and only the work-rate changes. This is
+                #     the correct comparable mode for mooncake replay -- size the
+                #     dataset (num-sessions) to bound per-rung wall time.
+                if [ -n "$REQUEST_COUNT_MULTIPLIER" ] && [ "$REQUEST_COUNT_MULTIPLIER" -gt 0 ] 2>/dev/null; then
+                  REQ_COUNT=$(( REQUEST_COUNT_MULTIPLIER * N ))
+                  set -- "$@" --request-count "$REQ_COUNT"
+                  echo "  workload: fixed request-count=$REQ_COUNT (${REQUEST_COUNT_MULTIPLIER}x concurrency=$N)"
+                elif [ -n "$BENCH_DURATION" ] && [ "$BENCH_DURATION" -gt 0 ] 2>/dev/null; then
+                  set -- "$@" --benchmark-duration "$BENCH_DURATION"
+                  if [ -n "$CONCURRENCY_RAMP_DURATION" ]; then
+                    set -- "$@" --concurrency-ramp-duration "$CONCURRENCY_RAMP_DURATION"
+                  fi
+                  if [ -n "$BENCHMARK_GRACE_PERIOD" ]; then
+                    set -- "$@" --benchmark-grace-period "$BENCHMARK_GRACE_PERIOD"
+                  fi
+                else
+                  echo "  workload: full-trace replay (entire dataset; identical work distribution across rungs)"
+                fi
+                if [ -n "$REQUEST_TIMEOUT_SECONDS" ]; then
+                  set -- "$@" --request-timeout-seconds "$REQUEST_TIMEOUT_SECONDS"
+                fi
+                if [ -n "$AIPERF_EXTRA_INPUTS" ]; then
+                  set -- "$@" --extra-inputs "$AIPERF_EXTRA_INPUTS"
+                fi
+                # Connection-reuse strategy (portability): sticky-user-sessions
+                # keeps one long-lived connection per simulated user, avoiding
+                # the connection-churn failure mode (EPERM / ConnectionRefused /
+                # conntrack exhaustion) under high concurrency. Empty omits it.
+                if [ -n "$CONNECTION_REUSE_STRATEGY" ]; then
+                  set -- "$@" --connection-reuse-strategy "$CONNECTION_REUSE_STRATEGY"
+                fi
+                aiperf "$@"
+                AIPERF_RC=$?
+                set -e
+
+                # Stop the scrape loop. `kill` returns non-zero if the loop
+                # already exited (it shouldn't); `|| true` swallows that.
+                kill "$SCRAPE_PID" 2>/dev/null || true
+                wait "$SCRAPE_PID" 2>/dev/null || true
+
+                if [ $AIPERF_RC -ne 0 ]; then
+                  echo "aiperf exited non-zero ($AIPERF_RC) for concurrency=$N"
+                  echo "AIPERF_EXIT=$AIPERF_RC" >> "$OUT/dirty.flag"
+                fi
+
+                # Post-run pod identity check
+                POST_ID=$(get_server_id)
+                if [ "$POST_ID" != "$INITIAL_ID" ]; then
+                  echo "WARNING: server pod identity changed during/after concurrency=$N (was $INITIAL_ID, now $POST_ID)"
+                  echo "RESTART_AFTER_RUN initial=$INITIAL_ID current=$POST_ID" >> "$OUT/dirty.flag"
+                fi
+
+                # Scrape the server /metrics endpoint for runtime-specific cache stats.
+                curl -fsS --max-time 30 "$SERVER_URL/metrics" > "$OUT/sglang_metrics.prom" 2>/dev/null \
+                  || echo "(metrics scrape failed)" > "$OUT/sglang_metrics.prom"
+
+                # Dedup inputs.json. AIPerf materializes a fresh ~2.2 GiB
+                # pre-tokenized dataset cache into every --artifact-dir, but
+                # tokenizer + dataset are identical across sweep steps so all
+                # copies are byte-identical (the in-memory dataset cache
+                # ("Memory-mapped dataset cache HIT") confirms this on the
+                # AIPerf side). Promote the first step's copy to a per-run
+                # shared location and replace the rest with symlinks. Saves
+                # Keep one metrics snapshot per sweep step for post-run analysis.
+                INPUTS="$OUT/logs/aiperf/inputs.json"
+                SHARED="$ARTIFACTS_ROOT/_shared/inputs.json"
+                if [ -f "$INPUTS" ] && [ ! -L "$INPUTS" ]; then
+                  mkdir -p "$ARTIFACTS_ROOT/_shared"
+                  if [ -e "$SHARED" ]; then
+                    rm -f "$INPUTS"
+                    echo "[$(date -u +%H:%M:%S)] Deduped inputs.json for concurrency=$N (linked to $SHARED)"
+                  else
+                    mv "$INPUTS" "$SHARED"
+                    echo "[$(date -u +%H:%M:%S)] Promoted concurrency=$N inputs.json to $SHARED"
+                  fi
+                  ln -sfn "$SHARED" "$INPUTS"
+                fi
+
+                STEP_RESULT=$(classify_step "$OUT" "$N" "$PHASE" "$AIPERF_RC")
+                LAST_STEP_RESULT_FILE="$OUT/sweep_result.json"
+                printf '%s\n' "$STEP_RESULT" > "$LAST_STEP_RESULT_FILE"
+                printf '%s\n' "$STEP_RESULT" >> "$SWEEP_DECISIONS_JSONL"
+                echo "[$(date -u +%H:%M:%S)] Concurrency=$N decision: passed=$(json_field "$LAST_STEP_RESULT_FILE" passed) reason=$(json_field "$LAST_STEP_RESULT_FILE" stop_reason)"
+
+                echo "[$(date -u +%H:%M:%S)] Concurrency=$N done. Output:"
+                ls -la "$OUT" || true
+                ls -la "$OUT/logs/aiperf" || true
+              }
+
+              INITIAL_ID=$(get_server_id)
+              echo "[$(date -u +%H:%M:%S)] Initial server pod identity: $INITIAL_ID"
+
+              CLEAN_ROOT=$(printf '%s' "${CLEAN_ARTIFACTS_ROOT:-true}" | tr '[:upper:]' '[:lower:]')
+              if [ "$CLEAN_ROOT" = "true" ] && [ -d "$ARTIFACTS_ROOT" ]; then
+                echo "[$(date -u +%H:%M:%S)] Cleaning previous artifacts root: $ARTIFACTS_ROOT"
+                rm -rf "$ARTIFACTS_ROOT"
+              elif [ "$CLEAN_ROOT" != "true" ] && [ -d "$ARTIFACTS_ROOT" ]; then
+                echo "[$(date -u +%H:%M:%S)] Preserving previous artifacts root for resume: $ARTIFACTS_ROOT"
+              fi
+              mkdir -p "$ARTIFACTS_ROOT"
+              smoke_test_model "$ARTIFACTS_ROOT/smoke_chat_completion.json"
+              smoke_test_large_context "$ARTIFACTS_ROOT/smoke_large_context_completion.json"
+              echo "$INITIAL_ID" > "$ARTIFACTS_ROOT/server_initial.id"
+              telemetry_preflight "$ARTIFACTS_ROOT/gpu_stats.status" || true
+              # SERVER_POD is now set (or empty) from telemetry_preflight → resolve_server_pod.
+              capture_fingerprint "$ARTIFACTS_ROOT/fingerprint.json" || true
+              METRICS_SURFACE="$ARTIFACTS_ROOT/server_metrics_surface.prom"
+              if curl -fsS --max-time 30 "$SERVER_URL/metrics" > "$METRICS_SURFACE" 2>/dev/null; then
+                echo "[$(date -u +%H:%M:%S)] Captured initial server /metrics surface: $METRICS_SURFACE"
+                if [ "${SERVER_RUNTIME:-sglang}" = "vllm" ]; then
+                  PREFIX_OK=0
+                  if grep -Eq '^vllm:prefix_cache_hits(_total)?(\{|[[:space:]])' "$METRICS_SURFACE" \
+                    && grep -Eq '^vllm:prefix_cache_queries(_total)?(\{|[[:space:]])' "$METRICS_SURFACE"; then
+                    PREFIX_OK=1
+                  elif grep -Eq '^vllm:(gpu_)?prefix_cache_hit_rate(\{|[[:space:]])' "$METRICS_SURFACE"; then
+                    PREFIX_OK=1
+                  fi
+                  MISSING=""
+                  [ "$PREFIX_OK" -eq 1 ] || MISSING="$MISSING prefix_cache"
+                  grep -Eq '^vllm:(kv_cache_usage_perc|gpu_cache_usage_perc)(\{|[[:space:]])' "$METRICS_SURFACE" || MISSING="$MISSING kv_cache_usage"
+                  grep -Eq '^vllm:num_requests_running(\{|[[:space:]])' "$METRICS_SURFACE" || MISSING="$MISSING num_requests_running"
+                  grep -Eq '^vllm:num_requests_waiting(\{|[[:space:]])' "$METRICS_SURFACE" || MISSING="$MISSING num_requests_waiting"
+                  if [ -n "$MISSING" ]; then
+                    echo "FATAL: vLLM /metrics surface is missing expected metric group(s):$MISSING" >&2
+                    echo "Inspect $METRICS_SURFACE and update scripts/aggregate_metrics.py before launching the sweep." >&2
+                    exit 64
+                  fi
+                fi
+              else
+                echo "FATAL: unable to capture initial server /metrics surface before sweep" >&2
+                exit 64
+              fi
+
+              # ------- Run meta (lifecycle bookend) -------------------------
+              RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              RUN_STARTED_EPOCH="$(date -u +%s)"
+              RUN_META="$ARTIFACTS_ROOT/run_meta.json"
+              SWEEP_DECISIONS_JSONL="$ARTIFACTS_ROOT/sweep_decisions.jsonl.tmp"
+              SWEEP_DECISIONS="$ARTIFACTS_ROOT/sweep_decisions.json"
+              : > "$SWEEP_DECISIONS_JSONL"
+              SWEEP_MODE="adaptive"
+              SWEEP_STOP_REASON=""
+              REFINE_SKIP_REASON=""
+              COARSE_MAX=""
+              REFINED_MAX=""
+              LO=""
+              HI=""
+              write_sweep_files "started"
+              echo "[$(date -u +%H:%M:%S)] Wrote $RUN_META (start)"
+
+              # ------- Sweep ------------------------------------------------
+              if [ -n "${CONCURRENCIES:-}" ]; then
+                SWEEP_MODE="fixed"
+                echo "[$(date -u +%H:%M:%S)] CONCURRENCIES is set; running fixed list: $CONCURRENCIES"
+                for N in $CONCURRENCIES; do
+                  run_step "$N" "fixed"
+                  write_sweep_files "fixed-running"
+                done
+                SWEEP_STOP_REASON="fixed_concurrencies_complete"
+                write_sweep_files "fixed-complete"
+              else
+                echo "[$(date -u +%H:%M:%S)] Adaptive Phase 1: start=$CONCURRENCY_START multiplier=$CONCURRENCY_MULTIPLIER max=$CONCURRENCY_MAX stop=${STOP_STAT} ttft>${TTFT_LIMIT_MS}ms tpot>${TPOT_LIMIT_MS}ms"
+                LO=0
+                HI=0
+                LAST_PASS_RATIO=""
+                FIRST_FAIL_RATIO=""
+                N="$CONCURRENCY_START"
+                while :; do
+                  run_step "$N" "phase1"
+                  PASSED=$(json_field "$LAST_STEP_RESULT_FILE" passed)
+                  RATIO=$(json_field "$LAST_STEP_RESULT_FILE" gating_ratio)
+                  REASON=$(json_field "$LAST_STEP_RESULT_FILE" stop_reason)
+                  if [ "$PASSED" = "true" ]; then
+                    LO="$N"
+                    COARSE_MAX="$LO"
+                    REFINED_MAX="$LO"
+                    LAST_PASS_RATIO="$RATIO"
+                    NEXT_N=$((N * CONCURRENCY_MULTIPLIER))
+                    if [ "$N" -ge "$CONCURRENCY_MAX" ] || [ "$NEXT_N" -gt "$CONCURRENCY_MAX" ]; then
+                      SWEEP_STOP_REASON="ceiling"
+                      echo "[$(date -u +%H:%M:%S)] Adaptive Phase 1 reached ceiling at concurrency=$LO"
+                      break
+                    fi
+                    N="$NEXT_N"
+                  else
+                    HI="$N"
+                    FIRST_FAIL_RATIO="$RATIO"
+                    SWEEP_STOP_REASON="${REASON:-unparseable_metrics}"
+                    if [ "$LO" -le 0 ]; then
+                      echo "[$(date -u +%H:%M:%S)] Adaptive Phase 1: SLA unmet at start concurrency $CONCURRENCY_START -> max sustainable < $CONCURRENCY_START (reason=$SWEEP_STOP_REASON)"
+                    else
+                      echo "[$(date -u +%H:%M:%S)] Adaptive Phase 1 stopped at concurrency=$HI reason=$SWEEP_STOP_REASON; coarse_max=$LO"
+                    fi
+                    break
+                  fi
+                done
+
+                # Record the factor-of-two answer before optional refinement.
+                write_sweep_files "coarse-complete"
+
+                BINARY_SEARCH_ENABLED=$(printf '%s' "${BINARY_SEARCH:-true}" | tr '[:upper:]' '[:lower:]')
+                if [ "$BINARY_SEARCH_ENABLED" != "true" ]; then
+                  REFINE_SKIP_REASON="disabled"
+                elif [ "$LO" -le 0 ]; then
+                  REFINE_SKIP_REASON="no_passing_concurrency"
+                elif [ "$HI" -le "$LO" ]; then
+                  REFINE_SKIP_REASON="no_failing_bracket"
+                elif [ $((HI - LO)) -le "$BINARY_SEARCH_MIN_GAP" ]; then
+                  REFINE_SKIP_REASON="bracket_within_min_gap"
+                else
+                  REFINE_GATE=$(should_refine "$LAST_PASS_RATIO" "$FIRST_FAIL_RATIO")
+                  if [ "$REFINE_GATE" = "run" ]; then
+                    echo "[$(date -u +%H:%M:%S)] Adaptive Phase 2: binary-searching bracket lo=$LO hi=$HI"
+                    STEP=0
+                    while [ $((HI - LO)) -gt "$BINARY_SEARCH_MIN_GAP" ] && [ "$STEP" -lt "$BINARY_SEARCH_MAX_STEPS" ]; do
+                      MID=$(((LO + HI) / 2))
+                      run_step "$MID" "phase2"
+                      PASSED=$(json_field "$LAST_STEP_RESULT_FILE" passed)
+                      RATIO=$(json_field "$LAST_STEP_RESULT_FILE" gating_ratio)
+                      if [ "$PASSED" = "true" ]; then
+                        LO="$MID"
+                        REFINED_MAX="$LO"
+                        LAST_PASS_RATIO="$RATIO"
+                      else
+                        HI="$MID"
+                        FIRST_FAIL_RATIO="$RATIO"
+                      fi
+                      STEP=$((STEP + 1))
+                      write_sweep_files "refining"
+                    done
+                    REFINED_MAX="$LO"
+                    REFINE_SKIP_REASON=""
+                  else
+                    REFINE_SKIP_REASON="$REFINE_GATE"
+                    echo "[$(date -u +%H:%M:%S)] Skipping Phase 2: $REFINE_SKIP_REASON (lo_ratio=${LAST_PASS_RATIO:-} hi_ratio=${FIRST_FAIL_RATIO:-})"
+                  fi
+                fi
+                write_sweep_files "adaptive-complete"
+              fi
+
+              # ------- Run meta (close lifecycle) ---------------------------
+              RUN_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              RUN_COMPLETED_EPOCH="$(date -u +%s)"
+              RUN_WALL_SECONDS=$((RUN_COMPLETED_EPOCH - RUN_STARTED_EPOCH))
+              write_sweep_files "complete" "$RUN_COMPLETED_AT" "$RUN_WALL_SECONDS"
+              rm -f "$SWEEP_DECISIONS_JSONL"
+              echo "[$(date -u +%H:%M:%S)] Updated $RUN_META (complete, wall=${RUN_WALL_SECONDS}s)"
+
+              echo "[$(date -u +%H:%M:%S)] Sweep complete: $ARTIFACTS_ROOT"
+              ls -la "$ARTIFACTS_ROOT"
+          resources:
+            requests: { cpu: "${BENCH_CPU_REQUEST}", memory: 16Gi }
+            limits:   { cpu: "32", memory: 32Gi }
+          volumeMounts:
+            - { name: artifacts, mountPath: /artifacts }
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim: { claimName: glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d-artifacts }

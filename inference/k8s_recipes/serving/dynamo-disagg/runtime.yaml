@@ -1,0 +1,158 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+# Operator-independent Dynamo distributed runtime (etcd + NATS) for the
+# disaggregated Nemotron-Ultra-3 experiment. Plain namespace-scoped
+# Deployments/Services -- NO DynamoGraphDeployment / grove / PodCliqueSet
+# (the cluster grove-operator is CrashLoopBackOff on a CRD shortName conflict).
+#
+# Discovery model (from the exact worker image nvcr.io/.../vllm-runtime@sha256:9fefbd10):
+#   DYN_DISCOVERY_BACKEND=etcd  -> uses ETCD_ENDPOINTS (host:port, no scheme)
+#   DYN_EVENT_PLANE=nats        -> uses NATS_SERVER (nats://host:4222)
+# Env var names/values verified against the working bare deployment
+# dfeigin-astra-poc (dynamo-platform-etcd/nats + vllm-base workers) and davilu.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dynamo-platform-etcd
+  namespace: ${NAMESPACE}
+  labels: {app: dynamo-platform-etcd, llmb.nvidia.com/owner: ${OWNER}, llmb.nvidia.com/run-id: disagg-1m}
+spec:
+  selector: {app: dynamo-platform-etcd}
+  ports:
+  - {name: client, port: 2379, targetPort: 2379}
+  - {name: peer, port: 2380, targetPort: 2380}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dynamo-platform-etcd
+  namespace: ${NAMESPACE}
+  labels: {app: dynamo-platform-etcd, llmb.nvidia.com/owner: ${OWNER}, llmb.nvidia.com/run-id: disagg-1m}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: dynamo-platform-etcd}}
+  template:
+    metadata:
+      labels: {app: dynamo-platform-etcd}
+    spec:
+      imagePullSecrets: [{name: ${IMAGE_PULL_SECRET}}]
+      tolerations:
+      - {key: nvidia.com/gpu, operator: Exists}
+      - {effect: NoSchedule, key: dedicated, operator: Equal, value: user-workload}
+      - {effect: NoExecute, key: dedicated, operator: Equal, value: user-workload}
+      - {effect: NoSchedule, key: kubernetes.io/arch, operator: Equal, value: arm64}
+      containers:
+      - name: etcd
+        image: docker.io/bitnamilegacy/etcd:3.5.18-debian-12-r5
+        env:
+        - {name: ALLOW_NONE_AUTHENTICATION, value: "yes"}
+        - {name: ETCD_NAME, value: default}
+        - {name: ETCD_DATA_DIR, value: /etcd-data}
+        - {name: ETCD_LISTEN_CLIENT_URLS, value: "http://0.0.0.0:2379"}
+        - {name: ETCD_ADVERTISE_CLIENT_URLS, value: "http://dynamo-platform-etcd.${NAMESPACE}.svc.cluster.local:2379"}
+        - {name: ETCD_LISTEN_PEER_URLS, value: "http://0.0.0.0:2380"}
+        - {name: ETCD_INITIAL_ADVERTISE_PEER_URLS, value: "http://127.0.0.1:2380"}
+        - {name: ETCD_INITIAL_CLUSTER, value: "default=http://127.0.0.1:2380"}
+        - {name: ETCD_INITIAL_CLUSTER_STATE, value: new}
+        - {name: ETCD_INITIAL_CLUSTER_TOKEN, value: dynamo-disagg-etcd}
+        ports:
+        - {containerPort: 2379, name: client}
+        - {containerPort: 2380, name: peer}
+        resources: {requests: {cpu: "1", memory: 2Gi}, limits: {cpu: "2", memory: 4Gi}}
+        readinessProbe:
+          exec: {command: ["etcdctl", "endpoint", "health"]}
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        volumeMounts: [{name: data, mountPath: /etcd-data}]
+      volumes: [{name: data, emptyDir: {}}]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dynamo-platform-nats-config
+  namespace: ${NAMESPACE}
+data:
+  nats.conf: |
+    {
+      "http_port": 8222,
+      "port": 4222,
+      "server_name": "nats-disagg",
+      "max_payload": 15728640,
+      "jetstream": {
+        "store_dir": "/data",
+        "max_memory_store": 0,
+        "max_file_store": 10Gi
+      }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dynamo-platform-nats
+  namespace: ${NAMESPACE}
+  labels: {app: dynamo-platform-nats, llmb.nvidia.com/owner: ${OWNER}, llmb.nvidia.com/run-id: disagg-1m}
+spec:
+  selector: {app: dynamo-platform-nats}
+  ports:
+  - {name: client, port: 4222, targetPort: 4222}
+  - {name: monitor, port: 8222, targetPort: 8222}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dynamo-platform-nats
+  namespace: ${NAMESPACE}
+  labels: {app: dynamo-platform-nats, llmb.nvidia.com/owner: ${OWNER}, llmb.nvidia.com/run-id: disagg-1m}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: dynamo-platform-nats}}
+  template:
+    metadata:
+      labels: {app: dynamo-platform-nats}
+    spec:
+      imagePullSecrets: [{name: ${IMAGE_PULL_SECRET}}]
+      tolerations:
+      - {key: nvidia.com/gpu, operator: Exists}
+      - {effect: NoSchedule, key: dedicated, operator: Equal, value: user-workload}
+      - {effect: NoExecute, key: dedicated, operator: Equal, value: user-workload}
+      - {effect: NoSchedule, key: kubernetes.io/arch, operator: Equal, value: arm64}
+      containers:
+      - name: nats
+        image: nats:2.10.21-alpine
+        args: ["--config", "/etc/nats-config/nats.conf", "--jetstream"]
+        ports:
+        - {containerPort: 4222, name: client}
+        - {containerPort: 8222, name: monitor}
+        resources: {requests: {cpu: "1", memory: 2Gi}, limits: {cpu: "2", memory: 4Gi}}
+        readinessProbe:
+          httpGet: {path: /healthz, port: 8222}
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        volumeMounts:
+        - {name: config, mountPath: /etc/nats-config}
+        - {name: data, mountPath: /data}
+      volumes:
+      - {name: config, configMap: {name: dynamo-platform-nats-config}}
+      - {name: data, emptyDir: {}}

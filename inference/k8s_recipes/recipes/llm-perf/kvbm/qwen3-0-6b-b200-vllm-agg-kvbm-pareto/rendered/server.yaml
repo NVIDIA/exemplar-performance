@@ -1,0 +1,229 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+# dynamo-vllm-agg-kvbm — one-pod aggregated Dynamo + vLLM + KVBM POC.
+# Recipe truth is rendered by Jinja; ${...} cluster truth is filled from a cluster profile at deploy time.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qwen3-0-6b-b200-vllm-agg-kvbm-pareto-server
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    llmb.nvidia.com/served-model: qwen3-0-6b
+spec:
+  replicas: 1
+  progressDeadlineSeconds: 900
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: qwen3-0-6b-b200-vllm-agg-kvbm-pareto-server } }
+  template:
+    metadata: { labels: { app: qwen3-0-6b-b200-vllm-agg-kvbm-pareto-server } }
+    spec:
+      schedulerName: ${SCHEDULER_NAME}
+      nodeSelector: { nvidia.com/gpu.product: ${GPU_PRODUCT} }
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+        - { key: kubernetes.io/arch, operator: Exists }
+        - { key: dedicated, operator: Exists }
+      containers:
+        - name: dynamo-vllm
+          # Source tag: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.1.0
+          # image_ref is its pinned linux/amd64 platform-manifest digest.
+          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime@sha256:5acec222634f0d63ed936e8616449f7b4003b82ab8bd1a3f433d3dd96f6736fe
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8000, name: http, protocol: TCP }]
+          startupProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 180
+          readinessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Restart only when token output is flat while requests remain active. Missing metrics keep
+          # the pod healthy so startup and idle periods are not mistaken for stalls.
+          livenessProbe:
+            exec:
+              command: ["sh", "/llmb-probe/progress_liveness.sh"]
+            periodSeconds: 30
+            timeoutSeconds: 15
+            failureThreshold: 20
+          env:
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: HF_HOME, value: /data/hf-cache }
+            - { name: HF_HUB_OFFLINE, value: "1" }
+            - { name: TRANSFORMERS_OFFLINE, value: "1" }
+            - { name: DYN_DISCOVERY_BACKEND, value: etcd }
+            - { name: ETCD_ENDPOINTS, value: "127.0.0.1:2379" }
+            # Dynamo's DistributedRuntime request/event plane is NATS (same-Pod sidecar below).
+            - { name: NATS_SERVER, value: "nats://127.0.0.1:4222" }
+            - { name: DYN_KVBM_CPU_CACHE_GB, value: "20" }
+            - { name: DYN_KVBM_METRICS, value: "true" }
+          resources:
+            requests:
+              cpu: "${WHOLE_NODE_CPU}"
+              memory: ${WHOLE_NODE_MEM}
+              nvidia.com/gpu: "${GPU_PER_NODE}"
+            limits:
+              cpu: "${WHOLE_NODE_CPU}"
+              memory: ${WHOLE_NODE_MEM}
+              nvidia.com/gpu: "${GPU_PER_NODE}"
+          securityContext:
+            capabilities:
+              add: [IPC_LOCK, SYS_RESOURCE]
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              python3 - <<'PY'
+              import time
+              import urllib.request
+
+              for _ in range(120):
+                  try:
+                      with urllib.request.urlopen("http://127.0.0.1:2379/health", timeout=1) as response:
+                          if response.status == 200:
+                              break
+                  except Exception:
+                      time.sleep(1)
+              else:
+                  raise SystemExit("etcd did not become healthy within 120 seconds")
+
+              # Dynamo's DistributedRuntime also needs NATS (request/event plane); the frontend does NOT
+              # retry, so gate on the NATS monitoring endpoint before launching it.
+              for _ in range(120):
+                  try:
+                      with urllib.request.urlopen("http://127.0.0.1:8222/healthz", timeout=1) as response:
+                          if response.status == 200:
+                              break
+                  except Exception:
+                      time.sleep(1)
+              else:
+                  raise SystemExit("nats did not become healthy within 120 seconds")
+              PY
+
+              SNAPSHOT=$(python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id='Qwen/Qwen3-0.6B', revision='c1899de289a04d12100db370d81485cdf75e47ca', cache_dir='/data/hf-cache/hub', local_files_only=True))")
+              test -s "$SNAPSHOT/config.json" || { echo "FATAL: pinned model snapshot missing at $SNAPSHOT" >&2; exit 64; }
+
+              frontend_pid=""
+              worker_pid=""
+              cleanup() {
+                [ -z "$frontend_pid" ] || kill "$frontend_pid" 2>/dev/null || true
+                [ -z "$worker_pid" ] || kill "$worker_pid" 2>/dev/null || true
+                wait 2>/dev/null || true
+              }
+              trap cleanup EXIT TERM INT
+
+              python3 -m dynamo.frontend --http-port 8000 &
+              frontend_pid=$!
+              python3 -m dynamo.vllm \
+                --model "$SNAPSHOT" \
+                --served-model-name qwen3-0-6b \
+                --tensor-parallel-size 1 \
+                --max-model-len 32768 \
+                --gpu-memory-utilization 0.1 \
+                --kv-transfer-config '{"kv_connector":"DynamoConnector","kv_connector_module_path":"kvbm.vllm_integration.connector","kv_role":"kv_both"}' \
+                --enforce-eager \
+                --enable-prefix-caching \
+                --max-num-seqs 64 \
+                --trust-remote-code &
+              worker_pid=$!
+
+              set +e
+              wait -n "$frontend_pid" "$worker_pid"
+              rc=$?
+              set -e
+              echo "Dynamo frontend or vLLM worker exited (rc=$rc); stopping the peer" >&2
+              exit "$rc"
+          volumeMounts:
+            - { mountPath: /llmb-probe, name: llmb-probe }
+            - { mountPath: /data/hf-cache, name: model-cache, readOnly: true, subPath: ${MODEL_CACHE_SUBPATH} }
+            - { mountPath: /dev/shm, name: dshm }
+
+        # KVBM uses etcd for leader/worker registration and discovery. Keeping it in the
+        # same Pod makes this deliberately small POC self-contained and avoids an operator.
+        - name: etcd
+          # Source tag: quay.io/coreos/etcd:v3.5.17
+          # Pinned linux/amd64 platform-manifest digest.
+          image: quay.io/coreos/etcd@sha256:75af419abd4e02411e0df74e3b32f131359839c0994e934c7bcc8eea40cb7298
+          imagePullPolicy: IfNotPresent
+          # quay.io/coreos/etcd sets no `etcd` entrypoint, so args alone make k8s exec the first
+          # flag as the binary ("--name=default: not found"). Name the binary explicitly.
+          command: ["/usr/local/bin/etcd"]
+          args:
+            - --name=default
+            - --data-dir=/etcd-data
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://127.0.0.1:2379
+            - --listen-peer-urls=http://127.0.0.1:2380
+            - --initial-advertise-peer-urls=http://127.0.0.1:2380
+            - --initial-cluster=default=http://127.0.0.1:2380
+          ports: [{ containerPort: 2379, name: etcd-client }]
+          readinessProbe:
+            httpGet: { path: /health, port: etcd-client }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 12
+          resources:
+            requests: { cpu: "1", memory: 1Gi }
+            limits: { cpu: "1", memory: 1Gi }
+          volumeMounts: [{ name: etcd-data, mountPath: /etcd-data }]
+
+        # Dynamo's DistributedRuntime request/event plane is NATS (JetStream). Kept in-Pod like etcd so
+        # the POC stays operator-independent. Without it the frontend dies: "Failed to connect to NATS".
+        - name: nats
+          # Source tag: nats:2.10.22-alpine
+          # Pinned linux/amd64 platform-manifest digest.
+          image: nats@sha256:aa536352f09b109b909e8bfbf9859a40601481bb3742ebc7a09cfaf638622407
+          imagePullPolicy: IfNotPresent
+          args: ["-js", "-m", "8222"]      # JetStream on :4222 (client), monitoring/health on :8222
+          ports:
+            - { containerPort: 4222, name: nats-client }
+            - { containerPort: 8222, name: nats-mon }
+          readinessProbe:
+            httpGet: { path: /healthz, port: nats-mon }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 12
+          resources:
+            requests: { cpu: "1", memory: 1Gi }
+            limits: { cpu: "1", memory: 1Gi }
+      volumes:
+        - name: llmb-probe
+          configMap: { name: qwen3-0-6b-b200-vllm-agg-kvbm-pareto-liveness, defaultMode: 0755 }
+        - name: model-cache
+          persistentVolumeClaim: { claimName: ${MODEL_CACHE_PVC} }
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 16Gi }
+        - name: etcd-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen3-0-6b-b200-vllm-agg-kvbm-pareto-server
+  namespace: ${NAMESPACE}
+spec:
+  selector: { app: qwen3-0-6b-b200-vllm-agg-kvbm-pareto-server }
+  ports: [{ port: 8000, targetPort: 8000, name: http }]

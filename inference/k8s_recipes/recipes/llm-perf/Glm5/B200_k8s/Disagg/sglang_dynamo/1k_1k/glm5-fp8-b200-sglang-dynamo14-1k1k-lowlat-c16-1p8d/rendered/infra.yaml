@@ -1,0 +1,127 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+# sglang-disagg — disagg control-plane side services: etcd (discovery) + NATS (event/request plane).
+# {{ ... }} = recipe truth (baked at render). ${ ... } = cluster truth (envsubst at launch).
+#
+# These are NOT in the source manifest (it assumed a pre-existing glm5-etcd / glm5-nats). Porting makes
+# the dependency explicit + reproducible: the frontend + workers point at "glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d-etcd:2379"
+# and "glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d-nats:4222" (see requires.infra: [etcd, nats]). Single-replica, ephemeral state
+# — this is a benchmark control plane, not a durable store. Public images pinned by TAG below:
+# TODO digest-pin (resolve + replace :tag with @sha256:<digest>) for full content-pinning (invariant 10).
+apiVersion: v1
+kind: Service
+metadata:
+  name: glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d-etcd
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/infra: etcd }
+spec:
+  selector: { app: glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d-etcd }
+  ports: [{ port: 2379, targetPort: 2379, name: client }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d-etcd
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/infra: etcd }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d-etcd } }
+  template:
+    metadata: { labels: { app: glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d-etcd } }
+    spec:
+      schedulerName: ${SCHEDULER_NAME}
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+        - { key: dedicated, operator: Exists }
+      containers:
+        - name: etcd
+          image: quay.io/coreos/etcd:v3.5.17   # TODO digest-pin (@sha256:...)
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/etcd"]
+          args:
+            - --name=glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d-etcd
+            - --data-dir=/etcd-data
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d-etcd:2379
+          ports: [{ containerPort: 2379, name: client, protocol: TCP }]
+          readinessProbe:
+            tcpSocket: { port: client }
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests: { cpu: "1", memory: 512Mi }
+            limits:   { cpu: "2", memory: 2Gi }
+          volumeMounts:
+            - { mountPath: /etcd-data, name: etcd-data }
+      volumes:
+        - name: etcd-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d-nats
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/infra: nats }
+spec:
+  selector: { app: glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d-nats }
+  ports:
+    - { port: 4222, targetPort: 4222, name: client }
+    - { port: 8222, targetPort: 8222, name: monitor }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d-nats
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/infra: nats }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d-nats } }
+  template:
+    metadata: { labels: { app: glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d-nats } }
+    spec:
+      schedulerName: ${SCHEDULER_NAME}
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+        - { key: dedicated, operator: Exists }
+      containers:
+        - name: nats
+          image: nats:2.10.22-alpine   # TODO digest-pin (@sha256:...)
+          imagePullPolicy: IfNotPresent
+          # -js: JetStream (dynamo request/event plane). -m 8222: monitoring endpoint (readiness probe).
+          args: ["-js", "-m", "8222"]
+          ports:
+            - { containerPort: 4222, name: client, protocol: TCP }
+            - { containerPort: 8222, name: monitor, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /healthz, port: monitor }
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests: { cpu: "1", memory: 512Mi }
+            limits:   { cpu: "2", memory: 2Gi }

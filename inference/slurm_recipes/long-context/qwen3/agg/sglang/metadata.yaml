@@ -1,0 +1,108 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# long-context inference benchmark. Qwen3 with sglang on gb200
+# Front-door: llmb-install + llmb-run. Backend executor: srt-slurm.
+# 
+# Pass-through model:
+#   setup tasks     →  clone srt-slurm + `srtctl install`
+#   launch.sh       →  `srtctl apply -f <recipe>.yaml`
+
+# Setup
+general:
+  workload: qwen3_long
+  workload_type: inference   # Auto-skipped by llmb-run's post-processing pipeline
+                             # (UNSUPPORTED_PP_WORKLOAD_TYPES in
+                             # post_processing_pipeline.py). The benchmark writes
+                             # its own outputs under srt-slurm/outputs/; reporting
+                             # is done by the bundled report.sh, not llmb.
+  framework: sglang
+
+# No container.images — srtctl install pulls + manages the container itself.
+# The resulting .sqsh stays at $LLMB_WORKLOAD/srt-slurm/install/containers/ (under $LLMB_INSTALL).
+# Schema requires `container:` be a map; empty `{}` satisfies that without
+# declaring any images for llmb to pre-pull.
+container: {}
+
+setup:
+  # llmb-install creates the workload venv with uv (cli/llmb-install/README.md).
+  # install_srtslurm.sh `uv pip install -e`s srtctl into it (editable
+  # is required by srt-slurm — see install_srtslurm.sh header).
+  venv_req: true
+
+  # NO `dependencies:` block — empty `git: {}` / `pip: []` would route
+  # through installer.py's "New Dependency Management" path, naming the venv
+  # `venv_<dep_hash>`. We need the stable `${workload_key}_venv`
+  # (= `inference_qwen3_long_venv`) name that launch.sh references.
+
+  tasks:
+    # 1. Clone srt-slurm and build the compute-side aarch64 .venv via srun.
+    #    job_type:srun + requires_gpus:true so SLURM_ACCOUNT/SLURM_PARTITION
+    #    are injected by augment_env_for_job_type — the script uses them to
+    #    dispatch the venv build onto a Grace compute node. The login node is
+    #    x86_64; the workload's srtctl install sbatch later runs on aarch64
+    #    and would fail "Exec format error" if we built the venv on the
+    #    login node.
+    - name: install_srtslurm
+      cmd: './install_srtslurm.sh'
+      job_type: srun
+      requires_gpus: true
+
+    # 2. Write srt-slurm/srtslurm.yaml from SLURM env vars (injected by the
+    #    framework for non-local job types).
+    #    job_type:srun + requires_gpus:true so we receive SLURM_ACCOUNT +
+    #    SLURM_PARTITION (gpu partition). The framework runs srun tasks
+    #    INLINE on the install host, so no actual srun dispatch happens —
+    #    env-var injection is the only effect.
+    - name: generate_srtslurm_yaml
+      cmd: './generate_srtslurm_yaml.sh'
+      job_type: srun
+      requires_gpus: true
+
+    # 3. `make setup ARCH=aarch64` — downloads NATS/ETCD/uv binaries.
+    #    We target Grace SKUs only for now (gb200/gb300) so arch is
+    #    pinned in the script.
+    - name: setup_srtslurm
+      cmd: './setup_srtslurm.sh'
+      job_type: local
+
+    # 4. `srtctl install qwen3-32b-sglang ...` submits a SLURM job that fetches
+    #    the Qwen3-32B weights + sglang container .sqsh, then registers the
+    #    `qwen3-32b` / `sglang-0.5.11` aliases config_template.yaml references.
+    #    Script polls squeue+sacct until done. job_type MUST be `local`:
+    #    srtctl install refuses to run inside a SLURM job (srtctl/cli/install.py).
+    - name: install_model
+      cmd: './install_model.sh'
+      job_type: local
+
+    # 5. Fetch the agentic_coding dataset from HF into
+    #    $LLMB_WORKLOAD/dataset/agentic_coding (mounted to /dataset at run time
+    #    by config_template.yaml). Requires HF_TOKEN + dataset access.
+    - name: download_dataset
+      cmd: './download_dataset.sh'
+      job_type: local
+
+# Run
+run:
+  # configured_sbatch (NOT plain sbatch): the framework injects --job-name and
+  # --output paths automatically (ConfiguredSbatchLauncher). launch.sh declares
+  # only #SBATCH --time; anything else is silently overridden.
+  launcher_type: 'configured_sbatch'
+  launch_script: 'launch.sh'
+
+  # `scales: [1]` is ONE dispatcher allocation — the real sweep matrix is the
+  # concurrency list launch.sh iterates (override via
+  # $RUN_CONF_AGENTIC_SESSION_CONCURRENCIES — see launch.sh)
+  #
+  # `model_size: 32b` = Qwen3-32B dense param count. `dtypes: ['bf16']` is the
+  # model precision. Aggregated (single-node) serving is
+  # expressed by the folder location (inference/slurm_recipes/long-context/qwen3/agg/)
+  # rather than by a CLI knob; a disagg variant in the future would live at
+  # inference/slurm_recipes/long-context/<model>/disagg/ with its own workload identifier.
+  gpu_configs:
+    gb200:
+      model_configs:
+        - model_size: '32b'
+          dtypes: ['bf16']
+          scales: [1]
+          exact_scales: true

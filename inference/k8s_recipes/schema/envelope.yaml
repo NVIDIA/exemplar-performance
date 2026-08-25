@@ -1,0 +1,255 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: Recipe envelope (shared across all scenarios)
+description: >
+  The thin, scenario-agnostic metadata that EVERY recipe.yaml carries, regardless of
+  launcher or metrics family. It drives the top-level compatibility/validation MATRIX
+  and CI routing. Scenario-specific fields (bench sweep, replay fidelity, guardrails,
+  acceptance policy, ...) do NOT live here -- they live in the per-scenario schema that
+  is selected by `scenario`. Keep this list intentionally short (~a dozen fields).
+$defs:
+  envelope:
+    type: object
+    additionalProperties: false
+    required:
+      - name
+      - model
+      - gpu_type
+      - arch
+      - engine
+      - serving_mode
+      - scenario
+      - distribution
+      - mode
+      - launcher
+      - status
+      - provenance
+    properties:
+      name:
+        type: string
+        pattern: "^[a-z0-9][a-z0-9-]*$"
+        description: Unique, stable recipe id. 1 recipe = 1 envelope = 1 matrix row.
+      model:
+        type: string
+        description: e.g. NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4 / nemotron-ultra-3
+      gpu_type:
+        type: string
+        description: Query dimension (not a config overlay). e.g. B200, GB300, H100.
+      arch:
+        enum: [amd64, arm64]
+        description: >
+          CPU arch of the GPU/SERVING node (where the model server runs) -> selects the server image variant.
+      engine:
+        enum: [vllm, sglang, trtllm]
+      serving_mode:
+        enum: [aggregated, disaggregated]
+      framework:
+        enum: [none, dynamo]
+        default: none
+        description: Serving framework wrapping the engine (used by disaggregated).
+      scenario:
+        enum: [llm-perf]
+        description: >
+          The benchmark class = the top-level recipes/<scenario>/ fork AND the schema/analysis selector.
+          llm-perf measures serving (TPS/GPU, TTFT, TPOT, KV, how well the server serves tokens).
+      distribution:
+        type: string
+        description: >
+          Workload/dataset distribution = the recipes/<scenario>/<distribution>/ level
+          (e.g. 256k, 1m for llm-perf).
+      mode:
+        type: string
+        description: >
+          Workload mode -- the load/trace TYPE that drives aiperf
+          (mooncake-trace | custom-trace | synthetic). aiperf always replays, so "replay" is not a
+          mode here. This is a distinguishing MATRIX axis, so it stays in the envelope.
+      launcher:
+        enum: [aiperf]
+        description: The load/replay driver. Its binary/image lives in the launcher's own repo; the recipe references it.
+      goal:
+        enum: [max-concurrency-sla, pareto]
+        description: >
+          The benchmark GOAL — what this recipe is trying to determine — as a named bundle of {workload +
+          sweep strategy + exemplar method}. It refines a scenario so one launcher can drive different
+          benchmark shapes. The exemplar metric a goal implies is enforced by check_invariants:
+            - "max-concurrency-sla" (llm-perf, default): a trace-driven concurrency sweep whose exemplar is the
+              INTERPOLATED max_concurrency_at_sla (SLA crossing), via the adaptive geometric-grid search.
+              Requires bench.dataset + bench.adaptive_sweep + exemplar.metric=max_concurrency_at_sla.
+            - "pareto": a FULL concurrency sweep whose exemplar is the per-point GEOMEAN of a two-axis frontier
+              — the geomean over rungs of g(p)=√(axis_y·axis_x) (equal per-point weight; the exemplar gate is
+              point-by-point ≤tol per rung). Axes:
+                · llm-perf → Output-TPS/GPU vs Output-TPS/user  (exemplar.metric=pareto_geomean)
+              Requires a fixed sweep (bench.sweep_concurrency).
+          FUTURE goals plug in the same way. Part of recipe_hash: the goal fixes the measurement/exemplar
+          METHOD (otherwise unhashed, since exemplar is excluded), so different goals => different fingerprints.
+      status:
+        enum: [planned, wip, runs, performant, exemplar]
+        description: >
+          Maturity ladder (least → most mature): planned (declared) → wip (brought up: renders/deploys/
+          smoke, no committed sweep) → runs (a full sweep completes end-to-end) → performant (HUMAN-approved:
+          results reviewed + confirmed real/good) → exemplar (human-approved + a committed exemplar reference
+          bar). performant/exemplar require human sign-off — agents don't self-promote to them.
+      results_link:
+        type: string
+        description: Relative path to this cell's RESULTS.md (required once status >= perf-data; enforced per-scenario).
+      provenance:
+        type: object
+        required: [schema_version]
+        additionalProperties: true
+        properties:
+          schema_version:
+            type: string
+            description: e.g. k8s.llm-perf.v1
+          official:
+            type: boolean
+          image_digest:
+            type: string
+            pattern: "^sha256:[0-9a-f]{64}$"
+            description: Pinned serving image digest for reproducibility.
+      exemplar:
+        type: object
+        additionalProperties: false
+        required: [metric, tolerance_pct]
+        description: >
+          Exemplar-comparison contract (SCAFFOLDING — exact metrics/values refined later). A run is
+          "exemplar" if its exemplar metric is within tolerance of the committed reference bar (better
+          is fine; worse than tolerance is NOT). SCOPE: holds this recipe CONSTANT (same model + same
+          gpu_type + same config) and compares the identical cell on a candidate cluster vs the bar --
+          a cluster reproducibility check (e.g. B200 vs another B200), NOT cross-hardware or cross-config.
+          Rolls up to "is this cluster Exemplar for this recipe?". Deterministic analysis only, never ad-hoc.
+        properties:
+          metric:
+            type: string
+            description: >
+              Exemplar metric derived from the canonical summary. e.g.
+              max_concurrency_at_sla | tps_per_gpu_at_sla.
+          unit: { type: string }
+          reference:
+            type: [number, "null"]
+            description: The committed bar (number to match/beat). null until established.
+          tolerance_pct:
+            type: number
+            default: 5
+            description: A run worse than this % below `reference` is NOT exemplar; better is always fine.
+          comparison:
+            type: string
+            description: How `metric` is derived from the canonical summary (names the analysis function).
+      requires:
+        type: object
+        additionalProperties: false
+        description: >
+          Recipe-specific cluster requirements, ON TOP OF the scenario baseline
+          (schema/requires-baseline.yaml). Checked by scripts/preflight.py before a run. Cluster-specific
+          values (namespace, GPU product label) come from the cluster-profile, not here.
+        properties:
+          gpu:
+            type: object
+            additionalProperties: false
+            properties:
+              count: { type: integer, minimum: 1, description: GPUs the BENCHMARK USES (usually = serving.tp); drives benchmark_id + per-GPU normalization }
+              min_memory_gib: { type: number, description: minimum free GPU memory per device (catches DRA over-report) }
+              whole_node:
+                type: boolean
+                description: >
+                  RECIPE truth: this benchmark demands an EXCLUSIVE, otherwise-empty node — its numbers are
+                  only trustworthy when no other tenant shares the node (a shared node measurably inflates
+                  ITL/TTFT). When true the serving stack requests ${GPU_PER_NODE} GPUs (a CLUSTER fact from
+                  the cluster PROFILE, never baked into the recipe — node size is cluster identity) instead
+                  of serving.tp, so the pod can only land on a node it fully occupies; preflight additionally
+                  gates on a FULLY FREE node (free == allocatable). Because the manifest keeps the literal
+                  ${GPU_PER_NODE} placeholder, rendered bytes stay identical across clusters — the cell stays
+                  portable and re-fingerprints exactly once when it opts in. Cells whose serving.tp already
+                  equals the node size (they take a whole node anyway) do NOT need this flag.
+          tolerations:
+            type: array
+            items: { type: string }
+            description: node-taint keys the pods tolerate; preflight warns if a matching taint would block scheduling
+          rdma:
+            type: boolean
+            description: >
+              Recipe needs RDMA/InfiniBand-capable nodes (e.g. disaggregated NIXL cross-worker KV transfer).
+              Selects IB hostPath mounts + RDMA node labels in the serving stack; preflight checks capability.
+          infra:
+            type: array
+            items: { type: string }
+            description: >
+              Required side-service dependencies the serving stack needs but does not vendor
+              (e.g. [etcd, nats] for a disagg control plane). Rendered/preflight-checked by the stack.
+          storage:
+            type: array
+            items: { type: string }
+            description: cluster-profile var names of PVCs that must be Bound (e.g. MODEL_CACHE_PVC)
+          cache:
+            type: object
+            additionalProperties: false
+            description: >
+              PER-RECIPE model-cache declaration (offline; consumed at INSTALL time, never at run time).
+              The recipe knows its own model footprint and access shape, so it declares them here and
+              `install` auto-derives + auto-provisions ONE PVC per recipe — {name, size, storageClass,
+              accessMode} — with NO operator prompt. This lives under
+              `requires`, which recipe_hash.py excludes from the fingerprint (only requires.gpu is hashed),
+              so adding OR omitting `cache` NEVER changes a cell's recipe_hash — unmigrated cells render
+              byte-identically and fall back to the profile's single MODEL_CACHE_* (back-compat). Not a
+              benchmark determinant: the SAME weights on the SAME PVC are compared regardless of how the
+              claim was provisioned.
+            properties:
+              size:
+                type: string
+                pattern: "^[0-9]+(\\.[0-9]+)?(Ei|Pi|Ti|Gi|Mi|Ki|E|P|T|G|M|K)?$"
+                description: >
+                  PVC storage request for THIS recipe's model weights (+ any staged datasets/traces),
+                  e.g. "20Gi" (a small KVBM offload cache) or "1200Gi" (GLM-5 FP8 weights). The recipe
+                  declares it because the recipe knows the model. Absent → install falls back to the
+                  profile's MODEL_CACHE_SIZE, then a conservative default.
+              access_mode:
+                enum: [rwo, rwx]
+                description: >
+                  The claim's access mode, which SELECTS the cluster-profile storage-class candidate install
+                  uses: rwx → a ReadWriteMany shared filesystem (FSx/EFS/Filestore) many pods mount
+                  concurrently (disaggregated / multi-worker serving) → MODEL_CACHE_RWX_CLASS; rwo → a
+                  ReadWriteOnce block volume (EBS/PD) bound to a single node (e.g. a KVBM colocated cache) →
+                  MODEL_CACHE_RWO_CLASS. Absent → derived from the resolved storage class (fsx ⇒ rwx else rwo),
+                  preserving today's behavior.
+              # `name` is DELIBERATELY ABSENT and, with additionalProperties:false above, REJECTED.
+              # A PVC name is CLUSTER truth, not recipe truth. Every rendered serving/bench manifest mounts
+              # `claimName: ${MODEL_CACHE_PVC}` — a profile variable substituted at deploy time from
+              # cluster-profiles/<cluster>.env. A recipe that named a claim was honoured by `install`
+              # (which downloaded into it) and ignored by the mount (which used ${MODEL_CACHE_PVC}), so the
+              # weights landed in one PVC and the server mounted another: model-not-found after paying a
+              # full model load. Name the claim in the PROFILE instead:
+              #     MODEL_CACHE_PVC="<pvc>"                       # default for every model
+              #     MODEL_CACHE_PVC_<MODEL_SLUG>="<pvc>"          # this model only (slug = envelope.model
+              #                                                   # upper-cased, non-alnum → '_')
+              # See install.py::resolve_cache_claim — the single definition every consumer shares.
+          secrets:
+            type: array
+            items: { type: string }
+            description: cluster-profile var names of Secrets that must exist (e.g. IMAGE_PULL_SECRET, HF_SECRET)
+          operators:
+            type: array
+            items: { type: string }
+            description: cluster operators that must be reconciling the namespace (e.g. dynamo-operator, grove-operator)
+          dcgm:
+            enum: [required, optional, none]
+            default: none
+            description: DCGM exporter reachability for GPU telemetry

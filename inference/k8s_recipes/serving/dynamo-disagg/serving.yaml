@@ -1,0 +1,341 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+# Operator-independent DISAGGREGATED Nemotron-Ultra-3 serving: Dynamo frontend +
+# prefill worker(s) + decode worker as plain Deployments (no DGD/grove).
+#
+# Cross-worker prefill->decode KV transfer = vLLM NixlConnector (kv_role kv_both).
+# Model config matches the aggregated baseline. Serving-only args
+# (tool-call/reasoning/auto-tool/prompt-tokens-details) are intentionally omitted
+# (dynamo.vllm workers accept only vLLM *engine* args).
+#
+# PORTABILITY: this file is EXPERIMENTAL and applied via `envsubst | kubectl apply`
+# (see README.md). Set these before rendering (recipe.env + your cluster profile
+# supply most of them; the DISAGG_* node/scheduler knobs are disagg-only):
+#   NAMESPACE, OWNER, IMAGE_PULL_SECRET, MODEL_CACHE_PVC, MODEL_CACHE_SUBPATH,
+#   SGLANG_IMAGE, DISAGG_SCHEDULER_NAME, DISAGG_PREFILL_NODE_1, DISAGG_DECODE_NODE
+# The tolerations block below is left literal on purpose (it is a per-cluster
+# taint union; trim/extend it for your GPU pool). See TROUBLESHOOTING.md.
+#
+# NODE MATH: TP=8 => each worker needs a full 8-GPU node. This file deploys
+# 1 prefill + 1 decode = 1P1D (16 GPU). TO REACH 2P1D: when a 3rd free 8-GPU node
+# exists, set the prefill Deployment replicas: 2 and add a 2nd hostname to its
+# nodeAffinity list. Pick available 8-GPU nodes per TROUBLESHOOTING.md (DRA
+# claims are not visible in the device-plugin allocatable count).
+#
+# schedulerName: ${DISAGG_SCHEDULER_NAME} on all pods. On clusters where a
+# gang/queue scheduler (e.g. kai-scheduler) refuses device-plugin nvidia.com/gpu
+# on DRA nodes, set DISAGG_SCHEDULER_NAME=default-scheduler to unlock those nodes.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llmb-disagg-frontend
+  namespace: ${NAMESPACE}
+  labels: {app: llmb-disagg-frontend, llmb.nvidia.com/owner: ${OWNER}, llmb.nvidia.com/run-id: disagg-1m}
+spec:
+  selector: {app: llmb-disagg-frontend}
+  ports:
+  - {name: http, port: 8000, targetPort: 8000}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmb-disagg-frontend
+  namespace: ${NAMESPACE}
+  labels: {app: llmb-disagg-frontend, llmb.nvidia.com/owner: ${OWNER}, llmb.nvidia.com/run-id: disagg-1m}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: llmb-disagg-frontend}}
+  template:
+    metadata:
+      labels: {app: llmb-disagg-frontend}
+    spec:
+      schedulerName: ${DISAGG_SCHEDULER_NAME}
+      imagePullSecrets: [{name: ${IMAGE_PULL_SECRET}}]
+      tolerations: &tols
+      - {key: schwinns.ai-dynamo.io/gms-bench, operator: Exists}
+      - {key: dra, operator: Exists}
+      - {key: nvidia.com/gpu, operator: Exists}
+      - {effect: NoSchedule, key: dedicated, operator: Equal, value: user-workload}
+      - {effect: NoExecute, key: dedicated, operator: Equal, value: user-workload}
+      - {effect: NoSchedule, key: kubernetes.io/arch, operator: Equal, value: arm64}
+      - {effect: NoSchedule, key: nvidia.com/gpu, operator: Equal, value: present}
+      - {effect: NoSchedule, key: nvidia.com/gpu, operator: Equal, value: "true"}
+      containers:
+      - name: frontend
+        image: ${SGLANG_IMAGE}
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "-lc"]
+        args: ["exec python3 -m dynamo.frontend --http-host 0.0.0.0 --http-port 8000"]
+        ports: [{containerPort: 8000, name: http}]
+        env:
+        - {name: DYN_NAMESPACE, value: llmb-disagg}
+        - {name: DYN_DISCOVERY_BACKEND, value: etcd}
+        - {name: DYN_EVENT_PLANE, value: nats}
+        - {name: DYN_HTTP_PORT, value: "8000"}
+        - {name: ETCD_ENDPOINTS, value: "dynamo-platform-etcd.${NAMESPACE}.svc.cluster.local:2379"}
+        - {name: NATS_SERVER, value: "nats://dynamo-platform-nats.${NAMESPACE}.svc.cluster.local:4222"}
+        - {name: HF_HOME, value: /data/hf-cache}
+        - {name: HF_HUB_OFFLINE, value: "1"}
+        - {name: TRANSFORMERS_OFFLINE, value: "1"}
+        - {name: PYTHONUNBUFFERED, value: "1"}
+        resources: {requests: {cpu: "8", memory: 32Gi}, limits: {cpu: "16", memory: 64Gi}}
+        readinessProbe:
+          httpGet: {path: /health, port: 8000}
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          failureThreshold: 60
+        volumeMounts:
+        - {mountPath: /data/hf-cache, name: model-cache, readOnly: true, subPath: ${MODEL_CACHE_SUBPATH}}
+      volumes:
+      - {name: model-cache, persistentVolumeClaim: {claimName: ${MODEL_CACHE_PVC}}}
+---
+# ---------------------------------------------------------------- PREFILL (x1 now; x2 for 2P1D)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmb-disagg-prefill
+  namespace: ${NAMESPACE}
+  labels: {app: llmb-disagg-prefill, role: prefill, llmb.nvidia.com/owner: ${OWNER}, llmb.nvidia.com/run-id: disagg-1m}
+spec:
+  replicas: 1   # -> 2 for target 2P1D (needs a 2nd free 8-GPU node in nodeAffinity below)
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: llmb-disagg-prefill}}
+  template:
+    metadata:
+      labels: {app: llmb-disagg-prefill, role: prefill}
+    spec:
+      schedulerName: ${DISAGG_SCHEDULER_NAME}
+      imagePullSecrets: [{name: ${IMAGE_PULL_SECRET}}]
+      tolerations:
+      - {key: schwinns.ai-dynamo.io/gms-bench, operator: Exists}
+      - {key: dra, operator: Exists}
+      - {key: nvidia.com/gpu, operator: Exists}
+      - {effect: NoSchedule, key: dedicated, operator: Equal, value: user-workload}
+      - {effect: NoExecute, key: dedicated, operator: Equal, value: user-workload}
+      - {effect: NoSchedule, key: kubernetes.io/arch, operator: Equal, value: arm64}
+      - {effect: NoSchedule, key: nvidia.com/gpu, operator: Equal, value: present}
+      - {effect: NoSchedule, key: nvidia.com/gpu, operator: Equal, value: "true"}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                # Prefill node hostname. Pick a available 8-GPU node
+                # (device-plugin allocatable count hides DRA claims; see
+                # TROUBLESHOOTING.md). For 2P1D add a 2nd hostname here and set
+                # the Deployment replicas: 2 above.
+                - ${DISAGG_PREFILL_NODE_1}
+      containers:
+      - name: main
+        image: ${SGLANG_IMAGE}
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsUser: 0
+          capabilities: {add: [IPC_LOCK, SYS_RESOURCE]}
+        command: ["/bin/bash", "-lc"]
+        args:
+        - |
+          set -eu
+          ulimit -l unlimited 2>/dev/null || true
+          SNAPSHOT_DIR=$(python3 -c "
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(repo_id='nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4', cache_dir='/data/hf-cache/hub', local_files_only=True))")
+          echo "Resolved model snapshot: $SNAPSHOT_DIR"
+          test -f "$SNAPSHOT_DIR/config.json" || { echo "FATAL: model config.json missing at $SNAPSHOT_DIR" >&2; exit 64; }
+          exec python3 -m dynamo.vllm \
+            --model "$SNAPSHOT_DIR" \
+            --served-model-name nemotron-ultra-3 \
+            --tensor-parallel-size 8 \
+            --enable-expert-parallel \
+            --gpu-memory-utilization 0.85 \
+            --max-model-len 1048576 \
+            --max-num-seqs 256 \
+            --max-num-batched-tokens 16384 \
+            --block-size 64 \
+            --kv-cache-dtype fp8 \
+            --mamba-ssm-cache-dtype float16 \
+            --enable-chunked-prefill \
+            --enable-prefix-caching \
+            --trust-remote-code \
+            --disable-custom-all-reduce \
+            --no-disable-hybrid-kv-cache-manager \
+            --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_connector_extra_config":{"num_threads":8}}' \
+            --disaggregation-mode prefill
+        env: &worker_env
+        - {name: DYN_NAMESPACE, value: llmb-disagg}
+        - {name: DYN_DISCOVERY_BACKEND, value: etcd}
+        - {name: DYN_EVENT_PLANE, value: nats}
+        - {name: DYN_SYSTEM_ENABLED, value: "true"}
+        - {name: DYN_SYSTEM_PORT, value: "9090"}
+        - {name: ETCD_ENDPOINTS, value: "dynamo-platform-etcd.${NAMESPACE}.svc.cluster.local:2379"}
+        - {name: NATS_SERVER, value: "nats://dynamo-platform-nats.${NAMESPACE}.svc.cluster.local:4222"}
+        - {name: HF_HOME, value: /data/hf-cache}
+        - {name: HF_HUB_OFFLINE, value: "1"}
+        - {name: TRANSFORMERS_OFFLINE, value: "1"}
+        - {name: PYTHONUNBUFFERED, value: "1"}
+        - {name: VLLM_ALLOW_LONG_MAX_MODEL_LEN, value: "1"}
+        # DO NOT set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True with NixlConnector:
+        # the CUDA VMM allocator remaps KV-cache pages, invalidating NIXL-registered IB memory
+        # -> corrupt cross-worker KV transfer -> GARBAGE decode output (silent on old images).
+        - {name: VLLM_WORKER_MULTIPROC_METHOD, value: spawn}
+        - {name: UCX_TLS, value: "^cuda_ipc"}
+        - {name: UCX_RNDV_SCHEME, value: get_zcopy}
+        - {name: UCX_MAX_RNDV_RAILS, value: "4"}
+        - {name: NCCL_IB_DISABLE, value: "0"}
+        - {name: NCCL_SOCKET_IFNAME, value: eth0}
+        - {name: GLOO_SOCKET_IFNAME, value: eth0}
+        - {name: NIXL_LOG_LEVEL, value: INFO}
+        - {name: VLLM_SSM_CONV_STATE_LAYOUT, value: DS}
+        - {name: VLLM_ALLOW_CHUNKED_LOCAL_ATTN_WITH_HYBRID_KV_CACHE, value: "1"}
+        - {name: VLLM_ALLREDUCE_USE_SYMM_MEM, value: "0"}
+        - {name: DYN_VLLM_APPEND_PREFILL_OUTPUT_TOKENS, value: "0"}
+        ports: [{containerPort: 9090, name: system}]
+        resources:
+          requests: {cpu: "16", memory: 256Gi, nvidia.com/gpu: "8", rdma/shared_ib: "1"}
+          limits: {cpu: "96", memory: 512Gi, nvidia.com/gpu: "8", rdma/shared_ib: "1"}
+        readinessProbe:
+          tcpSocket: {port: 9090}
+          initialDelaySeconds: 120
+          periodSeconds: 15
+          failureThreshold: 160
+        volumeMounts:
+        - {mountPath: /data/hf-cache, name: model-cache, readOnly: true, subPath: ${MODEL_CACHE_SUBPATH}}
+        - {mountPath: /dev/shm, name: dshm}
+      volumes:
+      - {name: model-cache, persistentVolumeClaim: {claimName: ${MODEL_CACHE_PVC}}}
+      - {name: dshm, emptyDir: {medium: Memory, sizeLimit: 64Gi}}
+---
+# ----------------------------------------------------------------------- DECODE (x1)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmb-disagg-decode
+  namespace: ${NAMESPACE}
+  labels: {app: llmb-disagg-decode, role: decode, llmb.nvidia.com/owner: ${OWNER}, llmb.nvidia.com/run-id: disagg-1m}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: llmb-disagg-decode}}
+  template:
+    metadata:
+      labels: {app: llmb-disagg-decode, role: decode}
+    spec:
+      schedulerName: ${DISAGG_SCHEDULER_NAME}
+      imagePullSecrets: [{name: ${IMAGE_PULL_SECRET}}]
+      tolerations:
+      - {key: schwinns.ai-dynamo.io/gms-bench, operator: Exists}
+      - {key: dra, operator: Exists}
+      - {key: nvidia.com/gpu, operator: Exists}
+      - {effect: NoSchedule, key: dedicated, operator: Equal, value: user-workload}
+      - {effect: NoExecute, key: dedicated, operator: Equal, value: user-workload}
+      - {effect: NoSchedule, key: kubernetes.io/arch, operator: Equal, value: arm64}
+      - {effect: NoSchedule, key: nvidia.com/gpu, operator: Equal, value: present}
+      - {effect: NoSchedule, key: nvidia.com/gpu, operator: Equal, value: "true"}
+      # Optional: tolerate a reserved-pool taint so decode can land on a
+      # genuinely-free reserved node (edit/remove for your cluster's taints).
+      - {key: "autopilot/dsv2lite-tp1-reserved", operator: Exists, effect: NoSchedule}
+      nodeSelector:
+        kubernetes.io/hostname: ${DISAGG_DECODE_NODE}
+      containers:
+      - name: main
+        image: ${SGLANG_IMAGE}
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsUser: 0
+          capabilities: {add: [IPC_LOCK, SYS_RESOURCE]}
+        command: ["/bin/bash", "-lc"]
+        args:
+        - |
+          set -eu
+          ulimit -l unlimited 2>/dev/null || true
+          SNAPSHOT_DIR=$(python3 -c "
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(repo_id='nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4', cache_dir='/data/hf-cache/hub', local_files_only=True))")
+          echo "Resolved model snapshot: $SNAPSHOT_DIR"
+          test -f "$SNAPSHOT_DIR/config.json" || { echo "FATAL: model config.json missing at $SNAPSHOT_DIR" >&2; exit 64; }
+          exec python3 -m dynamo.vllm \
+            --model "$SNAPSHOT_DIR" \
+            --served-model-name nemotron-ultra-3 \
+            --tensor-parallel-size 8 \
+            --enable-expert-parallel \
+            --gpu-memory-utilization 0.85 \
+            --max-model-len 1048576 \
+            --max-num-seqs 256 \
+            --max-num-batched-tokens 16384 \
+            --block-size 64 \
+            --kv-cache-dtype fp8 \
+            --mamba-ssm-cache-dtype float16 \
+            --enable-chunked-prefill \
+            --enable-prefix-caching \
+            --trust-remote-code \
+            --disable-custom-all-reduce \
+            --no-disable-hybrid-kv-cache-manager \
+            --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_connector_extra_config":{"num_threads":8}}' \
+            --disaggregation-mode decode
+        env:
+        - {name: DYN_NAMESPACE, value: llmb-disagg}
+        - {name: DYN_DISCOVERY_BACKEND, value: etcd}
+        - {name: DYN_EVENT_PLANE, value: nats}
+        - {name: DYN_SYSTEM_ENABLED, value: "true"}
+        - {name: DYN_SYSTEM_PORT, value: "9090"}
+        - {name: ETCD_ENDPOINTS, value: "dynamo-platform-etcd.${NAMESPACE}.svc.cluster.local:2379"}
+        - {name: NATS_SERVER, value: "nats://dynamo-platform-nats.${NAMESPACE}.svc.cluster.local:4222"}
+        - {name: HF_HOME, value: /data/hf-cache}
+        - {name: HF_HUB_OFFLINE, value: "1"}
+        - {name: TRANSFORMERS_OFFLINE, value: "1"}
+        - {name: PYTHONUNBUFFERED, value: "1"}
+        - {name: VLLM_ALLOW_LONG_MAX_MODEL_LEN, value: "1"}
+        # DO NOT set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True with NixlConnector:
+        # the CUDA VMM allocator remaps KV-cache pages, invalidating NIXL-registered IB memory
+        # -> corrupt cross-worker KV transfer -> GARBAGE decode output (silent on old images).
+        - {name: VLLM_WORKER_MULTIPROC_METHOD, value: spawn}
+        - {name: UCX_TLS, value: "^cuda_ipc"}
+        - {name: UCX_RNDV_SCHEME, value: get_zcopy}
+        - {name: UCX_MAX_RNDV_RAILS, value: "4"}
+        - {name: NCCL_IB_DISABLE, value: "0"}
+        - {name: NCCL_SOCKET_IFNAME, value: eth0}
+        - {name: GLOO_SOCKET_IFNAME, value: eth0}
+        - {name: NIXL_LOG_LEVEL, value: INFO}
+        - {name: VLLM_SSM_CONV_STATE_LAYOUT, value: DS}
+        - {name: VLLM_ALLOW_CHUNKED_LOCAL_ATTN_WITH_HYBRID_KV_CACHE, value: "1"}
+        - {name: VLLM_ALLREDUCE_USE_SYMM_MEM, value: "0"}
+        - {name: DYN_VLLM_APPEND_PREFILL_OUTPUT_TOKENS, value: "0"}
+        ports: [{containerPort: 9090, name: system}]
+        resources:
+          requests: {cpu: "16", memory: 256Gi, nvidia.com/gpu: "8", rdma/shared_ib: "1"}
+          limits: {cpu: "96", memory: 512Gi, nvidia.com/gpu: "8", rdma/shared_ib: "1"}
+        readinessProbe:
+          tcpSocket: {port: 9090}
+          initialDelaySeconds: 120
+          periodSeconds: 15
+          failureThreshold: 160
+        volumeMounts:
+        - {mountPath: /data/hf-cache, name: model-cache, readOnly: true, subPath: ${MODEL_CACHE_SUBPATH}}
+        - {mountPath: /dev/shm, name: dshm}
+      volumes:
+      - {name: model-cache, persistentVolumeClaim: {claimName: ${MODEL_CACHE_PVC}}}
+      - {name: dshm, emptyDir: {medium: Memory, sizeLimit: 64Gi}}

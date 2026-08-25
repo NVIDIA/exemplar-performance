@@ -1,0 +1,140 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+envelope:
+  name: nemotron-ultra-nvfp4-b200-sglang-dynamo14-50k2k-1p1d
+  model: nemotron-ultra-nvfp4
+  gpu_type: B200
+  arch: amd64
+  engine: sglang
+  serving_mode: disaggregated
+  framework: dynamo
+  scenario: llm-perf
+  distribution: synthetic
+  mode: synthetic
+  launcher: aiperf
+  goal: pareto
+  status: wip
+  results_link: ./RESULTS.md
+  provenance:
+    schema_version: k8s.llm-perf.v1
+    official: false
+    source_image_tag: nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1
+    image_digest: sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9
+    image_ref: nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9
+  exemplar:
+    metric: pareto_geomean
+    unit: geomean(tps/gpu*tps/user)
+    reference: null
+    tolerance_pct: 5
+    comparison: point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs
+  requires:
+    gpu: { count: 16 }
+    rdma: true
+    infra: [etcd, nats]
+    # SHAPE only -- size + access mode are recipe truth (this model is ~330GiB on disk and both the
+    # prefill and decode workers mount the weights concurrently, so the claim must be RWX). The claim
+    # NAME is cluster truth and lives in the profile: every rendered manifest mounts
+    # ${MODEL_CACHE_PVC}, so a recipe-declared name is honoured by install and ignored by the mount --
+    # weights in one PVC, server mounting another. Point this model at its own claim with
+    # MODEL_CACHE_PVC_NEMOTRON_ULTRA_NVFP4 in cluster-profiles/<cluster>.env.
+    cache: { size: 800Gi, access_mode: rwx }
+    tolerations: [ nvidia.com/gpu, dedicated ]
+
+serving:
+  stack: sglang-disagg
+  model_repo: nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4
+  model_revision: 183968f87ae4cedce3039313cac1fd43d112c578
+  served_model: nemotron-3-ultra
+  startup_timeout_s: 2400
+  tp: 8
+  context_length: 65536
+  # Nemotron-3 Ultra hybrid Mamba-2 + MoE + attention, 550B/55B-active, 512 experts, NVFP4 weights.
+  # DeepGemm off (NVFP4 checkpoint is not ue8m0-scaled); TF32 + fast safetensors load.
+  env:
+    - { name: SGLANG_DISABLE_DEEP_GEMM, value: "1" }
+    - { name: NVIDIA_TF32_OVERRIDE, value: "1" }
+    - { name: SAFETENSORS_FAST_GPU, value: "1" }
+  disagg:
+    transfer_backend: nixl
+    prefill:
+      tp: 8
+      dp: 1
+      ep: 8
+      extra_args:
+        - "--trust-remote-code"
+        - "--kv-cache-dtype fp8_e4m3"
+        - "--moe-runner-backend flashinfer_trtllm"
+        - "--fp8-gemm-backend triton"
+        - "--mamba-scheduler-strategy no_buffer"
+        - "--disable-radix-cache"
+        - "--disable-piecewise-cuda-graph"
+        - "--reasoning-parser nemotron_3"
+        - "--tool-call-parser qwen3_coder"
+        - "--stream-interval 20"
+        - "--model-loader-extra-config '{\"enable_multithread_load\": true}'"
+        - "--weight-loader-prefetch-checkpoints"
+        - "--chunked-prefill-size 32768"
+        - "--max-prefill-tokens 16384"
+        - "--mem-fraction-static 0.7"
+    decode:
+      tp: 8
+      dp: 1
+      ep: 8
+      extra_args:
+        - "--trust-remote-code"
+        - "--kv-cache-dtype fp8_e4m3"
+        - "--moe-runner-backend flashinfer_trtllm"
+        - "--fp8-gemm-backend triton"
+        - "--mamba-scheduler-strategy no_buffer"
+        - "--disable-radix-cache"
+        - "--disable-piecewise-cuda-graph"
+        - "--reasoning-parser nemotron_3"
+        - "--tool-call-parser qwen3_coder"
+        - "--stream-interval 20"
+        - "--model-loader-extra-config '{\"enable_multithread_load\": true}'"
+        - "--weight-loader-prefetch-checkpoints"
+        - "--max-running-requests 256"
+        - "--mem-fraction-static 0.85"
+        - "--speculative-algorithm EAGLE"
+        - "--speculative-num-steps 5"
+        - "--speculative-eagle-topk 1"
+        - "--speculative-num-draft-tokens 5"
+
+bench:
+  synthetic:
+    isl: 50000
+    isl_stddev: 0
+    osl: 2048
+    osl_stddev: 0
+    num_entries: 2560
+    request_count_multiplier: 2
+    seed: 42
+    nominal_isl: 50000
+    nominal_osl: 2048
+  sweep_concurrency: [1, 4, 16, 32, 64, 128, 256]
+  sweep_mode: fixed
+  # force the full decode length (min_tokens = osl); ignore_eos so the model doesn't stop early
+  extra_inputs: "min_tokens:2048 ignore_eos:true"
+  endpoint_type: chat
+  connection_reuse: sticky-user-sessions
+  request_timeout_s: 3600
+  gpu_telemetry: true

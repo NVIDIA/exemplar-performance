@@ -1,0 +1,217 @@
+# sglang-disagg — prefill + decode SGLang workers (rendered from a cell's recipe.yaml).
+# {{ '{{ ... }}' }} = recipe truth (baked at render). ${ ... } = cluster truth (envsubst at launch).
+#
+# Each role is one Deployment of TP-sized workers. They register with etcd + NATS and the frontend
+# (frontend.yaml) routes disaggregated traffic to them. Cross-worker prefill->decode KV transfer runs
+# over RDMA/InfiniBand via the configured transfer backend ({{ serving.disagg.transfer_backend }}), which
+# is why the pods carry hostNetwork + privileged + IB hostPaths + RDMA node labels (all from the source).
+#
+# One cell = one concrete config: the per-role tp/dp/ep + extra_args are baked here from serving.disagg.
+{% set model_store = "/model-store" %}
+{% set model_repo_cache_dir = "models--" ~ (serving.model_repo | replace('/', '--')) %}
+{% set _req = (envelope.get('requires') or {}) %}
+{% set _tols = _req.get('tolerations') %}
+{% set roles = [
+  {"name": "prefill", "cfg": serving.disagg.prefill, "bootstrap": true},
+  {"name": "decode",  "cfg": serving.disagg.decode,  "bootstrap": false}
+] %}
+{% for role in roles %}
+{% set base = [
+  "--model-path " ~ model_store ~ "/${MODEL_CACHE_SUBPATH}/hub/" ~ model_repo_cache_dir ~ "/snapshots/" ~ serving.model_revision,
+  "--served-model-name " ~ serving.served_model,
+  "--host 0.0.0.0",
+  "--port 18081",
+  "--disaggregation-mode " ~ role.name
+] %}
+{% if role.bootstrap %}{% set base = base + ["--disaggregation-bootstrap-port 18082"] %}{% endif %}
+{% set base = base + [
+  "--disaggregation-transfer-backend " ~ serving.disagg.transfer_backend,
+  "--context-length " ~ serving.context_length,
+  "--tensor-parallel-size " ~ role.cfg.tp,
+  "--data-parallel-size " ~ role.cfg.dp,
+  "--expert-parallel-size " ~ role.cfg.ep
+] %}
+{% set allargs = base + (role.cfg.extra_args or []) %}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ envelope.name }}-{{ role.name }}
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/role: {{ role.name }}, llmb.nvidia.com/served-model: {{ serving.served_model }} }
+spec:
+{# Per-role worker count (serving.disagg.<role>.replicas, default 1 = the 1P1D shape). >1 scales a role
+   independently — e.g. decode.replicas=8 renders a 1P8D stack. Each replica is a full TP-sized worker.
+   Jinja comment (not emitted) so existing 1P1D cells still render + fingerprint byte-identically. #}
+  replicas: {{ role.cfg.get('replicas', 1) }}
+  # A TP-sized worker consumes a full 8-GPU node; Recreate avoids a rolling-update deadlock.
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: {{ envelope.name }}-{{ role.name }} } }
+  template:
+    metadata: { labels: { app: {{ envelope.name }}-{{ role.name }}, role: {{ role.name }} } }
+    spec:
+      automountServiceAccountToken: false
+      # RDMA/NIXL workers use the host network to reach peer devices.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      dnsConfig:
+        options:
+          - { name: ndots, value: "2" }
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 120
+      schedulerName: ${SCHEDULER_NAME}
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      nodeSelector:
+        nvidia.com/gpu.product: ${GPU_PRODUCT}
+{% if _req.get('rdma') %}
+        # Default RDMA capability labels; the cluster profile may override them.
+        feature.node.kubernetes.io/rdma.available: "true"
+        feature.node.kubernetes.io/rdma.capable: "true"
+{% endif %}
+{% if _tols %}
+      tolerations:
+{% for t in _tols %}
+        - { key: {{ t }}, operator: Exists }
+{% endfor %}
+{% endif %}
+      initContainers:
+        # Verify the pinned model snapshot before starting the engine.
+        - name: verify-model
+          image: {{ image_ref }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -eu
+              MARKER={{ model_store }}/${MODEL_CACHE_SUBPATH}/.llmb_download_done/{{ serving.model_revision }}
+              MODEL_PATH={{ model_store }}/${MODEL_CACHE_SUBPATH}/hub/{{ model_repo_cache_dir }}/snapshots/{{ serving.model_revision }}
+              test -s "$MARKER" || {
+                echo "FATAL: model completion sentinel missing or empty: $MARKER" >&2; exit 64; }
+              test -f "$MODEL_PATH/config.json" || {
+                echo "FATAL: pinned model snapshot missing config.json: $MODEL_PATH" >&2; exit 65; }
+              echo "model verified: {{ serving.model_repo }} @ {{ serving.model_revision }} ($MODEL_PATH)"
+          volumeMounts:
+            - { mountPath: /model-store, name: model-store, readOnly: true }
+      containers:
+        - name: sglang
+          image: {{ image_ref }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            capabilities:
+              add: ["IPC_LOCK", "SYS_RESOURCE"]
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              ulimit -n 1048576 || true
+              ulimit -l unlimited || true
+{% for cmd in serving.get('worker_bootstrap_commands', []) %}
+              {{ cmd }}
+{% endfor %}
+              exec python3 -m dynamo.sglang \
+{% for a in allargs %}
+                {{ a }}{{ " \\" if not loop.last else "" }}
+{% endfor %}
+          ports:
+            - { containerPort: 18080, name: system, protocol: TCP }
+            - { containerPort: 18081, name: worker, protocol: TCP }
+{% if role.bootstrap %}
+            - { containerPort: 18082, name: bootstrap, protocol: TCP }
+{% endif %}
+          startupProbe:
+            httpGet: { path: /live, port: system }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 720   # 2-hour budget: a large FP8 checkpoint load + disagg handshake
+          livenessProbe:
+            httpGet: { path: /live, port: system }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 8
+          readinessProbe:
+            httpGet: { path: /live, port: system }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          env:
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: ETCD_ENDPOINTS, value: "http://{{ envelope.name }}-etcd:2379" }
+            - { name: NATS_SERVER, value: "nats://{{ envelope.name }}-nats:4222" }
+            - { name: DYN_REQUEST_PLANE, value: "nats" }
+            - { name: DYN_SYSTEM_PORT, value: "18080" }
+{% if serving.get('dynamo_log') %}
+            # Optional recipe-level filter for noisy Dynamo hot paths.
+            - { name: DYN_LOG, value: {{ serving.get('dynamo_log') | string | tojson }} }
+{% else %}
+            - { name: DYN_LOG, value: "info" }
+{% endif %}
+            - { name: DYN_SKIP_SGLANG_LOG_FORMATTING, value: "1" }
+            - { name: TORCH_DISTRIBUTED_DEFAULT_TIMEOUT, value: "1800" }
+            - { name: SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE, value: "100000" }
+            - { name: SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT, value: "100000" }
+            - { name: SGLANG_DISAGGREGATION_WAITING_TIMEOUT, value: "100000" }
+            - { name: SGLANG_USE_MESSAGE_QUEUE_BROADCASTER, value: "0" }
+            - { name: NCCL_CUMEM_ENABLE, value: "1" }
+            - { name: NCCL_IB_DISABLE, value: "0" }
+            - { name: NCCL_DEBUG, value: "INFO" }
+{% if _req.get('rdma') %}
+            # NIXL uses UCX directly; NCCL/GLOO env does not select the RDMA data path.
+            # FABRIC IDENTITY IS CLUSTER TRUTH: every UCX_* value below is a ${RDMA_UCX_*} token filled by
+            # envsubst from the cluster profile at launch — NEVER a recipe value. HCA rail names (mlx5_* on
+            # one cluster, rocep* on the next) and the IB-vs-RoCE transport set describe ONE cluster's
+            # hardware. A recipe that baked them could only ever run on that cluster, and the baked value
+            # WON over the profile, so no profile setting could correct it (schema/scenario-llm-perf.yaml
+            # now rejects serving.disagg.ucx outright to keep that category error out).
+            # Discover a cluster's values: llmb-k8s profile probe-fabric --cluster <name> --write
+            - { name: UCX_TLS, value: "${RDMA_UCX_TLS}" }
+            - { name: UCX_NET_DEVICES, value: "${RDMA_UCX_NET_DEVICES}" }
+            - { name: UCX_IB_ADDR_TYPE, value: "${RDMA_UCX_IB_ADDR_TYPE}" }
+            - { name: UCX_RNDV_SCHEME, value: "get_zcopy" }
+            - { name: UCX_MAX_RNDV_RAILS, value: "${RDMA_UCX_MAX_RNDV_RAILS}" }
+            - { name: UCX_RC_TIMEOUT, value: "18s" }
+{% endif %}
+            - { name: NIXL_LOG_LEVEL, value: "INFO" }
+{% for e in serving.get('env', []) %}
+            - { name: {{ e.name | string | tojson }}, value: {{ e.value | string | tojson }} }
+{% endfor %}
+            - { name: HF_HOME, value: "/model-store/${MODEL_CACHE_SUBPATH}" }
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: ${HF_SECRET}, key: token }
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef: { name: ${HF_SECRET}, key: token }
+            - name: POD_UID
+              valueFrom:
+                fieldRef: { fieldPath: metadata.uid }
+            - name: POD_IP
+              valueFrom:
+                fieldRef: { fieldPath: status.podIP }
+          resources:
+            requests:
+              cpu: "64"
+              memory: 768Gi
+              ephemeral-storage: 20Gi
+              nvidia.com/gpu: "{{ role.cfg.tp }}"
+            limits:
+              cpu: "180"
+              memory: 1800Gi
+              ephemeral-storage: 100Gi
+              nvidia.com/gpu: "{{ role.cfg.tp }}"
+          volumeMounts:
+            - { mountPath: /model-store, name: model-store, readOnly: true }
+            - { mountPath: /dev/shm, name: dshm }
+            - { mountPath: /dev/infiniband, name: dev-infiniband }
+            - { mountPath: /sys/class/infiniband, name: sys-class-infiniband, readOnly: true }
+      volumes:
+        - name: model-store
+          persistentVolumeClaim: { claimName: ${MODEL_CACHE_PVC} }
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 100Gi }
+        - name: dev-infiniband
+          hostPath: { path: /dev/infiniband, type: Directory }
+        - name: sys-class-infiniband
+          hostPath: { path: /sys/class/infiniband, type: Directory }
+{% endfor %}

@@ -1,0 +1,106 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Kimi-K2.6 inference benchmark, TRT-LLM Dynamo disaggregated serving on gb200.
+# Front-door: llmb-install + llmb-run. Backend executor: srt-slurm.
+#
+# Pass-through model:
+#   setup tasks     →  clone srt-slurm + `srtctl install`
+#   launch.sh       →  `srtctl apply -f <recipe>.yaml`
+
+# Setup
+general:
+  workload: kimi2.6
+  workload_type: inference   # Auto-skipped by llmb-run's post-processing pipeline
+                             # (UNSUPPORTED_PP_WORKLOAD_TYPES in
+                             # post_processing_pipeline.py). The benchmark writes
+                             # its own outputs under srt-slurm/outputs/; we don't
+                             # ship a pretrain-style parser.
+  framework: trt-llm-dynamo
+
+# No container.images — srtctl install pulls + manages the container itself.
+# The resulting .sqsh stays at $LLMB_WORKLOAD/srt-slurm/install/containers/ (under $LLMB_INSTALL).
+# Schema requires `container:` be a map; empty `{}` satisfies that without
+# declaring any images for llmb to pre-pull.
+container: {}
+
+setup:
+  # llmb-install creates the workload venv with uv (cli/llmb-install/README.md).
+  # install_srtslurm.sh `uv pip install -e`s srtctl into it (editable
+  # is required by srt-slurm — see install_srtslurm.sh header).
+  venv_req: true
+
+  # NO `dependencies:` block — empty `git: {}` / `pip: []` would route
+  # through installer.py's "New Dependency Management" path, naming the venv
+  # `venv_<dep_hash>`. We need the stable `${workload_key}_venv`
+  # (= `inference_kimi2.6_venv`) name that launch.sh references.
+
+  tasks:
+    # 1. Clone srt-slurm and build the compute-side aarch64 .venv via srun.
+    #    job_type:srun + requires_gpus:true so SLURM_ACCOUNT/SLURM_PARTITION
+    #    are injected by augment_env_for_job_type — the script uses them to
+    #    dispatch the venv build onto a Grace compute node. The login node is
+    #    x86_64; the workload's srtctl install sbatch later runs on aarch64
+    #    and would fail "Exec format error" if we built the venv on the
+    #    login node.
+    - name: install_srtslurm
+      cmd: './install_srtslurm.sh'
+      job_type: srun
+      requires_gpus: true
+
+    # 2. Write srt-slurm/srtslurm.yaml from SLURM env vars (injected by the
+    #    framework for non-local job types).
+    #    job_type:srun + requires_gpus:true so we receive SLURM_ACCOUNT +
+    #    SLURM_PARTITION (gpu partition). The framework runs srun tasks
+    #    INLINE on the install host, so no actual srun dispatch happens —
+    #    env-var injection is the only effect.
+    - name: generate_srtslurm_yaml
+      cmd: './generate_srtslurm_yaml.sh'
+      job_type: srun
+      requires_gpus: true
+
+    # 3. `make setup ARCH=aarch64` — downloads NATS/ETCD/uv binaries.
+    #    These recipes target Grace SKUs only (gb200/gb300) so arch is
+    #    pinned in the script.
+    - name: setup_srtslurm
+      cmd: './setup_srtslurm.sh'
+      job_type: local
+
+    # 4. `srtctl install kimi26-trtllm ...` submits a SLURM job that fetches HF
+    #    weights + container .sqsh. Script polls squeue+sacct until done.
+    #    job_type MUST be `local`: srtctl install refuses to run inside a
+    #    SLURM job (srtctl/cli/install.py).
+    - name: install_model
+      cmd: './install_model.sh'
+      job_type: local
+
+# Run
+run:
+  # configured_sbatch (NOT plain sbatch): the framework injects --job-name and
+  # --output paths automatically (ConfiguredSbatchLauncher). launch.sh declares
+  # only #SBATCH --time; anything else is silently overridden.
+  launcher_type: 'configured_sbatch'
+  launch_script: 'launch.sh'
+
+  # The dispatcher lands on the GPU partition for ~26 sec per submit. We
+  # don't route it onto a cpu_partition; the cost is small and the recipe
+  # is designed for the declared gb200 configuration.
+
+  # `scales: [1]` is ONE dispatcher allocation — the real sweep matrix is
+  # owned by the srt-slurm recipe YAML consumed by `srtctl apply -f`
+  # (default override-able via $RUN_CONF_KIMI26_RECIPE — see launch.sh).
+  #
+  # `model_size: 1t` reflects Kimi-K2.6's total parameter count (MoE: 1T
+  # total / 32B active). Follows the existing convention for MoE recipes
+  # (deepseek_v3 uses '671b' = total params).
+  # `dtypes: ['nvfp4']` is the model precision. Disaggregated serving is
+  # expressed by the folder location (inference/slurm_recipes/llm-serving/kimi2.6/disagg/)
+  # rather than by a CLI knob; an agg variant in the future would live at
+  # inference/slurm_recipes/llm-serving/kimi2.6/agg/ with its own workload identifier.
+  gpu_configs:
+    gb200:
+      model_configs:
+        - model_size: '1t'
+          dtypes: ['nvfp4']
+          scales: [1]
+          exact_scales: true

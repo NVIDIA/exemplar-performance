@@ -1,0 +1,453 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+# Machine-readable contract for the llmb-benchmark Kubernetes recipe.
+#
+# Consumed by automation (cross-recipe launchers, AI agents, CI). Humans
+# should read README.md instead.
+#
+# Anything declared here is stable: changes are versioned via `schemaVersion`
+# and called out in the changelog. If you are an automation author, code
+# against this file rather than the README.
+
+# schemaVersion 2: recipe restructured into a shared harness (scripts/,
+# datasets/, cluster-profiles/) plus serving backends under serving/. The
+# aggregated-vLLM chart/, manifests/ and context overlays moved from the recipe
+# root to serving/vllm-aggregated/. The canonical dashboard is now
+# scripts/sla_compare_dashboard.py (was scripts/dashboard.py). Automation that
+# hard-coded the old top-level chart/ or manifests/ paths must update.
+schemaVersion: 2
+
+recipe:
+  shortName: llmb-benchmark
+  family: llmb
+  version: "0.2.0"
+  description: >-
+    vLLM TP=8 serving NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4 on a single 8x
+    B200 node, running an AIPerf full-trace Mooncake sweep against a synthetic
+    long-context multi-turn dataset. Two knobs select the operating
+    point: CONTEXT (256k native | 1m extrapolated) and CPU KV offload
+    (VLLM_USE_SIMPLE_KV_OFFLOAD 0|1). See RESULTS.md for findings.
+  upstreamSibling: ../README.md   # the SLURM-based recipe this k8s port mirrors
+
+# Human docs. Automation should read this file; operators start with README.md.
+docs:
+  reproduction: README.md            # "Run it on YOUR cluster" step-by-step
+  portability: cluster-profiles/README.md   # per-cluster knob reference
+  troubleshooting: TROUBLESHOOTING.md       # GPU scheduling (DRA), connection errors, timeouts
+  findings: RESULTS.md
+
+# ---------------------------------------------------------------------------
+# Entrypoints — call these instead of poking at the serving backends directly.
+# All scripts source scripts/_lib.sh and respect $CLUSTER (selects the
+# cluster profile under cluster-profiles/) and $KUBECONFIG. The shared harness
+# drives the default serving backend (serving/vllm-aggregated/); see the
+# `serving` section below.
+# ---------------------------------------------------------------------------
+entrypoints:
+  preflight:
+    path: scripts/verify-cluster.sh
+    purpose: "Read-only cluster + namespace readiness check. Exits 0 iff the recipe can run."
+  benchmark:
+    path: scripts/benchmark.sh
+    purpose: "One-command runner: `benchmark.sh <256k|1m|both>` selects the CONTEXT overlay, then run -> fetch -> report (and a 256K-vs-1M overlay for `both`)."
+  helm:
+    path: scripts/run-helm.sh
+    purpose: "Recommended frontend. helm upgrade --install across downloads / server / bench phases. Uses serving/vllm-aggregated/chart/."
+  envsubst:
+    path: scripts/run.sh
+    purpose: "Backup frontend. envsubst over serving/vllm-aggregated/manifests/; useful when Helm is unavailable or you need to inspect rendered YAML."
+  fetch:
+    path: scripts/fetch_results.sh
+    purpose: "Pull benchmark artifacts off the RWO artifacts PVC to ./results/<run-id>/."
+  report:
+    path: scripts/report.sh
+    purpose: "Print a per-concurrency metrics table from a fetched run + emit metrics_summary.csv and dashboard.html."
+
+# ---------------------------------------------------------------------------
+# Serving backends. The shared harness (scripts/, datasets/, cluster-profiles/)
+# drives a serving stack. Two are provided under serving/.
+# ---------------------------------------------------------------------------
+serving:
+  default: vllm-aggregated
+  backends:
+    vllm-aggregated:
+      status: stable
+      path: serving/vllm-aggregated
+      topology: "Aggregated: one vLLM worker, TP=8, prefill+decode co-located on a single 8x B200 node."
+      frontends: [helm, envsubst]        # serving/vllm-aggregated/{chart,manifests}
+      drivenBy: [scripts/run-helm.sh, scripts/run.sh, scripts/benchmark.sh]
+      knobs:
+        context:
+          values: [256k, 1m]
+          setBy: "CONTEXT env (benchmark.sh) -> serving/vllm-aggregated/contexts/<ctx>.{env,values.yaml}"
+          note: "256k = native 262144 window; 1m = 1048576, extrapolated, perf-only (output quality >262K unvalidated)."
+        kvOffload:
+          key: VLLM_USE_SIMPLE_KV_OFFLOAD
+          values: ["0", "1"]
+          setBy: "recipe.env (mirrored in chart values)"
+          note: "CPU KV offload. Verified INERT in the B200 runs (KV capacity was never the bottleneck; prefill compute is). See RESULTS.md."
+    dynamo-disagg:
+      status: experimental
+      path: serving/dynamo-disagg
+      topology: "Disaggregated: Dynamo frontend + 2 prefill workers + 1 decode worker, each TP=8; cross-worker prefill->decode KV transfer via vLLM NixlConnector."
+      apply: "envsubst \"$WL\" < serving/dynamo-disagg/dgd-disagg-1m.yaml | kubectl apply -f -   # WL = whitelist of the ${VAR} knobs; see serving/dynamo-disagg/README.md"
+      benchmarkAgainst: "llmb-benchmark-disagg-1m-frontend:8000 (point the shared bench at this Service)"
+      prerequisites: "Dynamo operator + healthy grove-operator (or the operator-independent runtime.yaml+serving.yaml path). Manifests are parameterized via envsubst: set DISAGG_SCHEDULER_NAME (default-scheduler on DRA nodes) + DISAGG_PREFILL_NODE_1/2 + DISAGG_DECODE_NODE to TRULY-free 8-GPU nodes."
+      note: "Targets the prefill wall directly. Experimental; not driven by the shared harness. See serving/dynamo-disagg/README.md + TROUBLESHOOTING.md."
+
+# ---------------------------------------------------------------------------
+# Inputs the operator (or an automation harness) must supply.
+# ---------------------------------------------------------------------------
+inputs:
+
+  # Tools required on the workstation orchestrating the run.
+  workstation:
+    - tool: kubectl
+      minVersion: "1.33"
+      required: true
+    - tool: envsubst
+      from: "gettext"
+      required: false
+      requiredWhen: "frontend == envsubst"
+    - tool: helm
+      minVersion: "3.13"
+      required: false
+      requiredWhen: "frontend == helm"
+    - tool: tar
+      required: true
+      purpose: "Used by fetch_results.sh to stream artifacts off the PVC."
+    - tool: python3
+      minVersion: "3.9"
+      required: false
+      requiredWhen: "you want metrics_summary.csv (recommended)"
+      purpose: "scripts/aggregate_metrics.py joins AIPerf JSON + server /metrics + GPU stats into one CSV per run."
+    - tool: "python pkg: plotly"
+      minVersion: "5.20"
+      required: false
+      requiredWhen: "you want dashboard.html (recommended)"
+      purpose: "scripts/sla_compare_dashboard.py emits a self-contained interactive HTML; report.sh fails soft if plotly is missing."
+      install: "python3 -m pip install 'plotly>=5.20'"
+
+  # Cluster-side prerequisites. Everything below MUST be in place before
+  # scripts/run-helm.sh or scripts/run.sh will succeed; scripts/verify-cluster.sh
+  # checks each one.
+  cluster:
+    namespace:
+      required: true
+      provenance: "operator (declared in cluster-profiles/<cluster>.env or .values.yaml)"
+      assumedPreExisting: true
+
+    secrets:
+      - name: hf-token-secret
+        keys: [HF_TOKEN]
+        required: true
+        purpose: |
+          HuggingFace token. Must have access to:
+            - the model repo (nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4);
+            - a configured private dataset repository only
+              when explicitly switching back to the Weka fallback.
+
+    storage:
+      - kind: PersistentVolumeClaim
+        name: shared-model-cache
+        accessMode: ReadWriteMany
+        mode: pre-existing
+        sizeGiB: ">= 200"
+        purpose: |
+          Holds the downloaded/seeded model and generated dataset. The
+          B200/Nemotron profile expects the example long-context dataset at
+          datasets/example-long-context/dataset.jsonl before the bench Job starts.
+          One copy serves every concurrent recipe in the namespace.
+        operatorNote: |
+          On Dynamo dev clusters this PVC is auto-provisioned per namespace by
+          a Kyverno ClusterPolicy. On other clusters, the cluster admin must
+          create the PVC + an RWX-backed PV (FSx Lustre on AWS, Filestore on
+          GCP, Azure Files on AKS, etc.) before the recipe will run.
+      - kind: PersistentVolumeClaim
+        name: "<recipe.shortName>-artifacts"
+        accessMode: ReadWriteOnce
+        mode: recipe-created
+        sizeGiB: 50
+        storageClassFrom: "cluster.artifactsStorageClass"
+        purpose: "Per-run benchmark artifacts. The recipe creates and writes; fetch_results.sh reads."
+
+    nodes:
+      - role: server
+        count: 1
+        gpus: 8
+        gpuMemoryRecommendedGiB: ">= 180 each (B200)"
+        hostMemoryRecommendedGiB: ">= 600"
+        cpuCores: ">= 32"
+        rationale: |
+          Nemotron Ultra is served by vLLM with tensor parallel size 8 and
+          expert parallelism on one B200 node. The B200 profile requests
+          600 GiB request/limit host memory to avoid memory scheduling
+          overcommit and fits the observed ~2 TiB allocatable host RAM on
+          g.192.b200.8 nodes. vLLM KV CPU offload is disabled for this
+          Nemotron profile because vLLM 0.20.1 rejects the model's hybrid
+          KV-cache layout when OffloadingConnector is enabled.
+      - role: download
+        count: 2
+        gpus: 0
+        cpuCores: ">= 2"
+        hostMemoryRecommendedGiB: ">= 8"
+      - role: bench
+        count: 1
+        gpus: 0
+        cpuCores: ">= 4"
+        hostMemoryRecommendedGiB: ">= 16"
+        rationale: "AIPerf is a CPU-bound HTTP client; deliberately scheduled OFF the GPU node."
+
+  # Optional inputs that are recipe-internal but can be tuned from the
+  # cluster profile or recipe.env.
+  tunable:
+    - key: server.tp                  # TP_SIZE in recipe.env
+      default: 8
+      note: "Server tensor-parallel size. Matches inputs.cluster.nodes[role=server].gpus."
+    - key: server.vllm.kvOffloadingSize
+      default: 0
+      units: GiB
+      note: "vLLM CPU KV-cache offload buffer, total across all TP ranks. Disabled for the current Nemotron/vLLM profile."
+    - key: server.vllm.kvOffloadingBackend
+      default: native
+      note: "vLLM KV offload backend."
+    - key: server.vllm.cpuOffloadGb
+      default: 0
+      units: GiB per GPU
+      note: "vLLM model weight CPU offload. Disabled for the B200/Nemotron profile unless the model no longer fits."
+    - key: server.vllm.maxNumSeqs
+      default: 256
+      note: "vLLM active sequence scheduler cap. Distinct from context length; c=256 with 128 active sequences was queue-limited."
+    - key: server.vllm.maxNumBatchedTokens
+      default: 32768
+      note: "vLLM per-iteration token batching cap."
+    - key: bench.concurrencies        # CONCURRENCIES in recipe.env
+      default: ""
+      note: "Empty enables adaptive sweep; non-empty fixed list preserves backward-compatible mode."
+    - key: bench.concurrencyStart
+      default: 64
+    - key: bench.concurrencyMax
+      default: 512
+    - key: bench.ttftLimitMs
+      default: 10000
+    - key: bench.tpotLimitMs
+      default: 100
+    - key: bench.connectionReuseStrategy   # CONNECTION_REUSE_STRATEGY in recipe.env
+      default: sticky-user-sessions
+      note: |
+        AIPerf --connection-reuse-strategy. sticky-user-sessions pins each
+        simulated user to one long-lived connection: faithful to real agentic
+        clients and avoids connection-churn failures (EPERM / ConnectionRefused /
+        conntrack exhaustion) under high concurrency against the Service VIP.
+        Empty omits the flag. See TROUBLESHOOTING.md.
+    - key: bench.requestTimeoutSeconds     # REQUEST_TIMEOUT_SECONDS in recipe.env
+      default: 3600
+      units: seconds
+      note: |
+        AIPerf per-request CLIENT timeout. 3600 (not 600) so the heaviest 1M
+        prefills complete instead of being dropped by the client, keeping work
+        equal across rungs. See RESULTS.md (fairness caveat) + TROUBLESHOOTING.md.
+    - key: bench.duration             # BENCH_DURATION in recipe.env
+      default: 900
+      units: seconds
+    - key: bench.gpuTelemetry.mode    # GPU_TELEMETRY in recipe.env
+      default: auto
+      note: |
+        Per-GPU power/util/mem/clocks time-series (gpu_stats.csv), used for
+        perf/watt. auto | exec | dcgm | off. The bench Pod is CPU-only, so
+        telemetry is captured FROM the server side (exec nvidia-smi in the
+        server Pod, resolved via label selector OR Service Endpoints). A
+        preflight self-test writes gpu_stats.status before the sweep. auto
+        prefers dcgmExporterUrl if set, else exec. See TROUBLESHOOTING.md
+        ("GPU telemetry gpu_stats.csv is empty").
+    - key: bench.gpuTelemetry.serverContainer   # SERVER_CONTAINER in recipe.env
+      default: sglang
+      note: Server container to exec into; falls back to the Pod default container.
+    - key: bench.gpuTelemetry.dcgmExporterUrl    # DCGM_EXPORTER_URL in recipe.env
+      default: ""
+      note: |
+        DCGM-exporter Prometheus URL for clusters that forbid exec into app
+        containers (your cluster's DCGM exporter metrics endpoint). Maps
+        DCGM_FI_DEV_POWER_USAGE/_GPU_UTIL/_FB_USED/_SM_CLOCK onto gpu_stats.csv.
+    - key: cluster.useDynamoTolerations
+      default: true
+      note: |
+        Emits the standard Dynamo dev-cluster toleration union
+        (dedicated=user-workload + arm64 + nvidia.com/gpu). Set to false on
+        any cluster whose user-schedulable nodes are not tainted.
+
+# ---------------------------------------------------------------------------
+# Security posture. The recipe creates a Role + RoleBinding (namespace-scoped)
+# for the bench Pod's ServiceAccount. Listed explicitly because pods/exec is
+# a meaningful privilege bump some clusters disallow.
+# ---------------------------------------------------------------------------
+permissions:
+  benchServiceAccount:
+    role: "<recipe.shortName>-bench"
+    namespace: "<inputs.cluster.namespace>"
+    rules:
+      - apiGroups: [""]
+        resources: ["pods"]
+        verbs: ["get", "list", "watch"]
+        purpose: "Server-restart guard: detect if the server Pod was rescheduled mid-step (writes dirty.flag)."
+      - apiGroups: [""]
+        resources: ["pods/exec"]
+        verbs: ["create"]
+        purpose: |
+          GPU telemetry capture: every SCRAPE_INTERVAL seconds the bench Pod
+          shells `nvidia-smi --query-gpu` inside the server container.
+        riskNote: |
+          This Role grants `pods/exec: ["create"]` AND `pods: ["get","list","watch"]`
+          namespace-wide. The bench ServiceAccount can therefore enumerate every
+          Pod in the namespace and `exec` into any of them — including any
+          sidecars (e.g. istio-proxy) and any other recipes' Pods that happen to
+          share the namespace. The `pods/exec` verb does not honour
+          `resourceNames` cleanly across pod restarts (the bench Pod's target
+          server is re-resolved each step), so RBAC tightening to a single named
+          pod is not a clean fix here. **If you run this recipe alongside
+          untrusted workloads, put it in its own dedicated namespace.**
+
+          The pods/exec rule is used ONLY to invoke `nvidia-smi --query-gpu`
+          inside the server container for `gpu_stats.csv`. If your
+          security posture forbids exec into application containers, set
+          GPU_TELEMETRY=dcgm with DCGM_EXPORTER_URL pointing at a DCGM-exporter
+          endpoint (exec-free GPU telemetry via HTTP), or GPU_TELEMETRY=off,
+          and delete the pods/exec rule from
+          serving/vllm-aggregated/chart/templates/bench-job.yaml +
+          serving/vllm-aggregated/manifests/06-bench-job.yaml.
+          server_metrics_timeseries is unaffected either way — it uses HTTP
+          /metrics, not exec.
+
+# ---------------------------------------------------------------------------
+# Outputs produced by a successful run.
+# ---------------------------------------------------------------------------
+outputs:
+
+  remote:
+    pvc: "<recipe.shortName>-artifacts"
+    layout: |
+      /artifacts/<run-id>/
+        ├── server_initial.id
+        ├── gpu_stats.status                          # telemetry preflight self-test: gpu_telemetry=ok|EMPTY|off + resolved pod/mode (catches empty gpu_stats.csv up front)
+        ├── run_meta.json                             # Job-lifecycle bookend plus sweep decisions: coarse_max, refined_max, executed_sequence, per-step pass/fail.
+        ├── sweep_decisions.json                      # Adaptive sweep stop/refinement summary and per-step decisions.
+        ├── _shared/inputs.json                       # ~2.2 GiB, AIPerf dataset cache (deduped across concurrencies)
+        └── concurrency_<N>/
+            ├── config.yaml                           # stub parsed by extract_metrics.sh
+            ├── logs/aiperf/
+            │   ├── profile_export_aiperf.csv         # AIPerf single-value + percentile blocks
+            │   ├── profile_export_aiperf.json        # same data, machine-readable; preferred by aggregate_metrics.py
+            │   ├── profile_export.jsonl              # per-request records; used for time-series binning
+            │   ├── inputs.json -> _shared/inputs.json
+            │   └── ... (other AIPerf artifacts)
+            ├── sglang_metrics.prom                   # compatibility-named /metrics scrape at the end of this step
+            ├── server_metrics_timeseries/<unix>.prom # 10s-cadence /metrics snapshots during this step
+            ├── gpu_stats.csv                         # nvidia-smi rows (one per GPU per tick) for this step
+            └── (dirty.flag)                          # written iff the server pod restarted mid-step
+
+  local:
+    root: "./results/<run-id>/"
+    note: "fetch_results.sh streams the remote layout above (minus inputs.json by default) to the workstation."
+    derived:
+      # Both files are produced by scripts/report.sh on the workstation
+      # from the per-step artifacts above. They never live in the cluster.
+      - path: "./results/<run-id>/metrics_summary.csv"
+        producedBy: "scripts/aggregate_metrics.py"
+        schemaVersion: 6
+        note: |
+          One row per concurrency covering AIPerf user-centric metrics
+          (full p10..p99 ladders for request_latency / TTFT / ITL, dispatched +
+          errored + successful request counts, decode + total throughputs),
+          runtime-specific
+          cache metrics (SGLang HiCache columns or vLLM prefix-cache / KV usage /
+          running+waiting request gauges), GPU averages from `gpu_stats.csv`,
+          server-pod CPU rate, per-request ISL distribution
+          (`isl_min/p25/p50/p75/p99/max`),
+          derived headlines (`throughput_per_gpu`, `tokens_per_s_per_user_from_itl`,
+          `est_active_kv_tokens`), and the run-level lifecycle bookend
+          (`run_started_at`, `run_completed_at`, `run_wall_seconds`) sourced from
+          `run_meta.json` — denormalised onto every row so consumers don't need
+          a side-channel join. File starts with a `# schema_version=N` comment
+          line; pandas readers must pass `comment="#"` (its default is None).
+      - path: "./results/<run-id>/dashboard.html"
+        producedBy: "scripts/sla_compare_dashboard.py"
+        note: |
+          Self-contained interactive HTML (Plotly bundle inlined). report.sh
+          renders the single fetched run; the same tool overlays multiple runs
+          when passed more than one `--run LABEL=DIR`. Layout: SLA scatter
+          (Output TPS/GPU vs Output TPS/User, marker fill recolored GREEN/RED in
+          the browser from the selected TTFT/TPOT percentile + limit controls) on
+          top; cISL / nISL / OSL request-size distribution panels at a selectable
+          matched concurrency below (explains *why* curves differ). Includes a
+          fairness guard that flags when runs meant to be the same workload
+          diverge in completed-request count or mean input size.
+        requires: ["plotly>=5.20"]
+
+# ---------------------------------------------------------------------------
+# Labels every recipe-managed resource carries. Use these for cleanup,
+# coexistence, and cross-recipe automation.
+# ---------------------------------------------------------------------------
+labels:
+  required:
+    "app.kubernetes.io/name":       "<recipe.shortName>"
+    "app.kubernetes.io/instance":   "<run-id>"
+    "app.kubernetes.io/managed-by": "llmb-recipe"
+    "app.kubernetes.io/part-of":    "llm-benchmarking-collection"
+    "llmb.nvidia.com/recipe":       "<recipe.shortName>"
+    "llmb.nvidia.com/run-id":       "<run-id>"
+    "llmb.nvidia.com/owner":        "<owner>"
+  component:
+    description: "Component-distinguishing label."
+    key: "app.kubernetes.io/component"
+    values: [server, bench, model-download, dataset-download, artifacts, fetch, verify]
+
+# ---------------------------------------------------------------------------
+# Naming. Every Kubernetes resource the recipe creates is prefixed so two
+# recipes can share a namespace without colliding.
+# ---------------------------------------------------------------------------
+naming:
+  prefix: "<recipe.shortName>-"
+  examples:
+    - "llmb-benchmark-server"           # Deployment
+    - "llmb-benchmark-sglang"           # Service
+    - "llmb-benchmark-bench-<run-id>"   # bench Job
+    - "llmb-benchmark-artifacts"        # PVC
+
+# ---------------------------------------------------------------------------
+# Cleanup contracts. Use the label selector below to delete everything the
+# recipe ever created, no matter which frontend ran.
+# ---------------------------------------------------------------------------
+cleanup:
+  scope:
+    allRuns:        'llmb.nvidia.com/recipe=<recipe.shortName>'
+    singleRun:      'llmb.nvidia.com/recipe=<recipe.shortName>,llmb.nvidia.com/run-id=<run-id>'
+  artifactsPvc:
+    keepByDefault: true
+    note: "The artifacts PVC is reused across runs; both frontends preserve it unless --delete-artifacts is passed."
+  envsubstFrontend: "scripts/run.sh --clean [--delete-artifacts]"
+  helmFrontend:     "scripts/run-helm.sh --clean [--delete-artifacts]"
+
+# ---------------------------------------------------------------------------
+# Validation status.
+# ---------------------------------------------------------------------------
+validation:
+  evidence: RESULTS.md

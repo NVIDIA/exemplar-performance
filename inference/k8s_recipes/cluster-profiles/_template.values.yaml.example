@@ -1,0 +1,53 @@
+# Generic cluster overrides (Stage 1 / Helm frontend).
+#
+# Use this as a starting point for any Kubernetes cluster the recipe does
+# not already ship a dedicated `<cluster>.values.yaml.example` for. Steps:
+#
+#   1. Copy this file to <your-cluster>.values.yaml. Real *.values.yaml
+#      files are gitignored on purpose; only *.values.yaml.example is tracked.
+#
+#        cp _template.values.yaml.example my-cluster.values.yaml
+#
+#   2. Replace every <PLACEHOLDER> below with a value appropriate for
+#      your cluster.
+#
+#   3. Run with CLUSTER pointing at your profile filename (without .values.yaml):
+#
+#        CLUSTER=my-cluster ./scripts/run-helm.sh
+#
+# See README.md "Run it on YOUR cluster" for the full porting checklist.
+# This file mirrors `_template.env.example` — anything documented there
+# applies here too.
+
+owner: "<your-username>"   # stamped on resource labels
+
+cluster:
+  name: "<your-cluster-name>"
+  namespace: "<your-namespace>"
+
+  # Pre-existing RWX PVC holding the model + dataset (see _template.env.example
+  # for backing-store options on AWS / GCP / Azure / bare metal).
+  modelCachePvc: shared-model-cache
+  modelCacheMount: /models
+
+  # StorageClass for the recipe-created RWO artifacts PVC. Prefer one with
+  # reclaimPolicy=Delete so cleanup is automatic.
+  artifactsStorageClass: "<your-rwo-storage-class>"   # ebs / standard-rwo / managed-csi / ...
+  artifactsSize: 50Gi
+
+  # Image-pull secret for private registries (empty = unset).
+  imagePullSecret: ""
+
+  # GPUs requested by the SGLang server pod (must match server.tp in the
+  # default chart values unless you override that too).
+  gpuCount: 4
+
+  # See `useDynamoTolerations` in _template.env.example. Set to true ONLY
+  # on a cluster whose user-schedulable GPU nodes carry one or more of:
+  #   dedicated=user-workload | kubernetes.io/arch=arm64 | nvidia.com/gpu=present
+  # Vanilla EKS / GKE / AKS clusters typically need this set to false.
+  useDynamoTolerations: false
+
+# Uncomment to override the SGLang image (e.g. if Docker Hub is rate-limited):
+# images:
+#   sglang: mirror.gcr.io/library/lmsysorg/sglang:v0.5.11

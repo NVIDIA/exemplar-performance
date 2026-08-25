@@ -1,0 +1,48 @@
+{
+  "_note": "GLM-5-FP8 9600-context canonical llm-perf trace config. Derived from the agentic-code mooncake generator shape, scaled down so initial shared/session context and turn growth fit under GLM-5's 9600-token benchmark window.",
+  "new_tokens_per_turn": {
+    "mean": 1000,
+    "median": 400,
+    "max": 3000,
+    "bias": 1.1
+  },
+  "generation_length": {
+    "mean": 500,
+    "median": 300,
+    "max": 1500
+  },
+  "inter_turn_delay": {
+    "agentic_fraction": 0.7,
+    "agentic_delay": {
+      "mean": 2500,
+      "median": 1800
+    },
+    "human_delay": {
+      "mean": 60000,
+      "median": 50000
+    },
+    "max": null
+  },
+  "turns": {
+    "mean": 8,
+    "median": 5,
+    "min": 1,
+    "max": 50,
+    "allow_truncation": true
+  },
+  "max_prompt_tokens": 9600,
+  "block_size": 512,
+  "cache": {
+    "layer1_tokens": 6000,
+    "layer1_5_tokens": 0,
+    "layer1_5_groups": {
+      "num_groups": 400,
+      "zipf_alpha": 0.6
+    },
+    "layer2": {
+      "mean": 1800,
+      "median": 1200,
+      "max": 3200
+    }
+  }
+}

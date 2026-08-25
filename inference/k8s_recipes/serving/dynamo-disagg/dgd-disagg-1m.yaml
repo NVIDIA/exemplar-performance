@@ -1,0 +1,262 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+# DynamoGraphDeployment: DISAGGREGATED (prefill/decode) serving of
+# NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4 at 1M context, for the disagg-vs-agg
+# high-concurrency throughput experiment.
+#
+# Topology: 2 prefill workers (TP=8, one 8-GPU B200 node each) + 1 decode worker
+# (TP=8) + Dynamo frontend/router. 3 GPU nodes total.
+#
+# Cross-worker prefill->decode KV transfer uses vLLM's NixlConnector (kv_role
+# kv_both) -- the NIXL-based transport that the task refers to as "KVBM/NIXL".
+# NOTE: In Dynamo, the *literal* "KVBM" is the DynamoConnector tiered GPU->CPU->disk
+# offload cache; that contradicts the task's "do NOT enable CPU KV offload" and is
+# the alternative path. NixlConnector = pure P2P cross-worker KV transfer,
+# no offload -> matches the design intent and is proven Ready on this cluster.
+#
+# Model config matches the aggregated baseline (server-off512) for a fair
+# comparison. Serving-only args (--tool-call-parser/--reasoning-parser/
+# --enable-auto-tool-choice/--enable-prompt-tokens-details) are intentionally
+# omitted: dynamo.vllm workers only accept vLLM *engine* args and reject those;
+# they do not affect token throughput.
+#
+# PORTABILITY: EXPERIMENTAL; render with `envsubst | kubectl apply` (README.md).
+# Set from recipe.env + your cluster profile: NAMESPACE, OWNER, IMAGE_PULL_SECRET,
+# MODEL_CACHE_PVC, MODEL_CACHE_SUBPATH, SGLANG_IMAGE; plus the disagg-only knobs
+# DISAGG_SCHEDULER_NAME, DISAGG_PREFILL_NODE_1/2, DISAGG_DECODE_NODE. The
+# tolerations block is left literal (per-cluster taint union — trim for your
+# pool). Pick available 8-GPU nodes per TROUBLESHOOTING.md.
+apiVersion: nvidia.com/v1beta1
+kind: DynamoGraphDeployment
+metadata:
+  name: llmb-disagg-1m
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    llmb.nvidia.com/owner: ${OWNER}
+    llmb.nvidia.com/recipe: llmb-disagg
+    llmb.nvidia.com/run-id: disagg-1m
+spec:
+  backendFramework: vllm
+  # Applied to all components unless overridden per-container.
+  env:
+  - {name: HF_HOME, value: /data/hf-cache}
+  - {name: HF_HUB_OFFLINE, value: "1"}
+  - {name: TRANSFORMERS_OFFLINE, value: "1"}
+  - {name: PYTHONUNBUFFERED, value: "1"}
+  - {name: VLLM_ALLOW_LONG_MAX_MODEL_LEN, value: "1"}
+  # DO NOT set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True with NixlConnector:
+  # the CUDA VMM allocator remaps KV-cache virtual addresses to different physical pages,
+  # invalidating the IB memory regions NIXL registers -> corrupt cross-worker KV transfer ->
+  # GARBAGE decode output (silently, on older images; a hard ValidationError on newer ones).
+  - {name: VLLM_WORKER_MULTIPROC_METHOD, value: spawn}
+  # NIXL / UCX / NCCL transport for cross-node KV transfer (from the proven
+  # vllm disagg reference on this cluster).
+  - {name: UCX_TLS, value: "^cuda_ipc"}
+  - {name: UCX_RNDV_SCHEME, value: get_zcopy}
+  - {name: UCX_MAX_RNDV_RAILS, value: "4"}
+  - {name: NCCL_IB_DISABLE, value: "0"}
+  - {name: NCCL_SOCKET_IFNAME, value: eth0}
+  - {name: GLOO_SOCKET_IFNAME, value: eth0}
+  - {name: NIXL_LOG_LEVEL, value: INFO}
+  # Hybrid Mamba + disagg correctness/compat settings (from the proven hybrid
+  # Mamba disagg reference qwen35-122b-1p2d).
+  - {name: VLLM_SSM_CONV_STATE_LAYOUT, value: DS}
+  - {name: VLLM_ALLOW_CHUNKED_LOCAL_ATTN_WITH_HYBRID_KV_CACHE, value: "1"}
+  - {name: VLLM_ALLREDUCE_USE_SYMM_MEM, value: "0"}
+  - {name: DYN_VLLM_APPEND_PREFILL_OUTPUT_TOKENS, value: "0"}
+  components:
+
+  # ----------------------------------------------------------------- Frontend
+  - name: Frontend
+    type: frontend
+    replicas: 1
+    podTemplate:
+      spec:
+        # kai-scheduler refuses device-plugin nvidia.com/gpu on DRA-enabled nodes,
+        # leaving only 2 schedulable free 8-GPU nodes. default-scheduler places
+        # device-plugin GPUs on DRA nodes fine (as the aggregated servers and other
+        # 8-GPU pods on this cluster do), unlocking the 3rd node.
+        schedulerName: ${DISAGG_SCHEDULER_NAME}
+        imagePullSecrets:
+        - name: ${IMAGE_PULL_SECRET}
+        tolerations: &tols
+        - {key: schwinns.ai-dynamo.io/gms-bench, operator: Exists}
+        - {key: dra, operator: Exists}
+        - {key: nvidia.com/gpu, operator: Exists}
+        - {effect: NoSchedule, key: dedicated, operator: Equal, value: user-workload}
+        - {effect: NoExecute, key: dedicated, operator: Equal, value: user-workload}
+        - {effect: NoSchedule, key: kubernetes.io/arch, operator: Equal, value: arm64}
+        - {effect: NoSchedule, key: nvidia.com/gpu, operator: Equal, value: present}
+        - {effect: NoSchedule, key: nvidia.com/gpu, operator: Equal, value: "true"}
+        containers:
+        - name: main
+          image: ${SGLANG_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-lc"]
+          args:
+          - |
+            exec python3 -m dynamo.frontend \
+              --http-host 0.0.0.0 \
+              --http-port 8000
+          ports:
+          - {containerPort: 8000, name: http, protocol: TCP}
+          resources:
+            requests: {cpu: "8", memory: 32Gi}
+            limits: {cpu: "16", memory: 64Gi}
+          volumeMounts:
+          - {mountPath: /data/hf-cache, name: model-cache, readOnly: true, subPath: ${MODEL_CACHE_SUBPATH}}
+        volumes:
+        - name: model-cache
+          persistentVolumeClaim: {claimName: ${MODEL_CACHE_PVC}}
+
+  # ---------------------------------------------------------- Prefill workers
+  # replicas: 2, pinned across two chosen available 8-GPU B200 nodes. Each pod
+  # requests 8 GPUs so the two replicas cannot co-locate; nodeAffinity restricts
+  # them to DISAGG_PREFILL_NODE_1 + DISAGG_PREFILL_NODE_2 (device-plugin
+  # allocatable hides DRA claims — pick free nodes per TROUBLESHOOTING.md).
+  - name: VllmPrefillWorker
+    type: prefill
+    replicas: 2
+    sharedMemorySize: 64Gi
+    podTemplate:
+      spec:
+        # kai-scheduler refuses device-plugin nvidia.com/gpu on DRA-enabled nodes,
+        # leaving only 2 schedulable free 8-GPU nodes. default-scheduler places
+        # device-plugin GPUs on DRA nodes fine (as the aggregated servers and other
+        # 8-GPU pods on this cluster do), unlocking the 3rd node.
+        schedulerName: ${DISAGG_SCHEDULER_NAME}
+        imagePullSecrets:
+        - name: ${IMAGE_PULL_SECRET}
+        tolerations: *tols
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: In
+                  values:
+                  - ${DISAGG_PREFILL_NODE_1}
+                  - ${DISAGG_PREFILL_NODE_2}
+        containers:
+        - name: main
+          image: ${SGLANG_IMAGE}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 0
+            capabilities: {add: [IPC_LOCK, SYS_RESOURCE]}
+          command: ["/bin/bash", "-lc"]
+          args:
+          - |
+            set -eu
+            ulimit -l unlimited 2>/dev/null || true
+            SNAPSHOT_DIR=$(python3 -c "
+            from huggingface_hub import snapshot_download
+            print(snapshot_download(repo_id='nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4', cache_dir='/data/hf-cache/hub', local_files_only=True))")
+            echo "Resolved model snapshot: $SNAPSHOT_DIR"
+            test -f "$SNAPSHOT_DIR/config.json" || { echo "FATAL: model config.json missing at $SNAPSHOT_DIR" >&2; exit 64; }
+            exec python3 -m dynamo.vllm \
+              --model "$SNAPSHOT_DIR" \
+              --served-model-name nemotron-ultra-3 \
+              --tensor-parallel-size 8 \
+              --enable-expert-parallel \
+              --gpu-memory-utilization 0.85 \
+              --max-model-len 1048576 \
+              --max-num-seqs 256 \
+              --max-num-batched-tokens 16384 \
+              --block-size 64 \
+              --kv-cache-dtype fp8 \
+              --mamba-ssm-cache-dtype float16 \
+              --enable-chunked-prefill \
+              --enable-prefix-caching \
+              --trust-remote-code \
+              --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_connector_extra_config":{"num_threads":8}}' \
+              --disaggregation-mode prefill
+          resources:
+            requests: {cpu: "16", memory: 256Gi, nvidia.com/gpu: "8", rdma/ib: "1"}
+            limits: {cpu: "96", memory: 900Gi, nvidia.com/gpu: "8", rdma/ib: "1"}
+          volumeMounts:
+          - {mountPath: /data/hf-cache, name: model-cache, readOnly: true, subPath: ${MODEL_CACHE_SUBPATH}}
+        volumes:
+        - name: model-cache
+          persistentVolumeClaim: {claimName: ${MODEL_CACHE_PVC}}
+
+  # ----------------------------------------------------------- Decode worker
+  - name: VllmDecodeWorker
+    type: decode
+    replicas: 1
+    sharedMemorySize: 64Gi
+    podTemplate:
+      spec:
+        # kai-scheduler refuses device-plugin nvidia.com/gpu on DRA-enabled nodes,
+        # leaving only 2 schedulable free 8-GPU nodes. default-scheduler places
+        # device-plugin GPUs on DRA nodes fine (as the aggregated servers and other
+        # 8-GPU pods on this cluster do), unlocking the 3rd node.
+        schedulerName: ${DISAGG_SCHEDULER_NAME}
+        imagePullSecrets:
+        - name: ${IMAGE_PULL_SECRET}
+        tolerations: *tols
+        nodeSelector:
+          kubernetes.io/hostname: ${DISAGG_DECODE_NODE}
+        containers:
+        - name: main
+          image: ${SGLANG_IMAGE}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 0
+            capabilities: {add: [IPC_LOCK, SYS_RESOURCE]}
+          command: ["/bin/bash", "-lc"]
+          args:
+          - |
+            set -eu
+            ulimit -l unlimited 2>/dev/null || true
+            SNAPSHOT_DIR=$(python3 -c "
+            from huggingface_hub import snapshot_download
+            print(snapshot_download(repo_id='nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4', cache_dir='/data/hf-cache/hub', local_files_only=True))")
+            echo "Resolved model snapshot: $SNAPSHOT_DIR"
+            test -f "$SNAPSHOT_DIR/config.json" || { echo "FATAL: model config.json missing at $SNAPSHOT_DIR" >&2; exit 64; }
+            exec python3 -m dynamo.vllm \
+              --model "$SNAPSHOT_DIR" \
+              --served-model-name nemotron-ultra-3 \
+              --tensor-parallel-size 8 \
+              --enable-expert-parallel \
+              --gpu-memory-utilization 0.85 \
+              --max-model-len 1048576 \
+              --max-num-seqs 256 \
+              --max-num-batched-tokens 16384 \
+              --block-size 64 \
+              --kv-cache-dtype fp8 \
+              --mamba-ssm-cache-dtype float16 \
+              --enable-chunked-prefill \
+              --enable-prefix-caching \
+              --trust-remote-code \
+              --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_connector_extra_config":{"num_threads":8}}' \
+              --disaggregation-mode decode
+          resources:
+            requests: {cpu: "16", memory: 256Gi, nvidia.com/gpu: "8", rdma/ib: "1"}
+            limits: {cpu: "96", memory: 900Gi, nvidia.com/gpu: "8", rdma/ib: "1"}
+          volumeMounts:
+          - {mountPath: /data/hf-cache, name: model-cache, readOnly: true, subPath: ${MODEL_CACHE_SUBPATH}}
+        volumes:
+        - name: model-cache
+          persistentVolumeClaim: {claimName: ${MODEL_CACHE_PVC}}

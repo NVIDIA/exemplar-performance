@@ -1,0 +1,143 @@
+# sglang-disagg — Dynamo HTTP frontend for disaggregated SGLang serving (rendered from a cell's recipe.yaml).
+# {{ '{{ ... }}' }} = recipe truth (baked at render). ${ ... } = cluster truth (envsubst at launch).
+#
+# The frontend is the OpenAI-compatible entrypoint: it discovers prefill/decode workers via etcd + NATS
+# (rendered by infra.yaml) and routes disaggregated requests to them. It holds NO GPUs. The Service is
+# named "{{ envelope.name }}-server" so the shared aiperf bench-Job (serving/aiperf/templates) reaches it
+# at http://{{ envelope.name }}-server:8000 with no per-stack special-casing.
+{% set model_store = "/model-store" %}
+{% set model_repo_cache_dir = "models--" ~ (serving.model_repo | replace("/", "--")) %}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ envelope.name }}-server
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/served-model: {{ serving.served_model }} }
+spec:
+  selector: { app: {{ envelope.name }}-frontend }
+  ports: [{ port: 8000, targetPort: 8000, name: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ envelope.name }}-frontend
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/served-model: {{ serving.served_model }} }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: {{ envelope.name }}-frontend } }
+  template:
+{% if envelope.get('gpu_type') == 'B200' %}
+    metadata: { labels: { app: {{ envelope.name }}-frontend, llmb.nvidia.com/recipe: {{ envelope.name }} } }
+{% else %}
+    metadata: { labels: { app: {{ envelope.name }}-frontend } }
+{% endif %}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      schedulerName: ${SCHEDULER_NAME}
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+{% set _tols = (envelope.get('requires') or {}).get('tolerations') %}
+{% if _tols %}
+      tolerations:
+{% for t in _tols %}
+        - { key: {{ t }}, operator: Exists }
+{% endfor %}
+{% endif %}
+      initContainers:
+        # Dynamo constructs the frontend model card from config/tokenizer metadata. The workers advertise
+        # their pinned local snapshot path, so that path must also exist in the frontend. Never mount the
+        # weights PVC here: an RWO claim would deadlock multi-node disaggregation. Stage only the small
+        # revision-pinned HF metadata into pod-local storage instead.
+        - name: stage-model-metadata
+          image: {{ image_ref }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              python3 - <<"PY"
+              import os
+              from pathlib import Path
+              from huggingface_hub import snapshot_download
+
+              target = Path("{{ model_store }}/${MODEL_CACHE_SUBPATH}/hub/{{ model_repo_cache_dir }}/snapshots/{{ serving.model_revision }}")
+              target.mkdir(parents=True, exist_ok=True)
+              snapshot_download(
+                  repo_id={{ serving.model_repo | string | tojson }},
+                  revision={{ serving.model_revision | string | tojson }},
+                  local_dir=target,
+                  token=os.environ.get("HF_TOKEN"),
+                  ignore_patterns=["*.safetensors", "*.bin", "*.pt", "*.pth", "*.gguf"],
+              )
+              if not (target / "config.json").is_file():
+                  raise SystemExit(f"pinned model metadata missing config.json: {target}")
+              print(f"frontend metadata staged: {target}")
+              PY
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: ${HF_SECRET}, key: token }
+          volumeMounts:
+            - { mountPath: {{ model_store }}, name: model-metadata }
+      containers:
+        - name: frontend
+          image: {{ image_ref }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -eu
+{% if envelope.get('gpu_type') == 'B200' %}
+              # High-concurrency profiles can exceed the container default of 1024 open files.
+              ulimit -n 524288 || true
+{% endif %}
+{% for cmd in serving.get('frontend_bootstrap_commands', []) %}
+              {{ cmd }}
+{% endfor %}
+              # Bind the frontend to the same explicit model identity and pinned local metadata path
+              # advertised by the workers. Without this, discovery may reinterpret an absolute worker
+              # path as a Hugging Face repository ID while reconciling the model registration.
+              exec python3 -m dynamo.frontend \
+                --http-port=8000 \
+                --enforce-disagg \
+                --model-name {{ serving.served_model | string | tojson }} \
+                --model-path {{ model_store }}/${MODEL_CACHE_SUBPATH}/hub/{{ model_repo_cache_dir }}/snapshots/{{ serving.model_revision }}
+          ports: [{ containerPort: 8000, name: http, protocol: TCP }]
+          env:
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: ETCD_ENDPOINTS, value: "http://{{ envelope.name }}-etcd:2379" }
+            - { name: NATS_SERVER, value: "nats://{{ envelope.name }}-nats:4222" }
+            - { name: DYN_REQUEST_PLANE, value: "nats" }
+{% if serving.get('dynamo_log') %}
+            # Keep frontend and workers on the same optional recipe-selected Dynamo log filter.
+            - { name: DYN_LOG, value: {{ serving.get('dynamo_log') | string | tojson }} }
+{% endif %}
+            - { name: DYN_SKIP_SGLANG_LOG_FORMATTING, value: "1" }
+            - name: POD_UID
+              valueFrom:
+                fieldRef: { fieldPath: metadata.uid }
+          volumeMounts:
+            - { mountPath: {{ model_store }}, name: model-metadata, readOnly: true }
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 180   # 30-min budget: workers must register before the frontend is ready
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 8
+          resources:
+            requests: { cpu: "4", memory: 16Gi }
+            limits:   { cpu: "16", memory: 64Gi }
+      volumes:
+        - name: model-metadata
+          emptyDir: { sizeLimit: 16Gi }

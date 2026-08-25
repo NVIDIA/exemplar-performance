@@ -451,7 +451,7 @@ To disable: `export LLMB_DISABLE_RESUME=1`
 
 ```bash
 enroot import -o $LLMB_INSTALL/images/nvidian+nemo+25.02.01.sqsh \
-    docker://nvcr.io/nvidian/nemo:25.02.01
+    docker://nvcr.io/nvidia/nemo:25.02.01
 ```
 
 Use `-a <arch>` flag if node architecture differs.

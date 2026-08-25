@@ -1,0 +1,70 @@
+{
+  "_doc": [
+    "Maps common metric names to the Prometheus series exported by each runtime.",
+    "Use the first candidate present in the scrape. Return no value when none is present.",
+    "Sum label values within the selected family, but do not combine alternative families.",
+    "Add a mapping only after checking it against that runtime's metrics output."
+  ],
+
+  "concepts": {
+    "generation_tokens": "Monotonic count of generated tokens, excluding prompt tokens.",
+    "requests_running":  "Requests currently executing in the engine.",
+    "requests_waiting":  "Requests admitted but waiting to execute.",
+    "kv_cache_usage":    "Fraction (0-1) or percentage of the GPU KV cache in use.",
+    "prefix_cache_hits":    "Cumulative prefix-cache hits.",
+    "prefix_cache_queries": "Cumulative prefix-cache lookups; hits divided by queries gives the hit rate.",
+    "external_cache_hits":    "Hits served by an external or offload cache tier.",
+    "external_cache_queries": "Lookups against an external or offload cache tier."
+  },
+
+  "runtimes": {
+    "vllm": {
+      "generation_tokens":      ["vllm:generation_tokens_total"],
+      "requests_running":       ["vllm:num_requests_running"],
+      "requests_waiting":       ["vllm:num_requests_waiting"],
+      "kv_cache_usage":         ["vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc"],
+      "prefix_cache_hits":      ["vllm:prefix_cache_hits_total"],
+      "prefix_cache_queries":   ["vllm:prefix_cache_queries_total"],
+      "external_cache_hits":    ["vllm:external_prefix_cache_hits_total"],
+      "external_cache_queries": ["vllm:external_prefix_cache_queries_total"]
+    },
+
+    "dynamo": {
+      "_note": [
+        "The frontend does not expose KV-cache utilization. Leave it unknown unless another endpoint supplies it.",
+        "The output-token entries are alternatives; use one family at a time."
+      ],
+      "generation_tokens":      ["dynamo_frontend_output_tokens_total", "dynamo_component_output_tokens_total"],
+      "requests_running":       ["dynamo_frontend_inflight_requests", "dynamo_request_plane_inflight_requests"],
+      "requests_waiting":       ["dynamo_frontend_queued_requests"],
+      "kv_cache_usage":         [],
+      "prefix_cache_hits":      [],
+      "prefix_cache_queries":   [],
+      "external_cache_hits":    [],
+      "external_cache_queries": []
+    },
+
+    "sglang": {
+      "_note": ["No metric mappings are currently defined for this runtime."],
+      "generation_tokens":      [],
+      "requests_running":       [],
+      "requests_waiting":       [],
+      "kv_cache_usage":         [],
+      "prefix_cache_hits":      [],
+      "prefix_cache_queries":   [],
+      "external_cache_hits":    [],
+      "external_cache_queries": []
+    },
+
+    "trtllm": {
+      "generation_tokens":      [],
+      "requests_running":       [],
+      "requests_waiting":       [],
+      "kv_cache_usage":         [],
+      "prefix_cache_hits":      [],
+      "prefix_cache_queries":   [],
+      "external_cache_hits":    [],
+      "external_cache_queries": []
+    }
+  }
+}

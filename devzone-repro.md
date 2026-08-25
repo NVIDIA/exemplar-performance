@@ -12,7 +12,7 @@ Before configuring the orchestrator, ensure you have downloaded the required NVF
 
 ## Environment Setup
 
-Benchmarking is orchestrated using [srt-slurm](https://github.com/ishandhanani/srt-slurm), a command-line tool for distributed LLM inference benchmarks on SLURM clusters. (Support for benchmarking Kubernetes clusters coming soon.)
+Benchmarking is orchestrated using [srt-slurm](https://github.com/NVIDIA/srt-slurm), a command-line tool for distributed LLM inference benchmarks on SLURM clusters. (Support for benchmarking Kubernetes clusters coming soon.)
 
 1. **Clone and Install:**
 

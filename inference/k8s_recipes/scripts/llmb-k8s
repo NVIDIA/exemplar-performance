@@ -1,0 +1,514 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+"""llmb-k8s — unified front-door for k8s recipe operations.
+
+Dispatches each verb to the right tool(s) for the cell's scenario, so callers never need to
+know whether a cell uses stage-dataset, sweep, or aggregate_metrics. This is the stable contract the main-llmb integration (Phase 3) will target.
+
+Usage:
+  llmb-k8s <verb> <cell-dir> <cluster-profile> [extra-args...]
+  llmb-k8s <verb> --recipe <cell-dir> --cluster <name> [extra-args...]   # named flags
+
+The profile is resolved before any cluster work: a missing profile fails fast with the
+list of existing profiles + how to create one, and a profile that pins KUBE_CONTEXT is reachability-checked.
+
+Verbs:
+  dry-run     dryrun.sh — OFFLINE manifest validation (no cluster)
+  preflight   preflight.py — LIVE resource-aware cluster check (namespace, GPUs free, PVCs, secrets, RDMA…)
+  stage       stage the benchmark dataset onto the cluster PVC
+  deploy      deploy.sh — apply server manifests (idempotent)
+  run         run.sh — full lifecycle: stage → deploy → wait-ready → sweep → fetch
+  analyze     aggregate metrics and check the exemplar
+  publish     publish.py — metric + RESULTS.md + catalog rebuild (local result record)
+  compare     analysis/compare.py — cross-cluster comparison report (within-X% / ranking) across cells or a facet
+  reclaim     reclaim.py — release stale GPU-holding pods/deployments
+  install     install.py — pick a cluster (or take one), show what's already installed, select +
+              download model weights onto the PVC. Safe + idempotent to re-run.
+  profile     validate (profile_resolver.py) | init — check completeness + reachability of a cluster profile
+  status      observe.py — one read-only panel: render/publish/last-run + live server + active Job
+  jobs        observe.py — list this recipe's (or --all) Jobs: state · run-id · created
+  logs        observe.py — resolve the newest (or named) Job and stream its logs
+
+Scenario registry (envelope.scenario → which tools each verb dispatches to):
+
+  llm-perf:
+    stage     → scripts/stage-dataset.sh <cell> <profile>
+    analyze   → analysis/llm-perf/aggregate_metrics.py <run_dir>
+                analysis/llm-perf/exemplar_check.py <cell> <run_dir>/metrics_summary.csv
+
+Adding a new scenario: add one entry to REGISTRY below. Everything else is automatic.
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+except ImportError:
+    sys.exit("llmb-k8s: requires pyyaml (pip install pyyaml)")
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import profile_resolver as pr  # noqa: E402
+import lane as lane_mod        # noqa: E402  (shared lane routing)
+
+# Verbs that call the live cluster and should fail before dispatch if the
+# profile pins an unreachable context. `preflight` is read-only, but still live:
+# letting it continue on a bad KUBE_CONTEXT produces misleading missing
+# namespace/GPU/PVC/secret errors.
+CLUSTER_TOUCHING = {"deploy", "run", "stage", "preflight"}
+
+
+def normalize_cell_profile(rest: list[str]) -> tuple[str | None, str | None, list[str]]:
+    """Accept EITHER positional `<cell> <profile> [extra...]` OR named
+    `--recipe <cell> --cluster <name> [extra...]`. Returns (cell, profile, extra). Positional stays
+    fully supported, so this is purely additive."""
+    if "--recipe" in rest or "--cluster" in rest:
+        cell = profile = None
+        extra: list[str] = []
+        i = 0
+        while i < len(rest):
+            if rest[i] == "--recipe" and i + 1 < len(rest):
+                cell = rest[i + 1]; i += 2; continue
+            if rest[i] == "--cluster" and i + 1 < len(rest):
+                profile = rest[i + 1]; i += 2; continue
+            extra.append(rest[i]); i += 1
+        return cell, profile, extra
+    if len(rest) < 2:
+        return (rest[0] if rest else None), None, []
+    return rest[0], rest[1], list(rest[2:])
+
+
+def resolve_or_exit(profile: str, verb: str) -> None:
+    """Validate the profile before any cluster work. Fast: only probes reachability when the
+    profile pins a KUBE_CONTEXT. On a missing profile, fail with the actionable list instead of a cryptic
+    error deep inside a script. Pins KUBE_CONTEXT into the child env when the profile sets one."""
+    res = pr.resolve(profile)
+    if res.status == pr.NOT_FOUND:
+        print(res.message)
+        raise SystemExit(1)
+    if res.status == pr.UNREACHABLE:
+        print(res.message)
+        if verb in CLUSTER_TOUCHING:
+            raise SystemExit(1)
+    if res.context:
+        os.environ["KUBE_CONTEXT"] = res.context  # consumed by scripts that pin `kubectl --context` (0.9+)
+
+
+def cell_for_run(run_id: str) -> Path | None:
+    """run-id → owning cell dir, via the SAME committed record other verbs read: the cell whose
+    runs/index.jsonl contains this run_id (export_dataset/publish key off exactly this). No cluster needed."""
+    import json
+    for idx in sorted(ROOT.glob("recipes/**/runs/index.jsonl")):
+        for ln in idx.read_text().splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                if json.loads(ln).get("run_id") == run_id:
+                    return idx.parent.parent          # recipes/.../<cell>/runs/index.jsonl → <cell>
+            except ValueError:
+                continue
+    return None
+
+
+def load_scenario(cell: Path) -> str:
+    r = yaml.safe_load((cell / "recipe.yaml").read_text()) or {}
+    s = (r.get("envelope") or {}).get("scenario")
+    if not s:
+        sys.exit(f"llmb-k8s: no envelope.scenario in {cell}/recipe.yaml")
+    return s
+
+
+def sh(script: Path, *args: str) -> int:
+    return subprocess.run(["bash", str(script), *args]).returncode
+
+
+def py(script: Path, *args: str) -> int:
+    return subprocess.run([sys.executable, str(script), *args]).returncode
+
+
+# ──── Scenario registry ───────────────────────────────────────────────────────
+# Maps scenario → verb → callable(cell, profile, run_dir, extra) → int exit code.
+# None = not applicable (prints a clear message).
+
+def _stage_llm_perf(cell, profile, _run_dir, extra):
+    return sh(ROOT / "scripts" / lane_mod.cell_lane(cell)["stage"], cell, profile, *extra)
+
+def _analyze_llm_perf(cell, _profile, run_dir, extra):
+    if not run_dir:
+        sys.exit("llmb-k8s analyze: need <run-dir> after <profile>")
+    csv = Path(run_dir) / "metrics_summary.csv"
+    if not csv.exists():
+        print(f"[llmb-k8s] aggregating raw artifacts in {run_dir} ...")
+        rc = py(ROOT / "analysis/llm-perf/aggregate_metrics.py", run_dir, "--out", str(csv))
+        if rc:
+            return rc
+    return py(ROOT / "analysis/llm-perf/exemplar_check.py", cell, str(csv), *extra)
+
+
+REGISTRY: dict[str, dict[str, object]] = {
+    "llm-perf": {
+        "stage":   _stage_llm_perf,
+        "analyze": _analyze_llm_perf,
+    },
+}
+
+# Scenario-agnostic verbs: same command regardless of scenario.
+# {cell} and {profile} are substituted; run_dir and extra are appended as needed.
+COMMON_SH = {
+    "dry-run":   ROOT / "scripts/dryrun.sh",   # OFFLINE manifest validation (no cluster)
+    "deploy":    ROOT / "scripts/deploy.sh",
+    "run":       ROOT / "scripts/run.sh",
+}
+COMMON_PY = {
+    "publish": ROOT / "scripts/publish.py",
+}
+
+# `preflight` runs the LIVE resource-aware check (preflight.py), NOT the offline manifest dry-run — a bad
+# profile (missing secret / wrong storageclass / absent namespace) must FAIL here, not read "DRY RUN OK"
+# Offline manifest validation is available through the separate `dry-run` command.
+KNOWN_VERBS = sorted(
+    list(COMMON_SH) + list(COMMON_PY)
+    + ["preflight", "stage", "analyze", "reclaim", "teardown-all", "compare", "fleet", "status", "jobs", "logs", "profile", "install", "capacity", "port-recipe",
+       "submit", "cancel", "collect", "watch", "init"]
+)
+
+# One-line usage per verb — the single source reused by `help <verb>` and by the unknown-verb hint.
+# Ordered by lifecycle (mirrors the module __doc__), not alphabetically, so `help` reads top-to-bottom.
+# INVARIANT: USAGE keys must equal KNOWN_VERBS (asserted below) so help can never drift from dispatch.
+USAGE: dict[str, str] = {
+    "dry-run":   "llmb-k8s dry-run   <cell> <profile>                    # dryrun.sh — OFFLINE manifest validation (no cluster)",
+    "preflight": "llmb-k8s preflight <cell> <profile>                    # preflight.py — LIVE resource-aware cluster check",
+    "stage":     "llmb-k8s stage     <cell> <profile> [extra...]         # dataset or traces, by scenario",
+    "deploy":    "llmb-k8s deploy    <cell> <profile>                    # deploy.sh — apply server manifests (idempotent)",
+    "run":       "llmb-k8s run       <cell> <profile> [run-id] [flags]   # run.sh — full lifecycle (stage→deploy→bench→fetch)",
+    "submit":    "llmb-k8s submit    <cell> <profile> [run-id] [--rungs \"..\"] [--dry-run] [--deadline-seconds N] [--ttl-seconds N] [--health-timeout N] [--repeat N | --variance N] [--stagger S] [--serial]  # DETACHED: apply {RWX control PVC + bench Job + server w/ ownerRef→Job + deadline + short TTL}, write _submit.json, print run-id, EXIT.  --repeat N = launch N name-suffixed detached repeats (same benchmark_id) for a variance band",
+    "cancel":    "llmb-k8s cancel    <run-id> [--cluster <profile>] [--dry-run | --yes] [--wait-seconds N]  # cancel exactly one detached run; fail-closed identity check + ownerRef server cleanup",
+    "collect":   "llmb-k8s collect   <run-id> | --sweep <sweep-id>  [--cluster <profile>] [publish-args]  # idempotent fetch_results.sh + local publish.py for a detached run; --sweep collects ALL legs of a --repeat sweep + consolidates into the original cell + prints compare --repro",
+    "analyze":   "llmb-k8s analyze   <cell> <run-dir>                    # aggregate + exemplar_check (profile optional — analyze reads a run dir, not a cluster)",
+    "publish":   "llmb-k8s publish   <cell> <profile> <run-dir> [flags]  # publish.py — metric + RESULTS.md + catalog",
+    "compare":   "llmb-k8s compare   <cell...> | --facet <sc> <goal> <dist> | --all | --runs <cell> | --repro <cell> [--baseline C] [--json]   # --repro = within-cluster N-run reproducibility",
+    "fleet":     "llmb-k8s fleet     [--watch [s]] [--stages] [--cluster N] [--fast] [--detail] [--gpu-only]  # fleet.sh — LIVE active-runs-first multi-cluster pane: what's benchmarking · GPUs (ours) · ETA, infra/idle collapsed (parallel + cached + double-buffered --watch). --stages = 3-STAGE journey ① init → ② install → ③ run (① & ② from local stamps, shown even when unreachable).  fleet <cell...> [--json] → fleet_status.py runs.jsonl dashboard",
+    "watch":     "llmb-k8s watch     [run-id ...] [--interval N] [--once]  # live Gantt timelines for all active parallel runs (refreshes every N seconds, default 15)",
+    "reclaim":   "llmb-k8s reclaim   <cluster-profile> [--apply] [--only-job NAME | --all]  (or --cluster <name>)  # GPUs.  --storage = the STORAGE sweeper: delete dead `<cell>-artifacts` PVCs that a VERIFIED collect already vouched for (llmb-k8s reclaim --storage <profile> [--apply] [--older-than 7d] [--json]). Dry-run by default; refuses anything unmarked; model caches are never eligible",
+    "teardown-all": "llmb-k8s teardown-all <cluster-profile> [--apply] [--settle-seconds N] [--max-cycles N]  (or --cluster <name>)  # reclaim --all: tear down EVERY GPU-holding server for our cells + re-verify-until-zero",
+    "install":   "llmb-k8s install   [<cluster-profile>] [--recipes a,b] [--reinstall] [--dry-run|--live-plan]  # NO ARGS = interactive: pick a cluster profile (skipped when there is only one / $LLMB_CLUSTER is set), see what is ALREADY installed there, then multi-select recipes. `install <cluster> [--recipes ...]` is unchanged. Not a tty and no cluster → clear error, never a hang. Re-running is a no-op for already-installed cells (--reinstall overrides)",
+    "init":      "llmb-k8s init      [--cluster <label>] [--play <f> | --record <f> | --express] [--dry-run|-n] [-v]  # fresh-install wizard: run with NO flags to DISCOVER connected clusters (kubectl contexts) and pick one → confirm → write cluster-profiles/<label>.env → prove run-ready (no GPU). --cluster is the OPTIONAL profile LABEL (not a cluster you must know). The S-tier front door over `profile init`",
+    "profile":   "llmb-k8s profile   <validate|init|probe-fabric|provision-imex> --cluster <name>  # validate: completeness + reachability + a DEFAULT no-GPU readiness battery (pull-secret auth, artifacts StorageClass staging round-trip, control RWX, OIDC issuer, GPU nodes); --fast skips the live probes, --recipe <cell> adds per-image pull-org check.  probe-fabric: discover IB/RDMA fabric; provision-imex: Tier-2 NVLink-IMEX ComputeDomain (recover FlashInfer fusion) [--recipe <cell>] [--dry-run] [--deprovision]",
+    "status":    "llmb-k8s status    <cell> <profile>  |  <run-id> [--cluster P]   # observe.py panel (cell+profile) OR detached PVC status.json + Job .status (run-id)",
+    "jobs":      "llmb-k8s jobs      <cluster-profile> [--recipe <cell>] [--all]",
+    "capacity":  "llmb-k8s capacity  <cluster-profile> [--product X] [--require-nodes N [--node-gpus G]] [--require-free N]  # GPU free/used + holders; --require-* = machine-checkable gate (exit 3=short)",
+    "port-recipe": "llmb-k8s port-recipe <source-cell> [--to GPU] [--cluster C]  # print the steps to port a cell to a new target",
+    "logs":      "llmb-k8s logs      <cell> <profile> [run-id] [--artifacts]  |  <run-id> [--cluster P]   # observe.py Job logs (cell+profile) OR detached PVC runner.log (run-id)",
+}
+assert set(USAGE) == set(KNOWN_VERBS), (
+    f"USAGE/KNOWN_VERBS drift: missing={set(KNOWN_VERBS) - set(USAGE)} extra={set(USAGE) - set(KNOWN_VERBS)}"
+)
+
+
+def print_help(verb: str | None = None) -> int:
+    """`llmb-k8s help` → the grouped verb list; `llmb-k8s help <verb>` → that verb's one-line usage.
+    Backward-compatible companion to `--help` (which still prints the full module __doc__)."""
+    if verb is not None:
+        if verb in USAGE:
+            print(USAGE[verb])
+            return 0
+        print(f"llmb-k8s help: unknown verb '{verb}'")
+        print(f"  known verbs: {', '.join(KNOWN_VERBS)}")
+        return 1
+    print("llmb-k8s — unified front-door for k8s recipe operations.\n")
+    print("Verbs:")
+    for v in USAGE:  # lifecycle order
+        print("  " + USAGE[v])
+    print("\nProfile forms: positional `<cell> <profile>` or named `--recipe <cell> --cluster <name>`.")
+    print("More: `llmb-k8s help <verb>` for one verb · `llmb-k8s --help` for the full module doc.")
+    return 0
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+
+    verb = args[0]
+    rest = args[1:]
+
+    # `help` / `help <verb>` — grouped list or a single verb's usage (see print_help). Additive: `--help`
+    # and no-args still print the full module __doc__ above, so nothing existing changes.
+    if verb == "help":
+        return print_help(rest[0] if rest else None)
+
+    # Fail fast on a genuinely-unknown verb with the actionable list, instead of a confusing
+    # `usage: llmb-k8s <typo> <cell-dir> ...` deep in the positional fall-through below.
+    if verb not in KNOWN_VERBS:
+        print(f"llmb-k8s: unknown verb '{verb}'")
+        print(f"  known verbs: {', '.join(KNOWN_VERBS)}")
+        print("  try: llmb-k8s help <verb>")
+        return 1
+
+    # reclaim takes a profile (cluster), not a cell — accept --cluster too, and validate it exists.
+    # `--storage` routes to the STORAGE sweeper (dead artifacts PVCs) instead of the GPU one. Same profile
+    # resolution, same dry-run-by-default contract — operators learn ONE reclaim surface, not two.
+    if verb == "reclaim":
+        storage = "--storage" in rest
+        if storage:
+            rest = [t for t in rest if t != "--storage"]
+        if rest and rest[0] == "--cluster" and len(rest) > 1:
+            rest = [rest[1], *rest[2:]]
+        if not rest:
+            sys.exit("usage: llmb-k8s reclaim <cluster-profile> [--apply] [--only-job NAME | --all]  (or --cluster <name>)\n"
+                     "       llmb-k8s reclaim --storage <cluster-profile> [--apply] [--older-than 7d] [--json]")
+        resolve_or_exit(rest[0], verb)
+        return py(ROOT / ("scripts/reclaim_storage.py" if storage else "scripts/reclaim.py"), *rest)
+
+    # teardown-all: the whole-cluster GPU reclaim hammer — thin sugar for `reclaim <profile> --all`. Same
+    # profile resolution as reclaim; injects --all so the reclaim.py teardown_all + re-verify-until-zero fires.
+    if verb == "teardown-all":
+        if rest and rest[0] == "--cluster" and len(rest) > 1:
+            rest = [rest[1], *rest[2:]]
+        if not rest:
+            sys.exit("usage: llmb-k8s teardown-all <cluster-profile> [--apply] [--settle-seconds N] [--max-cycles N]  (or --cluster <name>)")
+        resolve_or_exit(rest[0], "reclaim")   # cluster-touching like reclaim
+        return py(ROOT / "scripts/reclaim.py", rest[0], "--all", *rest[1:])
+
+    # port-recipe: prints a guided command sequence (no cluster work, no mutation) — pass args straight through.
+    if verb == "port-recipe":
+        return py(ROOT / "scripts/port_recipe.py", *rest)
+
+    # capacity: cluster-scoped read-only GPU view (not cell-scoped) — accept positional or --cluster.
+    if verb == "capacity":
+        if rest and rest[0] == "--cluster" and len(rest) > 1:
+            rest = [rest[1], *rest[2:]]
+        if not rest:
+            sys.exit("usage: llmb-k8s capacity <cluster-profile> [--product X]  (or --cluster <name>)")
+        resolve_or_exit(rest[0], verb)
+        return py(ROOT / "scripts/capacity.py", *rest)
+
+    # compare is cross-cell (a facet, a list of cells, or --all), not a single cell+profile
+    if verb == "compare":
+        if not rest:
+            sys.exit("usage: llmb-k8s compare <cell...> | --facet <scenario> <goal> <distribution> | --all [--baseline C] [--json]")
+        return py(ROOT / "analysis/compare.py", *rest)
+
+    # fleet has TWO read-only modes, disambiguated by whether a cell-dir positional is present:
+    #   • LIVE multi-cluster pane (no cell-dir)         → scripts/fleet.sh   — every cluster's runs/GPUs/uptime,
+    #     the `watch -n 15 llmb-k8s fleet` view.  --cluster/--wide/--gpu-only pass straight through.
+    #   • runs.jsonl progress dashboard (cell-dir args) → scripts/fleet_status.py — values/spread/reproducible.
+    # A cell-dir is a path containing recipe.yaml; a --cluster value (a profile name) is not, so the two
+    # never collide. NOT in CLUSTER_TOUCHING: fleet.sh is auth-robust per-cluster and must render even when
+    # some contexts are unreachable (that's the purpose), so it can't hard-fail on one bad context.
+    if verb == "fleet":
+        _pos = [a for a in rest if not a.startswith("-")]
+        if _pos and (Path(_pos[0]) / "recipe.yaml").exists():
+            return py(ROOT / "scripts/fleet_status.py", *rest)
+        return sh(ROOT / "scripts/fleet.sh", *rest)
+
+    if verb == "watch":
+        return py(ROOT / "scripts/watch_runs.py", *rest)
+
+    # init: the fresh-install wizard (the wizard contract). Cluster-scoped (not cell-scoped) and it starts from a
+    # MISSING profile, so it must NOT route through resolve_or_exit/pr.resolve — those fail fast on a missing
+    # profile (llmb-k8s:88), the exact state init begins in. Special-cased like install/capacity: pass the
+    # args straight to the wizard, which parses --cluster / positional name + its own mode flags itself.
+    if verb == "init":
+        return py(ROOT / "scripts/wizard_init.py", *rest)
+
+    # install: cluster-scoped (not cell-scoped) — accept positional or --cluster, or NOTHING.
+    # `llmb-k8s install` with no arguments is the simple door: install.py asks which cluster profile (skipping
+    # the question when there is only one / one is already configured), then which recipes. The profile is
+    # resolved INSIDE install.py in that case — resolve_or_exit here would fail on the empty name, which is
+    # exactly the state the no-arg form starts in (same reason `init` is special-cased above).
+    if verb == "install":
+        toks = [rest[1], *rest[2:]] if (rest and rest[0] == "--cluster" and len(rest) > 1) else list(rest)
+        if toks and not toks[0].startswith("-"):
+            cluster, extra_install = toks[0], toks[1:]
+            # Offline inventory/planning must remain usable after VPN/SSO expiry. Require the
+            # profile file, but leave live reachability checks to install.py for mutating modes.
+            if "--dry-run" in extra_install or "--list-recipes" in extra_install:
+                if not pr.profile_env_path(cluster).is_file():
+                    print(pr.resolve(cluster).message)
+                    raise SystemExit(1)
+            else:
+                resolve_or_exit(cluster, verb)
+            return py(ROOT / "scripts/install.py", cluster, *extra_install)
+        return py(ROOT / "scripts/install.py", *toks)
+
+    # profile verb group: `profile validate|init --cluster <name>`.
+    if verb == "profile":
+        if not rest:
+            sys.exit("usage: llmb-k8s profile <validate|init> --cluster <name>")
+        sub, sub_rest = rest[0], rest[1:]
+        cluster, extra = None, []
+        i = 0
+        while i < len(sub_rest):
+            if sub_rest[i] == "--cluster" and i + 1 < len(sub_rest):
+                cluster = sub_rest[i + 1]; i += 2; continue
+            if not sub_rest[i].startswith("-") and cluster is None:
+                cluster = sub_rest[i]; i += 1; continue
+            extra.append(sub_rest[i]); i += 1
+        if not cluster:
+            sys.exit(f"usage: llmb-k8s profile {sub} --cluster <name>")
+        if sub == "validate":
+            return py(ROOT / "scripts/profile_resolver.py", "validate", cluster, *extra)
+        if sub == "init":
+            init = ROOT / "scripts/profile_init.py"
+            if init.exists():
+                return py(init, cluster, *extra)
+            sys.exit("llmb-k8s profile init: not wired yet — copy cluster-profiles/_template.env.example to "
+                     f"cluster-profiles/{cluster}.env and edit, then: llmb-k8s profile validate --cluster {cluster}")
+        if sub == "probe-fabric":
+            return py(ROOT / "scripts/probe_fabric.py", cluster, *extra)
+        if sub in ("provision-imex", "deprovision-imex"):
+            # Tier-2 NVLink-IMEX ComputeDomain provisioning
+            # recovers the FlashInfer allreduce_rms fusion where the cluster self-serves a ComputeDomain,
+            # else prints the throughput tradeoff + how to earn RBAC. deprovision-imex deletes the CD.
+            args = [cluster, *extra]
+            if sub == "deprovision-imex":
+                args.append("--deprovision")
+            return py(ROOT / "scripts/provision_imex.py", *args)
+        sys.exit(f"llmb-k8s profile: unknown subcommand '{sub}' "
+                 "(validate | init | probe-fabric | provision-imex | deprovision-imex)")
+
+    # jobs is profile-first (like reclaim); optional --recipe <cell> / --all. observe.py parses the rest.
+    if verb == "jobs":
+        toks = [rest[1], *rest[2:]] if (rest and rest[0] == "--cluster" and len(rest) > 1) else list(rest)
+        if not toks:
+            sys.exit("usage: llmb-k8s jobs <cluster-profile> [--recipe <cell>] [--all]")
+        resolve_or_exit(toks[0], verb)
+        return py(ROOT / "scripts/observe.py", "jobs", *toks)
+
+    # submit — the DETACHED, disconnect-resilient launch (render + apply {bench Job + server w/ ownerRef,
+    # deadline, short TTL, PVC log+status wrapper} then EXIT). Additive: the run.sh path is untouched.
+    # NOT in CLUSTER_TOUCHING so `submit --dry-run` works fully OFFLINE (no reachability hard-fail).
+    if verb == "submit":
+        cell_str, profile, extra = normalize_cell_profile(rest)
+        if not cell_str or not profile:
+            sys.exit("usage: llmb-k8s submit <cell> <profile> [run-id] [--rungs \"...\"] [--dry-run] "
+                     "[--deadline-seconds N] [--ttl-seconds N] [--health-timeout N]")
+        if not (Path(cell_str) / "recipe.yaml").exists():
+            sys.exit(f"llmb-k8s: no recipe.yaml in {cell_str}")
+        resolve_or_exit(profile, verb)  # NOT_FOUND fails; UNREACHABLE only warns (submit ∉ CLUSTER_TOUCHING)
+        return sh(ROOT / "scripts/submit.sh", cell_str, profile, *extra)
+
+    # cancel — narrowly scoped active-run stop. Resolves run-id through the same durable record/index as
+    # status/logs/collect and fail-closes unless the exact Job carries both the run-id and LLMB ownership labels.
+    if verb == "cancel":
+        if not rest:
+            sys.exit("usage: llmb-k8s cancel <run-id> [--cluster <profile>] [--dry-run | --yes]")
+        return py(ROOT / "scripts/cancel_run.py", *rest)
+
+    # collect — idempotent fetch + local publish for a detached run (run-id → cell via _submit.json/labels).
+    if verb == "collect":
+        if not rest:
+            sys.exit("usage: llmb-k8s collect <run-id> [--cluster <profile>] [publish-args]")
+        return py(ROOT / "scripts/resilient_status.py", "collect", *rest)
+
+    # status/logs DETACHED run-id form: a single positional that is NOT a cell dir → read the PVC state a
+    # `submit` left (survives Job TTL-GC + cold reconnect). The existing <cell> <profile> panel/log path
+    # (a cell dir with recipe.yaml as the first positional) falls through unchanged below.
+    if verb in ("status", "logs"):
+        _pos = [a for a in rest if not a.startswith("-")]
+        if _pos and not (Path(_pos[0]) / "recipe.yaml").exists():
+            return py(ROOT / "scripts/resilient_status.py", verb, *rest)
+
+    cell_str, profile, extra = normalize_cell_profile(rest)
+    if not cell_str or not profile:
+        sys.exit(
+            f"usage: llmb-k8s {verb} <cell-dir> <cluster-profile> [extra-args...]\n"
+            f"   or: llmb-k8s {verb} --recipe <cell-dir> --cluster <name> [extra-args...]"
+        )
+    cell = Path(cell_str)
+    if not (cell / "recipe.yaml").exists():
+        sys.exit(f"llmb-k8s: no recipe.yaml in {cell}")
+
+    # `analyze` reads a RUN DIRECTORY, not a cluster — both scenario handlers take `_profile` and ignore it.
+    # So `llmb-k8s analyze <cell> results/<run-id>` is the natural invocation, and it used to die on
+    # "No profile found for 'results/260809t1622-oh4s'" — the dispatch table even documents
+    # `analyze → aggregate_metrics.py <run_dir>`. Accept it when the second positional is plainly a run
+    # directory (it exists and is not a profile name); the 3-positional form keeps working unchanged.
+    if verb == "analyze" and profile not in pr.list_profiles() and Path(profile).is_dir():
+        extra = [profile, *extra]
+        profile = ""
+    elif verb == "analyze" and profile not in pr.list_profiles() and not extra:
+        sys.exit(f"llmb-k8s analyze: '{profile}' is neither a cluster profile nor an existing directory.\n"
+                 f"  analyze scores a RUN DIRECTORY:  llmb-k8s analyze {cell_str} results/<run-id>\n"
+                 f"  (the <cell> <profile> <run-dir> form also works)")
+
+    if profile:
+        resolve_or_exit(profile, verb)  # fail fast on a missing/unreachable profile
+
+    # Refuse to run a recipe on the wrong hardware target (before any cluster work).
+    if verb in CLUSTER_TOUCHING and profile:
+        _env = (yaml.safe_load((cell / "recipe.yaml").read_text()) or {}).get("envelope") or {}
+        _issues = pr.check_target_compat(_env, pr._read_env(pr.profile_env_path(profile)))
+        if _issues:
+            print(pr.compat_message(_issues, profile))
+            return 1
+
+    # read-only observability verbs (status/logs) — cell + profile, no cluster mutation.
+    if verb in ("status", "logs"):
+        return py(ROOT / "scripts/observe.py", verb, cell_str, profile, *extra)
+
+    # `preflight` = the LIVE resource-aware check (preflight.py honors the profile's KUBE_CONTEXT).
+    # `dry-run` (in COMMON_SH) is the offline manifest-only check.
+    if verb == "preflight":
+        return py(ROOT / "scripts/preflight.py", cell_str, profile, *extra)
+
+    # run_dir is extra[0] for verbs that need it (analyze, publish)
+    run_dir = extra[0] if extra else ""
+
+    if verb in COMMON_SH:
+        return sh(COMMON_SH[verb], cell_str, profile, *extra)
+
+    if verb in COMMON_PY:
+        if verb == "publish":
+            # pass the invoked profile so publish stamps runs.jsonl 'cluster' — compare --repro / fleet key on
+            # it, and the run metadata often lacks it (empty-cluster entries drop out of the analysis).
+            return py(COMMON_PY[verb], cell_str, run_dir, f"--cluster={profile}", *extra[1:])
+        return py(COMMON_PY[verb], cell_str, run_dir, *extra)
+
+    if verb in ("stage", "analyze"):
+        scenario = load_scenario(cell)
+        handler = REGISTRY.get(scenario, {}).get(verb)
+        if handler is None:
+            print(f"llmb-k8s: '{verb}' is not defined for scenario '{scenario}'")
+            return 1
+        if scenario not in REGISTRY:
+            sys.exit(
+                f"llmb-k8s: unknown scenario '{scenario}' — add it to REGISTRY in this script"
+            )
+        trailing = extra[1:] if verb == "analyze" else extra
+        return handler(cell_str, profile, run_dir, trailing)  # type: ignore[operator]
+
+    print(f"llmb-k8s: unknown verb '{verb}'")
+    print(f"  known verbs: {', '.join(KNOWN_VERBS)}")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

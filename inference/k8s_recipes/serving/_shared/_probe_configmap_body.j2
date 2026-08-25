@@ -1,0 +1,14 @@
+# Delivered by ConfigMap so the SHIPPED probe is byte-identical to the one under test
+# (scripts/selftest_progress_liveness.py drives this exact file). Inlining it into the probe command
+# would make the tested artifact and the running artifact two different things.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: ${NAMESPACE}
+  name: {{ envelope.name }}-liveness
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    llmb.nvidia.com/cell: {{ envelope.name }}
+data:
+  progress_liveness.sh: |
+{% filter indent(width=4, first=True) %}{% include 'progress_liveness.sh' %}{% endfilter %}

@@ -1,0 +1,24 @@
+# Recipe-local artifacts. Never tracked.
+results/
+serving/vllm-aggregated/manifests/.rendered/
+
+# Output-data pipeline: the heavy per-run RAW tier is gitignored (→ S3 later); the
+# committed curated/ tier (summary CSVs, rungs.csv, run_meta, per-run charts) is tracked.
+recipes/**/runs/*/raw/
+
+# Cluster profiles: real configs are user-specific and may contain
+# namespace/owner identifiers we don't want in git. Only the *.example
+# templates are tracked. Stage 0 uses *.env; Stage 1 (Helm) uses *.values.yaml.
+cluster-profiles/*.env
+cluster-profiles/*.values.yaml
+!cluster-profiles/*.env.example
+!cluster-profiles/*.values.yaml.example
+!cluster-profiles/.gitkeep
+# Local-only per-cluster setup stamps: readiness stamps from `llmb-k8s init` (Done-phase) and
+# install stamps from install.py (idempotency + fleet --grid). Machine-local, user-specific — never tracked.
+cluster-profiles/.state/
+
+# transient corpus synthesized by selftests when no cell is published (always cleaned up)
+.selftest-tmp/
+# Executable shims used by offline tests on hosts where system /tmp is mounted noexec.
+.selftest-runtime/

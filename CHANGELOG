@@ -1,3 +1,20 @@
+## [v26.08.01] - 2026-08-25
+
+### Added
+
+- Kubernetes LLM inference recipes for B200 (`inference/k8s_recipes/`):
+  - GLM-5 FP8
+  - Nemotron Ultra NVFP4
+  - Qwen3 0.6B KVBM
+
+### Changed
+
+- Reorganized inference recipes into a unified `inference/` structure: Slurm serving recipes under `inference/slurm_recipes/` and Helm charts under `inference/tools/single_node_helm/`.
+
+### Fixed
+
+- DeepSeek V3 nsys profiling on B200 now uses the 26.06.01 container default instead of the pinned version.
+
 ## [v26.08.00] - 2026-08-18
 
 ### Added

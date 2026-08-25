@@ -1,0 +1,454 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the "Software"),
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense,
+# and/or sell copies of the Software, and to permit persons to whom the
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: llm-perf recipe (aiperf load-replay)
+description: >
+  Full recipe.yaml schema for scenario=llm-perf. Measures serving performance --
+  TPS/GPU, TPS/User, TTFT, TPOT, KV/prefix-cache -- under a replayed load. CI validates a
+  recipe.yaml against THIS schema when envelope.scenario == llm-perf. The envelope is
+  shared (see envelope.yaml); the serving + bench blocks below are the scenario-specific part.
+type: object
+additionalProperties: false
+required: [envelope, serving, bench]
+properties:
+  envelope:
+    allOf:
+      - $ref: "envelope.yaml#/$defs/envelope"
+      - properties:
+          scenario: { const: llm-perf }
+          launcher: { const: aiperf }
+          # aiperf always replays a trace, so "replay" is not a mode here; the axis is the load/trace TYPE.
+          mode: { enum: [mooncake-trace, custom-trace, synthetic] }
+
+  serving:
+    type: object
+    additionalProperties: false
+    required: [stack, tp, model_repo, served_model]
+    properties:
+      stack:
+        type: string
+        description: serving/<stack> providing the rendered templates (e.g. vllm-agg).
+      model_repo:    { type: string, description: HF repo id to snapshot-download (e.g. nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4) }
+      model_revision: { type: string, description: "Optional HF snapshot revision to pin (deterministic snapshot_download; avoids ambiguity when a cache holds multiple revisions)." }
+      served_model:  { type: string, description: OpenAI served-model-name (e.g. nemotron-ultra-3) }
+      telemetry_container: { type: string, description: "Optional: container name AIPerf scrapes for per-GPU telemetry when the serving container is NOT named after the engine (e.g. Dynamo+vLLM names it 'dynamo-vllm', not 'vllm'). Consumed by serving/aiperf/templates/bench-job.yaml.j2 (SERVER_CONTAINER); defaults to envelope.engine. Without this the KVBM/Dynamo stack can't be authored without hand-editing the schema." }
+      tp:            { type: integer, minimum: 1, description: tensor-parallel size (= GPUs/instance) }
+      context_length: { type: integer, minimum: 1, description: "Model context length (--context-length). Used by disaggregated SGLang serving (serving.disagg)." }
+      dynamo_log: { type: string, minLength: 1, description: "Optional recipe-scoped DYN_LOG filter for Dynamo frontend and workers; omitted recipes preserve the default info level." }
+      disagg:
+        type: object
+        additionalProperties: false
+        # OPTIONAL: only disaggregated (serving_mode=disaggregated) stacks set this; aggregated cells omit
+        # it entirely. Splits serving into a prefill worker set + a decode worker set, each with its own
+        # parallelism + engine flags, wired by a KV-transfer backend (e.g. NIXL over RDMA).
+        description: Disaggregated prefill/decode serving shape (e.g. sglang-disagg 1P1D).
+        required: [prefill, decode, transfer_backend]
+        properties:
+          transfer_backend:
+            enum: [nixl, mooncake, ucx]
+            description: Cross-worker KV-cache transfer backend (--disaggregation-transfer-backend).
+          # `ucx:` IS DELIBERATELY ABSENT — and `additionalProperties: false` above makes any
+          # serving.disagg.ucx.* key a HARD schema failure. Same category error, same remedy as the
+          # rejected `requires.cache.name`: UCX fabric config is CLUSTER truth, not recipe truth.
+          #   tls           IB fabrics can carry dc/dc_x (Dynamically Connected); RoCE/Ethernet cannot —
+          #                 DC is an InfiniBand transport and UCX createBackend fails on a RoCE device.
+          #   net_devices   literal HCA rail names: mlx5_* on one cluster, rocep* on the next.
+          #   ib_addr_type  'eth' means RoCE, 'auto'/ib_* mean native InfiniBand.
+          #   max_rndv_rails  a rail COUNT, i.e. how many HCAs this cluster's nodes have.
+          # Each of those describes ONE cluster's hardware, and a baked recipe value WON over the profile,
+          # so no profile setting could correct it: 27 cells shipped an 8-rail mlx5_* list plus an IB-only
+          # transport set that does not exist on a RoCE cluster (the GLM-5 GB300 NIXL_ERR_BACKEND bug).
+          # They now come from the profile as ${RDMA_UCX_TLS} / ${RDMA_UCX_NET_DEVICES} /
+          # ${RDMA_UCX_IB_ADDR_TYPE} / ${RDMA_UCX_MAX_RNDV_RAILS} (serving/sglang-disagg/templates/
+          # workers.yaml.j2), auto-discovered by `llmb-k8s profile probe-fabric --cluster <name> --write`.
+          prefill: { $ref: "#/$defs/disagg_role" }
+          decode:  { $ref: "#/$defs/disagg_role" }
+      max_model_len: { type: integer, minimum: 1 }
+      gpu_mem_util:  { type: number, exclusiveMinimum: 0, maximum: 1 }
+      liveness_enabled:           { type: boolean, description: "set false to OMIT the livenessProbe entirely (no auto-kill; vLLM self-exits on real crashes)" }
+      readiness_enabled:          { type: boolean, description: "set false to OMIT the readinessProbe (single-replica: never de-endpoint on a load spike; startupProbe still gates until loaded)" }
+      liveness_timeout_s:         { type: integer, minimum: 1, description: "livenessProbe timeoutSeconds (default 5); raise for slow-but-alive /health under heavy long-context load; ignored if liveness_enabled=false" }
+      liveness_failure_threshold: { type: integer, minimum: 1, description: "livenessProbe failureThreshold (default 8); raise so a busy 1M server isn't restarted mid-sweep" }
+      readiness_period_s:         { type: integer, minimum: 1, description: "readinessProbe periodSeconds (default 5); raise so a single-replica server isn't de-endpointed on a transient /health spike" }
+      readiness_timeout_s:        { type: integer, minimum: 1, description: "readinessProbe timeoutSeconds (default 3); raise for slow-but-alive /health under load" }
+      readiness_failure_threshold: { type: integer, minimum: 1, description: "readinessProbe failureThreshold (default 3); raise so a load-starved /health doesn't pull the only Service endpoint (503/dead-on-arrival)" }
+      offload:
+        type: boolean
+        default: false
+        description: CPU KV offload connector. offload on/off are separate cells (see cell-leaf rule).
+      extra_args:
+        type: array
+        items: { type: string }
+        description: Engine flags baked into the recipe (GPU/model-tuned; NOT a shared overlay).
+      env:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [name, value]
+          properties:
+            name:  { type: string }
+            value: { type: string }
+        description: >
+          Extra container env, baked verbatim after the fixed envs. Home for GPU/arch-specific
+          knobs (e.g. HF_HUB_OFFLINE, VLLM_ATTENTION_BACKEND, VLLM_USE_FLASHINFER_MOE_FP4) that
+          differ per cell -- NOT a shared overlay.
+      frontend_bootstrap_commands:
+        type: array
+        items: { type: string }
+        description: >
+          Optional shell commands emitted before the Dynamo frontend starts. Use only when the
+          selected image needs a recipe-owned runtime layer, for example installing Dynamo into
+          an upstream SGLang image.
+      worker_bootstrap_commands:
+        type: array
+        items: { type: string }
+        description: >
+          Optional shell commands emitted before each SGLang prefill/decode worker starts. Use only
+          when the selected image needs a recipe-owned runtime layer, for example installing Dynamo
+          into an upstream SGLang image.
+      resources:
+        type: object
+        additionalProperties: false
+        description: >
+          Optional CPU/memory request/limit overrides. The template defaults request memory well
+          below the limit (a too-high memory *request* over-constrains scheduling on shared nodes).
+        properties:
+          requests:
+            type: object
+            additionalProperties: false
+            properties: { cpu: { type: string }, memory: { type: string }, ephemeral_storage: { type: string } }
+          limits:
+            type: object
+            additionalProperties: false
+            properties: { cpu: { type: string }, memory: { type: string }, ephemeral_storage: { type: string } }
+      startup_timeout_s:
+        type: integer
+        minimum: 60
+        default: 2400
+        description: >
+          Sizes the startupProbe budget (a 550B checkpoint load from network storage takes minutes;
+          k8s Running != API ready). readiness/liveness stay short once startup succeeds.
+
+  bench:
+    type: object
+    additionalProperties: false
+    # dataset is required for TRACE modes (mooncake-trace/custom-trace); mode=synthetic replaces it with the
+    # `synthetic` block (aiperf generates random ISL/OSL prompts, no input file). Enforced by the mode
+    # conditional at the bottom of this file.
+    # bench.sla is required ONLY for goal=max-concurrency-sla (whose metric IS the SLA crossing) — see the
+    # goal conditional at the bottom of this file. pareto (metric=pareto_geomean) carries no SLA, so sla is
+    # OPTIONAL there. Existing pareto cells keep their sla field (reference-only) — making a required field
+    # optional does not re-fingerprint cells that still have it.
+    required: [sweep_concurrency]
+    properties:
+      synthetic:
+        type: object
+        additionalProperties: false
+        # SYNTHETIC aiperf load (envelope.mode: synthetic). No trace file: aiperf generates random prompts of
+        # the configured mean ISL/OSL when no --input-file is given. This is the first-class representation of
+        # a "random ISL/OSL" benchmark (e.g. sglang.bench_serving --dataset-name random). isl/osl are aiperf
+        # MEANS (--isl/--osl); to reproduce a max-length + range-ratio load, set the mean to the ACHIEVED mean
+        # and record the nominal/range as provenance.
+        required: [isl, osl]
+        properties:
+          isl:                      { type: integer, minimum: 1, description: "aiperf --isl: mean synthetic input tokens" }
+          isl_stddev:               { type: integer, minimum: 0, description: "aiperf --isl-stddev: input-length stddev (default 0)" }
+          osl:                      { type: integer, minimum: 1, description: "aiperf --osl: mean synthetic output tokens" }
+          osl_stddev:               { type: integer, minimum: 0, description: "aiperf --osl-stddev: output-length stddev (default 0)" }
+          num_entries:              { type: integer, minimum: 1, description: "aiperf --num-dataset-entries: unique synthetic prompts generated" }
+          request_count_multiplier: { type: integer, minimum: 1, description: "measured requests per rung = this × concurrency (aiperf --request-count)" }
+          warmup_request_multiplier: { type: integer, minimum: 0, description: "excluded warmup requests per rung = this × concurrency (aiperf --warmup-request-count); default 1" }
+          seed:                     { type: integer, description: "aiperf --random-seed for deterministic generation" }
+          nominal_isl:              { type: integer, minimum: 1, description: "provenance: source-config nominal input length (before range-ratio)" }
+          nominal_osl:              { type: integer, minimum: 1, description: "provenance: source-config nominal output length (before range-ratio)" }
+          range_ratio:              { type: number,  description: "provenance: source random-range-ratio (lengths uniform in [r·L, L])" }
+      dataset:
+        type: object
+        additionalProperties: false
+        # sha256 is REQUIRED: the canonical trace is content-pinned and stage-dataset.sh verifies the
+        # on-PVC bytes match it before any sweep, so cross-cluster runs are provably identical.
+        required: [id, subpath, type, sha256]
+        properties:
+          id:           { type: string, description: human label for the trace/dataset }
+          subpath:      { type: string, description: "path under the model-cache PVC root to the trace file (e.g. datasets/<name>/dataset.jsonl)" }
+          sha256:       { type: string, pattern: "^[a-f0-9]{64}$", description: "sha256 of the CANONICAL uncompressed trace. Every cluster must stage the identical bytes (staging verifies this) so cross-cluster runs are comparable. NEVER regenerate per cluster." }
+          artifact:     { type: string, description: "repo path to the committed canonical trace (e.g. datasets/traces/<id>/dataset.jsonl.gz); stage-dataset.sh distributes + verifies it." }
+          config_path:  { type: string, description: path under the PVC root to the dataset config json }
+          type:         { type: string, description: "aiperf dataset type (matches envelope.mode, e.g. mooncake_trace)" }
+          # Provenance only (how the canonical was generated once) — NOT used at stage time; we copy the
+          # committed artifact, we do not regenerate. Kept so the canonical can be reproduced/audited.
+          num_sessions: { type: integer, minimum: 1, description: "provenance: sessions in the canonical trace" }
+          seed:         { type: integer, description: "provenance: generation seed" }
+          max_isl:      { type: integer, minimum: 1, description: "provenance: max input length filter (tokens)" }
+      sweep_concurrency:
+        type: array
+        items: { type: integer, minimum: 1 }
+        minItems: 1
+        description: >
+          The rungs to test. TARGET THE INTERESTING REGION near the SLA ceiling — the headline
+          metric is the highest concurrency meeting SLA, so don't waste rungs on known-good low
+          concurrency. Required for sweep_mode=fixed (the default); ignored for sweep_mode=adaptive
+          (use adaptive_sweep.max to bound the ceiling instead).
+      depth:
+        type: integer
+        minimum: 1
+        description: >
+          ADAPTIVE per-slot request depth — the fix for the fixed-trace-pass under-load bug. When set, every
+          rung runs a SUSTAINED workload of `depth × concurrency` measured requests (aiperf --request-count),
+          so high-concurrency rungs reach steady state instead of draining a fixed dataset pool in one wave
+          (which under-counts tps/gpu and produces erratic error rates). For TRACE cells (mooncake-trace/
+          custom-trace) it also emits aiperf --no-fixed-schedule so the concurrency-scaled request-count is
+          honored (a timestamped trace otherwise auto-promotes to fixed_schedule, ignores --request-count, and
+          replays the t=0 schedule once) — aiperf then maintains `concurrency` in-flight and CYCLES the trace
+          pool to reach the count (no bigger dataset file needed). Warmup is a separate EXCLUDED 1×concurrency
+          ramp. Recommended: 4 (≈4 sustained requests per slot past warmup); raise to 8 for tighter tails.
+          CONDITIONAL-HASH: omit for the legacy fixed-trace-pass behavior — the bench-Job renders
+          byte-identically when `depth` is absent, so adding this axis does NOT churn existing cells'
+          recipe_hash until they opt in. Applies to both goals (pareto and SLA).
+      sweep_mode:
+        enum: [fixed, adaptive]
+        default: fixed
+        description: >
+          How the concurrency rungs are chosen. "fixed" (current default): replay exactly the
+          concurrencies in sweep_concurrency — heavier, but gives the full curve for the pareto geomean /
+          dashboards. "adaptive": a DETERMINISTIC exponential-search + bisection over a geometric grid
+          finds the SLA crossing in ~2-4 runs, and exemplar_check INTERPOLATES it to a continuous number,
+          so two clusters running DIFFERENT rungs are still directly comparable (the interpolation removes
+          the old rung-quantization problem). Both are publishable.
+          PER-GOAL STRATEGY (the sweep follows the goal): max-concurrency-sla → ADAPTIVE (you're hunting one
+          crossing point, so a search that stops when bracketed is ideal — becomes the schema default once the
+          in-cluster runner implements it; today it's driven by scripts/adaptive_sweep.py). pareto → FIXED and
+          REQUIRED (you need the WHOLE frontier for the per-point geomean; an adaptive search that stops at the
+          crossing can't trace a curve — enforced by check_invariants).
+      adaptive_sweep:
+        type: object
+        additionalProperties: false
+        description: >
+          DETERMINISTIC adaptive-search protocol for sweep_mode=adaptive. Candidate rungs are a fixed
+          geometric ladder from `min` to `max` at `grid_ratio`, so two clusters run the identical POLICY
+          and their interpolated crossings are apples-to-apples. Given the same measurements the same
+          rungs are always chosen (pinned in recipe_hash → provable + reproducible). Algorithm:
+            1. Run the grid rung nearest `start` (the expected-crossing prior).
+            2. FIRST LEAP sized from the margin: ~round(log(limit / measured_binding) / log(grid_ratio))
+               grid steps toward the crossing — a big leap if far, one step if close. This is how it
+               accounts for truly-poor OR truly-better-than-expected perf in a single deterministic move.
+            3. BRACKET by exponentially growing leaps (step doubles) until BOTH a pass and a fail are
+               seen. If a grid bound is hit first -> OUT OF RANGE (top rung passes: raise `max`; bottom
+               fails: lower `min`) and stop — don't grind.
+            4. BISECT the [pass, fail] bracket at the geometric midpoint until its ratio <= bracket_tolerance
+               (or `max_runs` is reached).
+            5. exemplar_check interpolates the min(TTFT, TPOT) crossing from the final bracket.
+        properties:
+          grid_ratio:
+            type: number
+            minimum: 1.05
+            default: 1.3
+            description: >
+              Geometric step between candidate rungs (1.3 = ~30% apart). Constant relative spacing gives
+              constant relative interpolation error everywhere, and bounds the tightest possible bracket.
+          start:
+            type: integer
+            minimum: 1
+            description: >
+              Expected-crossing prior — the first rung tried (e.g. 128 for a 4-GPU cell, 256 for 8-GPU).
+              A good prior converges in ~2 runs; a bad one self-corrects via the first leap + bracketing.
+          min:
+            type: integer
+            minimum: 1
+            default: 1
+            description: Lowest candidate rung (grid floor).
+          max:
+            type: integer
+            minimum: 1
+            description: >
+              Highest candidate rung (grid ceiling). MUST be >= --max-num-seqs so the search never probes
+              above the server's admission cap (that would measure queue depth, not GPU capacity).
+          bracket_tolerance:
+            type: number
+            minimum: 1.05
+            default: 1.3
+            description: >
+              Stop bisecting once the pass/fail bracket ratio <= this (one grid step). Tighter = more
+              accurate interpolation but more runs. Default matches grid_ratio (stop at adjacent rungs).
+          max_runs:
+            type: integer
+            minimum: 2
+            default: 6
+            description: Hard cap on rungs run (safety net; typical convergence is 2-4).
+      sla:
+        type: object
+        additionalProperties: false
+        required: [ttft_ms, tpot_ms]
+        description: A rung PASSES only if BOTH TTFT and TPOT (at stop_stat) are within limits.
+        properties:
+          ttft_ms:   { type: integer, minimum: 1, description: time-to-first-token ceiling (ms) }
+          tpot_ms:   { type: integer, minimum: 1, description: time-per-output-token ceiling (ms) }
+          stop_stat: { enum: [p50, p90, p95, p99], default: p50, description: percentile the SLA is judged at }
+      connection_reuse:
+        enum: [sticky-user-sessions, none]
+        default: sticky-user-sessions
+        description: Mitigates conntrack/Service-VIP churn at high concurrency.
+      aiperf_ref:
+        type: string
+        pattern: "^git\\+https://github\\.com/ai-dynamo/aiperf\\.git@[a-f0-9]{40}$"
+        description: >
+          Immutable AIPerf source revision installed by the benchmark pod. Omit to retain the
+          legacy release pin. New pins must use a full 40-character commit SHA so reruns cannot
+          change underneath an existing recipe hash.
+      aiperf_unsafe_override:
+        type: boolean
+        description: >
+          Emit AIPerf's legacy --unsafe-override option. Defaults to true for byte compatibility
+          with existing AIPerf 0.8 recipes. Set false for AIPerf 0.11+, where the option was removed.
+      aiperf_server_metrics:
+        type: boolean
+        default: true
+        description: >
+          Whether AIPerf should ingest the server Prometheus endpoint. Set false for runtimes whose
+          metric surface is incompatible with the pinned AIPerf collector; LLMB's independent
+          server_metrics_timeseries scrape remains enabled, so request metrics and raw server telemetry
+          are preserved. Omit to retain existing behavior.
+      bench_pod_port_tuning:
+        enum: [initcontainer, sysctls]
+        description: >
+          Optional source-port tuning for high-concurrency AIPerf pods (connection_reuse:
+          sticky-user-sessions — an INTENTIONAL cross-cell methodology choice, preserved) opens ~one
+          short-lived TCP connection per simulated session; the connect/close churn fills the local ephemeral
+          range with TIME_WAIT faster than it drains, so connect() fails with OSError(99) EADDRNOTAVAIL and a
+          sweep returns 0 valid records above the lowest rung. This field widens the bench pod's ephemeral
+          port range (net.ipv4.ip_local_port_range = "1024 65535") and recycles TIME_WAIT
+          (net.ipv4.tcp_tw_reuse = 1) so sticky's ~concurrency connections at c=2560 fit. Absent (default):
+          the bench Job renders byte-identically to the legacy manifest — zero re-fingerprint for published
+          cells. "initcontainer" (preferred, portable): a short privileged/NET_ADMIN initContainer applies the
+          sysctls with `sysctl -w` in the pod's shared network namespace (they persist to the aiperf
+          container); needs NO kubelet reconfig, only a namespace that permits privileged pods. "sysctls":
+          pod securityContext.sysctls set the same values — but these are UNSAFE namespaced sysctls, so the
+          kubelet must run with --allowed-unsafe-sysctls=net.ipv4.ip_local_port_range,net.ipv4.tcp_tw_reuse or
+          the pod stays Pending (SysctlForbidden). Prefer initcontainer on clusters whose kubelet config you
+          do not control.
+      endpoint_type:
+        type: string
+        default: chat
+        description: >
+          AIPerf --endpoint-type. Defaults to OpenAI chat completions for existing cells; use
+          completions for engines/traces that should replay against /v1/completions.
+      extra_inputs:
+        type: string
+        default: ""
+        description: >
+          Raw AIPerf --extra-inputs passthrough (space-separated key:value pairs, each emitted as its own
+          --extra-inputs flag) added to every request body. e.g. "min_tokens:16384 ignore_eos:true" to force
+          the full OSL on decode-bound synthetic shapes. Empty default = no extra inputs (byte-identical to
+          legacy cells). Consumed by serving/aiperf/templates/bench-job.yaml.j2 (AIPERF_EXTRA_INPUTS).
+      request_timeout_s:
+        type: integer
+        minimum: 1
+        default: 3600
+        description: Client timeout ceiling; too-low values drop heavy requests and fake a collapse.
+      colocate_with_server:
+        type: boolean
+        default: false
+        description: >
+          Force the bench pod onto the SAME node as the server pod (pod-affinity, topologyKey hostname).
+          Relevant only when the benchmark itself mounts a trace-dataset cache that is ReadWriteOnce.
+          Synthetic AIPerf jobs do not mount the model-weights PVC, so they must not enable this merely for
+          model-cache placement. Off by default → CPU-pool placement (BENCH_NODE_SELECTOR) is unchanged.
+      gpu_telemetry:
+        oneOf:
+          - type: boolean
+          - type: string
+            enum: [auto, exec, dcgm, off]
+        default: true
+        description: >
+          GPU telemetry mode. true/"auto" (default): prefer DCGM_EXPORTER_URL if set, else exec
+          nvidia-smi in the server pod — the bench Role auto-grants pods/exec for this mode.
+          "exec": force kubectl exec of nvidia-smi (pods/exec granted). "dcgm": HTTP scrape only,
+          no pods/exec needed or granted. false/"off": disable entirely, no pods/exec granted.
+          Use "dcgm" or false on clusters that restrict exec into application containers.
+
+$defs:
+  disagg_role:
+    type: object
+    additionalProperties: false
+    description: Per-role (prefill|decode) parallelism + role-specific engine flags for disaggregated serving.
+    properties:
+      replicas:
+        type: integer
+        minimum: 1
+        default: 1
+        description: >
+          Number of worker Deployments (independent TP-sized workers) for this role. Default 1 (the 1P1D
+          shape). Set >1 to scale a role — e.g. 1 prefill × 8 decode = 1P8D — so a P:D-ratio sweep
+          (1P8D … 2P1D) is expressible in the recipe. requires.gpu.count must equal
+          (prefill.replicas + decode.replicas) × tp. Hashed CONDITIONALLY (only when != the default 1),
+          so a role that keeps 1 fingerprints byte-identically to a recipe that omits it — no churn.
+      tp: { type: integer, minimum: 1, description: tensor-parallel size (--tensor-parallel-size) }
+      dp: { type: integer, minimum: 1, description: data-parallel size (--data-parallel-size) }
+      ep: { type: integer, minimum: 1, description: expert-parallel size (--expert-parallel-size) }
+      extra_args:
+        type: array
+        items: { type: string }
+        description: Role-specific engine flags baked into the recipe (GPU/model-tuned; NOT a shared overlay).
+
+allOf:
+  # goal=max-concurrency-sla → bench.sla is REQUIRED (its metric is defined by the SLA crossing). Any other
+  # goal (pareto → metric=pareto_geomean) carries no SLA, so bench.sla stays optional. Gating on goal (not on a
+  # bench field) keeps recipe_hash stable: existing pareto cells that still carry bench.sla validate fine,
+  # and this only stops REQUIRING it for new pareto cells. `required: [goal]` guards a vacuous match.
+  - if:
+      properties:
+        envelope:
+          properties:
+            goal: { const: max-concurrency-sla }
+          required: [goal]
+        required: [envelope]
+    then:
+      properties:
+        bench:
+          required: [sla]
+  # When status >= perf-data, results_link must be present.
+  - if:
+      properties:
+        envelope:
+          properties:
+            status: { enum: [performant, exemplar] }
+    then:
+      properties:
+        envelope:
+          required: [results_link]
+  # mode=synthetic → bench.synthetic is required (no trace file). Any other mode (mooncake-trace/custom-trace)
+  # → bench.dataset is required. This is what makes envelope.mode: synthetic first-class.
+  - if:
+      properties:
+        envelope:
+          properties:
+            mode: { const: synthetic }
+        required: [envelope]
+    then:
+      properties:
+        bench:
+          required: [synthetic]
+    else:
+      properties:
+        bench:
+          required: [dataset]

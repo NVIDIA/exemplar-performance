@@ -1,0 +1,140 @@
+# vllm-agg — aggregated vLLM OpenAI server (rendered from a cell's recipe.yaml).
+# {{ '{{ ... }}' }} = recipe truth (baked at render). ${ ... } = cluster truth (envsubst at launch).
+# One cell = one concrete config: offload on/off are SEPARATE cells (no runtime branching here).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ envelope.name }}-server
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/served-model: {{ serving.served_model }} }
+spec:
+  replicas: 1
+  # Match the Deployment progress deadline to the startupProbe budget. Without
+  # this, Kubernetes' default 600s deadline can fail a healthy long model load.
+  progressDeadlineSeconds: {{ serving.get('startup_timeout_s', 2400) }}
+  # A TP-sized server generally consumes every GPU on its selected node. Recreate
+  # avoids a rolling-update deadlock that would require a second TP-sized Pod.
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: {{ envelope.name }}-server } }
+  template:
+    metadata: { labels: { app: {{ envelope.name }}-server } }
+    spec:
+      schedulerName: ${SCHEDULER_NAME}
+      nodeSelector: { nvidia.com/gpu.product: ${GPU_PRODUCT} }
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+{% set _tols = (envelope.get('requires') or {}).get('tolerations') %}
+{% if _tols %}
+      tolerations:
+{% for t in _tols %}
+        - { key: {{ t }}, operator: Exists }
+{% endfor %}
+{% endif %}
+      containers:
+        - name: vllm
+          image: {{ image_ref }}
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8000, name: http, protocol: TCP }]
+          # k8s Running != API ready: vLLM binds the API port only after a
+          # Allow large checkpoints enough time to initialize.
+          # startupProbe holds the long budget; once it passes, readiness/liveness
+          # run short. A Service endpoint is not published until /health serves.
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: {{ (serving.get('startup_timeout_s', 2400) // 10) }}   # {{ serving.get('startup_timeout_s', 2400) }}s budget
+          {# Readiness and liveness probes can be disabled per cell. The startup probe always prevents the
+             Service from receiving traffic before the model is loaded. #}
+          {% if serving.get('readiness_enabled', True) %}
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: {{ serving.get('readiness_period_s', 5) }}
+            timeoutSeconds: {{ serving.get('readiness_timeout_s', 3) }}
+            failureThreshold: {{ serving.get('readiness_failure_threshold', 3) }}
+          {% endif %}
+          {% if serving.get('liveness_enabled', True) %}
+          # Detect stalled generation while requests are outstanding.
+          livenessProbe:
+            exec:
+              command: ["sh", "/llmb-probe/progress_liveness.sh"]
+            periodSeconds: {{ serving.get('liveness_period_s', 30) }}
+            timeoutSeconds: {{ serving.get('liveness_timeout_s', 15) }}
+            failureThreshold: {{ serving.get('liveness_failure_threshold', 20) }}
+          {% endif %}
+          env:
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: HF_HOME, value: /data/hf-cache }
+            - { name: VLLM_ALLOW_LONG_MAX_MODEL_LEN, value: "1" }
+            # expandable_segments is SAFE for aggregated (no NixlConnector). Do NOT use it in disagg.
+            - { name: PYTORCH_CUDA_ALLOC_CONF, value: "expandable_segments:True" }
+{% set _res = serving.get('resources') or {} %}
+{% for e in (serving.get('env') or []) %}
+            - { name: {{ e.name }}, value: "{{ e.value }}" }
+{% endfor %}
+          resources:
+            # memory *request* defaults well below the limit: a request == limit at 600Gi
+            # over-constrains scheduling on shared nodes (a real blocker seen on B200/GB200/GB300).
+            # Declare ephemeral_storage in serving.resources so the manifest owns it rather than
+            # relying on an admission-time mutation (seen injecting 800Gi on GB200).
+            requests:
+              cpu: "{{ _res.get('requests', {}).get('cpu', '32') }}"
+              memory: {{ _res.get('requests', {}).get('memory', '200Gi') }}
+              nvidia.com/gpu: "{{ serving.tp }}"
+{% if _res.get('requests', {}).get('ephemeral_storage') %}
+              ephemeral-storage: {{ _res['requests']['ephemeral_storage'] }}
+{% endif %}
+            limits:
+              cpu: "{{ _res.get('limits', {}).get('cpu', '96') }}"
+              memory: {{ _res.get('limits', {}).get('memory', '600Gi') }}
+              nvidia.com/gpu: "{{ serving.tp }}"
+{% if _res.get('limits', {}).get('ephemeral_storage') %}
+              ephemeral-storage: {{ _res['limits']['ephemeral_storage'] }}
+{% endif %}
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -eu
+              SNAPSHOT=$(python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id='{{ serving.model_repo }}'{% if serving.get('model_revision') %}, revision='{{ serving.model_revision }}'{% endif %}, cache_dir='/data/hf-cache/hub', local_files_only=True))")
+              test -s "$SNAPSHOT/config.json" || { echo "FATAL: model snapshot missing at $SNAPSHOT" >&2; exit 64; }
+              exec python3 -m vllm.entrypoints.openai.api_server \
+                --model "$SNAPSHOT" \
+                --served-model-name {{ serving.served_model }} \
+                --tensor-parallel-size {{ serving.tp }} \
+                --max-model-len {{ serving.max_model_len }} \
+                --gpu-memory-utilization {{ serving.gpu_mem_util }} \
+                --host 0.0.0.0 --port 8000 \
+{% for a in serving.extra_args %}
+                {{ a }} \
+{% endfor %}
+{% if serving.offload %}
+                --kv-offloading-size {{ serving.offload_size_gb | default(512) }} --kv-offloading-backend native \
+{% endif %}
+                --trust-remote-code
+          volumeMounts:
+{# The probe volume MUST share the livenessProbe's gate. A cell that opts out (liveness_enabled:
+   false) renders NO liveness ConfigMap, so an ungated mount references an object that never exists
+   and the pod sits in ContainerCreating forever — a probe opt-out silently becoming a cell that
+   cannot start. Same condition, three places: probe, mount, volume. #}
+{% if serving.get('liveness_enabled', True) %}
+            - { mountPath: /llmb-probe, name: llmb-probe }
+{% endif %}
+            - { mountPath: /data/hf-cache, name: model-cache, readOnly: true, subPath: ${MODEL_CACHE_SUBPATH} }
+            - { mountPath: /dev/shm, name: dshm }
+      volumes:
+{% if serving.get('liveness_enabled', True) %}
+        - name: llmb-probe
+          configMap: { name: {{ envelope.name }}-liveness, defaultMode: 0755 }
+{% endif %}
+        - name: model-cache
+          persistentVolumeClaim: { claimName: ${MODEL_CACHE_PVC} }
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 64Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ envelope.name }}-server
+  namespace: ${NAMESPACE}
+spec:
+  selector: { app: {{ envelope.name }}-server }
+  ports: [{ port: 8000, targetPort: 8000, name: http }]
