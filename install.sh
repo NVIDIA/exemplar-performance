@@ -319,8 +319,17 @@ create_venv_with_uv() {
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     VENV_DIR="$(realpath "$SCRIPT_DIR/../llmb_venv")"
 
+    # Honour LLMB_DISABLE_MANAGED_PYTHON. Only the opt-out needs a flag:
+    # --no-managed-python is what actually selects system python, while uv's
+    # default preference (no flag) is left as-is.
+    local -a uv_venv_cmd=(uv venv --clear -p "$RECOMMENDED_PYTHON_VERSION")
+    case "${LLMB_DISABLE_MANAGED_PYTHON:-}" in
+        1 | [Tt][Rr][Uu][Ee] | [Yy][Ee][Ss]) uv_venv_cmd+=(--no-managed-python) ;;
+    esac
+    uv_venv_cmd+=("$VENV_DIR")
+
     echo "Creating virtual environment with uv..."
-    if ! uv venv --clear -p "$RECOMMENDED_PYTHON_VERSION" "$VENV_DIR"; then
+    if ! "${uv_venv_cmd[@]}"; then
         echo "❌ Failed to create venv with uv"
         exit 1
     fi

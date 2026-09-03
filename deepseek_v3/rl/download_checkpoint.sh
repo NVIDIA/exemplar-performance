@@ -44,6 +44,14 @@ DEEPSEEK_REPO="$LLMB_WORKLOAD/DeepSeek-V3"
 CONVERSION_SCRIPT="$DEEPSEEK_REPO/inference/fp8_cast_bf16.py"
 LLMB_BIN="${LLMB_BIN:-$LLMB_INSTALL/bin/$(uname -m)}"
 
+# Honour the installer's LLMB_DISABLE_MANAGED_PYTHON opt-out. Passing
+# --no-managed-python is required to actually get system python; omitting the
+# flag leaves uv's default preference, which still favours managed python.
+UV_MANAGED_PYTHON_FLAG=--managed-python
+case "${LLMB_DISABLE_MANAGED_PYTHON:-}" in
+    1 | [Tt][Rr][Uu][Ee] | [Yy][Ee][Ss]) UV_MANAGED_PYTHON_FLAG=--no-managed-python ;;
+esac
+
 if [ -d "$BF16_DIR" ] && [ "$(ls -A "$BF16_DIR" 2> /dev/null)" ]; then
     echo "DeepSeek-V3 BF16 checkpoint already exists at $BF16_DIR, skipping conversion."
     exit 0
@@ -55,7 +63,7 @@ sed -i 's/save_file(new_state_dict, new_safetensor_file)/save_file(new_state_dic
 pushd "$DEEPSEEK_REPO/inference" > /dev/null
 
 "$LLMB_BIN/uv" run --no-project \
-    --managed-python \
+    "$UV_MANAGED_PYTHON_FLAG" \
     --with torch \
     --with safetensors \
     --with numpy \
@@ -69,7 +77,7 @@ popd > /dev/null
 cp "$FP8_DIR"/tokenizer_config.json "$FP8_DIR"/tokenizer.json "$FP8_DIR"/modeling_deepseek.py "$FP8_DIR"/configuration_deepseek.py "$TMP_BF16_DIR"/
 
 # Can't assume jq availability
-"$LLMB_BIN/uv" run --no-project --managed-python python -c '
+"$LLMB_BIN/uv" run --no-project "$UV_MANAGED_PYTHON_FLAG" python -c '
 import json
 import sys
 

@@ -88,9 +88,14 @@ def create_virtual_environment(venv_path: str, venv_type: str) -> None:
             MIN_PYTHON_VERSION,
         ]
 
-        # Force managed python unless explicitly disabled
-        # This ensures consistent python versions across different systems
-        if os.environ.get('LLMB_DISABLE_MANAGED_PYTHON', '').lower() not in ('1', 'true', 'yes'):
+        # Force managed python unless explicitly disabled.
+        # This ensures consistent python versions across different systems.
+        # When disabled, ask for system python explicitly: simply omitting
+        # --managed-python leaves uv's default preference, which still picks a
+        # managed interpreter whenever one is installed or downloadable.
+        if os.environ.get('LLMB_DISABLE_MANAGED_PYTHON', '').lower() in ('1', 'true', 'yes'):
+            uv_cmd.append('--no-managed-python')
+        else:
             uv_cmd.append('--managed-python')
 
         uv_cmd.append(venv_path)
