@@ -297,7 +297,8 @@ setup_environment() {
     fi
 
     if [[ $started_in_virtual_env == true ]] && check_python_version python3; then
-        local py_ver=$(get_python_version python3)
+        local py_ver
+        py_ver=$(get_python_version python3)
         echo "✅ Using existing virtual environment with Python $py_ver"
         return 0
     fi

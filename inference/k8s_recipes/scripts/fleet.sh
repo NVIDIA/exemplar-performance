@@ -440,7 +440,8 @@ probe_cluster() { # <name> <ctx> <ns> <connect> <gpu_product> <profile_count> <p
     # ── OURS: ONE namespaced call for pods+deployments+jobs (was 3 separate calls → 1; each call over
     #    teleport pays a full TLS+auth handshake, so collapsing 3→1 is the biggest per-cluster win). Also the
     #    connectivity probe (short timeout). TTL-cached per (ctx,ns) so rapid --watch refreshes reuse it. ──
-    local nsk="${ckey}__$(printf '%s' "${ns:-_all}" | tr -c 'A-Za-z0-9' '_')"
+    local nsk
+    nsk="${ckey}__$(printf '%s' "${ns:-_all}" | tr -c 'A-Za-z0-9' '_')"
     local nscache="$CACHE_DIR/ns-$nsk.json" nsts="$CACHE_DIR/ns-$nsk.ts"
     local now tsv=0 age
     now="$(date +%s)"

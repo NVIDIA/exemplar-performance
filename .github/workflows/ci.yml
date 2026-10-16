@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded PR runs. Pushes to main are keyed by commit so every
+# commit gets its own result; sharing one group would let a third push
+# cancel the pending run of the second.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.12.5"
+
+jobs:
+  python:
+    name: python (${{ matrix.package }}, py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [llmb-install, llmb-run]
+        # Oldest supported (requires-python >=3.10) and the documented target.
+        python: ["3.10", "3.12"]
+    defaults:
+      run:
+        working-directory: cli/${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+          cache-dependency-glob: cli/${{ matrix.package }}/uv.lock
+      # --locked fails if uv.lock is out of date with pyproject.toml, so ruff/black
+      # run at the versions pinned in the lockfile.
+      - name: ruff check
+        run: uv run --locked --extra dev ruff check .
+      - name: black --check
+        run: uv run --locked --extra dev black --check .
+      # Imports the whole CLI; catches broken imports and missing dependencies.
+      - name: CLI smoke test
+        run: uv run --locked ${{ matrix.package }} --help
+      - name: pytest
+        run: |
+          # Exit code 5 means no tests were collected. llmb-install has none yet, so it
+          # gets a notice; llmb-run has a suite, so collecting nothing there is a failure.
+          rc=0
+          uv run --locked --extra dev pytest -q || rc=$?
+          if [ "$rc" -eq 5 ] && [ "${{ matrix.package }}" = "llmb-install" ]; then
+            echo "::notice::No tests collected in cli/${{ matrix.package }}"
+          elif [ "$rc" -ne 0 ]; then
+            exit "$rc"
+          fi
+
+  shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SHELLCHECK_VERSION: v0.11.0
+      SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The runner image ships an older shellcheck; pin the release so CI and
+      # local runs agree on the rule set.
+      - name: Install shellcheck
+        run: |
+          curl -fsSL --retry 3 -o shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf shellcheck.tar.xz
+          install -m 0755 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" "$RUNNER_TEMP/shellcheck"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: List scripts
+        run: |
+          # The vendored collector snapshot is upstream code; everything else is ours.
+          git ls-files -z '*.sh' ':!:microbenchmarks/llmb_collector/source_snapshot/**' > "$RUNNER_TEMP/scripts.txt"
+          test -s "$RUNNER_TEMP/scripts.txt"
+          tr '\0' '\n' < "$RUNNER_TEMP/scripts.txt"
+      - name: bash -n
+        run: xargs -0 -r -n1 bash -n < "$RUNNER_TEMP/scripts.txt"
+      - name: shellcheck
+        run: |
+          shellcheck --version
+          xargs -0 -r shellcheck --severity=warning < "$RUNNER_TEMP/scripts.txt"
+
+  recipes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            inference/k8s_recipes/requirements-validation.txt
+            .github/ci-constraints.txt
+      # Exact pins: render-check diffs Jinja2 output byte for byte against the
+      # committed manifests, so a floating Jinja2/PyYAML release could fail every PR.
+      - run: python -m pip install -r inference/k8s_recipes/requirements-validation.txt -c .github/ci-constraints.txt
+      - name: Parse recipe and config YAML
+        run: python .github/scripts/check_yaml.py
+      # `make ci` minus `test` (slow) and the two checks that need internal policy baselines.
+      - name: k8s recipe checks
+        run: >
+          make -C inference/k8s_recipes
+          validate link-check pasteable-check contract-check reproduce-check check-invariants
+          provenance-check render-check lint matrix-check results-check pooled-check export-check multiarch-check

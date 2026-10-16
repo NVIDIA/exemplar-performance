@@ -94,7 +94,8 @@ set +a
 . "$ROOT/scripts/_model_cache.sh"
 llmb::resolve_model_cache_pvc "$CELL" "$ENVF" || exit 1
 
-export RUN_ID="dryrun-$(date -u +%Y%m%d-%H%M%S)"
+RUN_ID="dryrun-$(date -u +%Y%m%d-%H%M%S)"
+export RUN_ID
 : "${OWNER:=$(whoami)}" "${CACHE_BUST:=}" "${DCGM_EXPORTER_URL:=}"
 : "${BENCH_NODE_SELECTOR:=}" "${BENCH_CPU_REQUEST:=16}"
 : "${NO_INTERNET_DNS_IP:=}" "${NO_INTERNET_KUBE_API_IP:=}"                                    # live no-internet policy

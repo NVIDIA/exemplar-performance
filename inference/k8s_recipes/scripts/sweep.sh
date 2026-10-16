@@ -97,10 +97,12 @@ kc() { "${KUBECTL:-kubectl}" ${KUBE_CONTEXT:+--context "$KUBE_CONTEXT"} "$@"; }
 # Both paths fall back to a plain UTC stamp / the raw arg if the helper is unavailable.
 if [ -n "${3:-}" ]; then
     if [ "${LLMB_RUN_ID_FINAL:-0}" = 1 ]; then export RUN_ID="$3"; else
-        export RUN_ID="$(python3 "$ROOT/scripts/run_id.py" "$CELL" --fit bench --label "$3" 2> /dev/null || echo "$3")"
+        RUN_ID="$(python3 "$ROOT/scripts/run_id.py" "$CELL" --fit bench --label "$3" 2> /dev/null || echo "$3")"
+        export RUN_ID
     fi
 else
-    export RUN_ID="$(python3 "$ROOT/scripts/run_id.py" "$CELL" --fit bench 2> /dev/null || date -u +%Y%m%d-%H%M%S)"
+    RUN_ID="$(python3 "$ROOT/scripts/run_id.py" "$CELL" --fit bench 2> /dev/null || date -u +%Y%m%d-%H%M%S)"
+    export RUN_ID
 fi
 : "${OWNER:=}" "${CACHE_BUST:=}" "${DCGM_EXPORTER_URL:=}" # optional -> empty, not unset
 : "${BENCH_NODE_SELECTOR:=}" "${BENCH_CPU_REQUEST:=16}"   # bench pod placement/size (optional profile overrides)

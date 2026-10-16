@@ -27,7 +27,8 @@ set -eu
 
 # Resolve recipe root (parent of scripts/) regardless of where the caller is.
 _LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export RECIPE_ROOT="$(cd "$_LIB_DIR/.." && pwd)"
+RECIPE_ROOT="$(cd "$_LIB_DIR/.." && pwd)"
+export RECIPE_ROOT
 
 # Serving backend the shared harness drives. The default backend is the
 # aggregated vLLM stack; its chart/, manifests/ and contexts/ overlays live

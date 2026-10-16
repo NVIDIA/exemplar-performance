@@ -144,9 +144,11 @@ fi
 kc() { kubectl ${KUBE_CONTEXT:+--context "$KUBE_CONTEXT"} "$@"; }
 # Normalize explicit and generated run IDs for Kubernetes labels and resource names.
 if [ -n "${3:-}" ]; then
-    export RUN_ID="$(python3 "$ROOT/scripts/run_id.py" "$CELL" --fit "$KIND" --label "$3" 2> /dev/null || echo "$3")"
+    RUN_ID="$(python3 "$ROOT/scripts/run_id.py" "$CELL" --fit "$KIND" --label "$3" 2> /dev/null || echo "$3")"
+    export RUN_ID
 else
-    export RUN_ID="$(python3 "$ROOT/scripts/run_id.py" "$CELL" --fit "$KIND" 2> /dev/null || date -u +%Y%m%d-%H%M%S)"
+    RUN_ID="$(python3 "$ROOT/scripts/run_id.py" "$CELL" --fit "$KIND" 2> /dev/null || date -u +%Y%m%d-%H%M%S)"
+    export RUN_ID
 fi
 : "${OWNER:=}" "${CACHE_BUST:=}" "${DCGM_EXPORTER_URL:=}"
 : "${BENCH_NODE_SELECTOR:=}" "${BENCH_CPU_REQUEST:=16}"

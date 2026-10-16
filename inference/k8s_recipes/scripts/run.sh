@@ -296,9 +296,11 @@ KIND="$(python3 "$ROOT/scripts/lane.py" "$CELL" kind 2> /dev/null || echo bench)
 # (rp3 → 260728t0312-rp3), flows into the results path + Job name + labels, and is shrunk to fit ≤63
 # (already-dated ids pass through unchanged). Both paths fall back if the helper is unavailable.
 if [ -n "${3:-}" ]; then
-    export RUN_ID="$(python3 "$ROOT/scripts/run_id.py" "$CELL" --fit "$KIND" --label "$3" 2> /dev/null || echo "$3")"
+    RUN_ID="$(python3 "$ROOT/scripts/run_id.py" "$CELL" --fit "$KIND" --label "$3" 2> /dev/null || echo "$3")"
+    export RUN_ID
 else
-    export RUN_ID="$(python3 "$ROOT/scripts/run_id.py" "$CELL" --fit "$KIND" 2> /dev/null || date -u +%Y%m%d-%H%M%S)"
+    RUN_ID="$(python3 "$ROOT/scripts/run_id.py" "$CELL" --fit "$KIND" 2> /dev/null || date -u +%Y%m%d-%H%M%S)"
+    export RUN_ID
 fi
 
 # Reserve the run identity BEFORE preflight, run-owner creation, model loading, or any GPU deployment. A
