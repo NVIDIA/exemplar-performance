@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -137,9 +119,15 @@ def render_result_block(payload: dict, run_dir: str = "", csv_present: bool = Tr
         )
 
     pts = payload.get("per_point") or []
-    if pts:
+    if pts and "concurrency" in pts[0]:
         rungs = " · ".join(f"c={_fmt(p.get('concurrency'), 0)} {_fmt(p.get('g'), 4)}" for p in pts)
         lines.append(f"     rungs: {rungs}")
+    elif pts:
+        replays = " · ".join(
+            f"c{p.get('rung')}/{p.get('container')} {_fmt(p.get('tool_busy_sec'), 3)}s {p.get('verdict', '')}"
+            for p in pts
+        )
+        lines.append(f"     replays: {replays}")
     if payload.get("value_source"):
         lines.append(f"     source: {payload['value_source']}")
     if not csv_present:
@@ -182,6 +170,62 @@ def cell_scenario(cell: str) -> str:
         return ""
 
 
+def _evaluate_via_handler(cell: str, run_dir: str, root: Path) -> tuple[dict, bool]:
+    """Score a run through its (scenario, goal) handler — the publish spine's own aggregation + metric —
+    and compare against the cell's exemplar block. Used by lanes whose aggregator is not the llm-perf pair
+    (agentic/TaskTrace: analysis/agentic/aggregate_metrics.py → the longest passing replay tool time)."""
+    try:
+        import yaml
+
+        sys.path.insert(0, str(root / "analysis"))
+        import goal_handlers as _gh  # noqa: E402
+
+        recipe = yaml.safe_load((Path(cell) / "recipe.yaml").read_text()) or {}
+        env = recipe.get("envelope") or {}
+        handler = _gh.resolve(env.get("scenario"), env.get("goal"))
+        rows = handler.read_native_rows(run_dir, env.get("goal"))
+    except Exception as e:  # a reporting problem is reported, never raised into run.sh
+        return ({"error": f"{type(e).__name__}: {e}"}, False)
+    csv_present = (Path(run_dir) / handler.summary_csv).exists()
+    if not rows:
+        return (
+            {"error": f"no container replay summaries under {run_dir} (expected c<K>/<i>/summary.json)"},
+            csv_present,
+        )
+    fields = handler.result_fields(rows, recipe)
+    ex = env.get("exemplar") or {}
+    reference = ex.get("reference")
+    tolerance = ex.get("tolerance_pct", 5)
+    value = fields.get("value")
+    payload = {
+        "metric": handler.metric,
+        "unit": ex.get("unit") or handler.unit,
+        "value": value,
+        "reference": reference,
+        "tolerance_pct": tolerance,
+        "value_source": fields.get("value_source"),
+        "per_point": fields.get("per_point"),
+        "replays_passed": fields.get("replays_passed"),
+        "replays_total": fields.get("replays_total"),
+    }
+    if value is None:
+        payload["verdict"] = "NOT_VALID"
+        payload["error"] = (
+            f"{fields.get('replays_passed', 0)}/{fields.get('replays_total', 0)} container replays passed the "
+            "TaskTrace check; see each c<K>/<i>/summary.json diagnostics"
+        )
+        payload["delta_pct"] = None
+    elif not isinstance(reference, (int, float)):
+        payload["verdict"], payload["delta_pct"] = "NO_REFERENCE", None
+    else:
+        # lower is better for a ratio: worse = ABOVE the bar by more than the tolerance
+        delta = (value - reference) / reference * 100.0 if reference else None
+        payload["delta_pct"] = None if delta is None else round(delta, 2)
+        worse = (delta or 0.0) if not handler.higher_better else -(delta or 0.0)
+        payload["verdict"] = "EXEMPLAR" if worse <= float(tolerance) else "NOT_EXEMPLAR"
+    return (payload, csv_present)
+
+
 def evaluate(cell: str, run_dir: str, root: Path = ROOT) -> tuple[dict, bool]:
     """Aggregate (if needed) then evaluate. Returns (payload, csv_present).
 
@@ -192,6 +236,8 @@ def evaluate(cell: str, run_dir: str, root: Path = ROOT) -> tuple[dict, bool]:
     # command owns the verdict rather than rendering a confident blank — an unrecognised lane must not look
     # like a run with nothing to report.
     scen = cell_scenario(cell)
+    if scen == "agentic":
+        return _evaluate_via_handler(cell, run_dir, root)
     if scen and scen != "llm-perf":
         return (
             {

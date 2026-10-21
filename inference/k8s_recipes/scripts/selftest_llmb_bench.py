@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -28,6 +10,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # inference/k8s_recipes
@@ -243,13 +226,18 @@ from jinja2 import StrictUndefined as _SU  # noqa: E402,N814
 _TPL_DIR = ROOT / "serving" / "aiperf" / "templates"
 
 
-def _render_bench(recipe_path: Path, strip_depth: bool = False, extra_inputs: str | None = None) -> str:
-    recipe = _yaml.safe_load(recipe_path.read_text()) or {}
+def _recipe(recipe_source: Path | dict) -> dict:
+    return (
+        deepcopy(recipe_source) if isinstance(recipe_source, dict) else _yaml.safe_load(recipe_source.read_text()) or {}
+    )
+
+
+def _render_bench(recipe_path: Path | dict, strip_depth: bool = False, extra_inputs: str | None = None) -> str:
+    recipe = _recipe(recipe_path)
     if extra_inputs is not None:
         recipe.setdefault("bench", {})["extra_inputs"] = extra_inputs
     if strip_depth:
-        # Force the depth-LESS legacy fixed-trace path even on a cell that pins bench.depth (the surviving
-        # KVBM trace cell pins depth=8) — so the byte-neutral "no depth" assertion still exercises that path.
+        # Force the depth-less legacy fixed-trace path even though this fixture pins bench.depth.
         (recipe.get("bench") or {}).pop("depth", None)
     ctx = dict(recipe)
     prov = (recipe.get("envelope") or {}).get("provenance") or {}
@@ -265,14 +253,26 @@ def _render_bench(recipe_path: Path, strip_depth: bool = False, extra_inputs: st
     return jenv.get_template("bench-job.yaml.j2").render(**ctx)
 
 
-# Fixtures migrated off the pruned glm5-16k512 / glm5-9600 cells to the surviving north-star cells:
-#   _GLM_SYN → the retained GLM-5 B200 disagg cell (mode: synthetic, isl/osl 922, seed 42, num_entries 25760)
-#   _TRACE   → the kept Qwen3-KVBM gb300 cell (mode: mooncake-trace; pins bench.depth=8)
+# The synthetic case uses a surviving GLM-5 cell. The trace case is derived in memory so the
+# trace-rendering contract stays covered without depending on a shipped trace recipe or dataset.
 _GLM_SYN = ROOT / (
     "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/"
     "glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c2576-1p1d/recipe.yaml"
 )
-_TRACE = ROOT / "recipes/llm-perf/kvbm/qwen3-0-6b-b200-vllm-agg-kvbm-pareto/recipe.yaml"
+_TRACE = _recipe(_GLM_SYN)
+_TRACE["envelope"]["mode"] = "mooncake-trace"
+_TRACE["envelope"]["distribution"] = "example-trace"
+_TRACE["bench"].pop("synthetic")
+_TRACE["bench"].pop("aiperf_ref", None)
+_TRACE["bench"].pop("aiperf_unsafe_override", None)
+_TRACE["bench"].pop("bench_pod_port_tuning", None)
+_TRACE["bench"]["dataset"] = {
+    "id": "example-trace",
+    "subpath": "datasets/example-trace.jsonl",
+    "type": "mooncake_trace",
+    "max_isl": 1024,
+}
+_TRACE["bench"]["depth"] = 8
 _syn_bench = _render_bench(_GLM_SYN)
 check(
     "bench-tpl(synthetic): aiperf argv uses --isl/--osl, drops --input-file/--custom-dataset-type",
@@ -333,8 +333,8 @@ check(
 )
 
 
-def _render_bench_with_depth(recipe_path: Path, depth: int) -> str:
-    recipe = _yaml.safe_load(recipe_path.read_text()) or {}
+def _render_bench_with_depth(recipe_path: Path | dict, depth: int) -> str:
+    recipe = _recipe(recipe_path)
     recipe.setdefault("bench", {})["depth"] = depth
     ctx = dict(recipe)
     prov = (recipe.get("envelope") or {}).get("provenance") or {}
@@ -364,8 +364,8 @@ check(
 
 # --- Source-port tuning: the sysctl settings are
 #     OPT-IN and byte-identical when absent; sticky-user-sessions is PRESERVED (not switched to pooled). ---
-def _render_bench_with_fields(recipe_path: Path, **bench_overrides) -> str:
-    recipe = _yaml.safe_load(recipe_path.read_text()) or {}
+def _render_bench_with_fields(recipe_path: Path | dict, **bench_overrides) -> str:
+    recipe = _recipe(recipe_path)
     recipe.setdefault("bench", {}).update(bench_overrides)
     ctx = dict(recipe)
     prov = (recipe.get("envelope") or {}).get("provenance") or {}
@@ -397,7 +397,7 @@ check(
     _AIPERF_011_REF in _aiperf_011_bench and "--unsafe-override" not in _aiperf_011_bench,
 )
 check(
-    "bench-tpl(aiperf legacy default): unrelated published cell keeps old pin and legacy option",
+    "bench-tpl(aiperf legacy default): trace fixture uses default pin and legacy option",
     "fef78a96ee30df4c135a9e5691b48e50ba91133d" in _legacy_aiperf_bench and "--unsafe-override" in _legacy_aiperf_bench,
 )
 check(
@@ -405,13 +405,13 @@ check(
     "--no-server-metrics" in _no_server_metrics_bench and "--no-server-metrics" not in _legacy_aiperf_bench,
 )
 
-# absent → BYTE-IDENTICAL to the committed render (no securityContext.sysctls, no port-tuning initContainer).
+# absent → BYTE-IDENTICAL to the unmodified fixture render (no securityContext.sysctls, no port-tuning initContainer).
 # Compare against the AS-IS render of _TRACE (depth preserved) so the byte-identity isolates the port-tuning
 # block — _trace_bench above is depth-stripped for the legacy-trace assertions, an orthogonal concern.
 _trace_asis = _render_bench(_TRACE)
 check(
     "bench-tpl(port-tuning absent): renders byte-identically — no sysctls / no port-tuning initContainer, "
-    "zero re-fingerprint for published cells",
+    "no change to the unmodified trace render",
     "securityContext:\n        sysctls:" not in _trace_asis
     and "name: port-tuning" not in _trace_asis
     and _render_bench_with_fields(_TRACE) == _trace_asis,

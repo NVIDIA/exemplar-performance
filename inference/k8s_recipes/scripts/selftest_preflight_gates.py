@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -44,6 +26,8 @@ import re
 import sys
 import tempfile
 import unittest
+
+import yaml
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -499,7 +483,6 @@ class TestBenchCoscheduleDemand(unittest.TestCase):
     """Reads the RENDERED manifests — what will actually be applied."""
 
     ROOT = Path(__file__).resolve().parent.parent
-    KVBM = "recipes/llm-perf/kvbm/qwen3-0-6b-b200-vllm-agg-kvbm-pareto"
     GLM = "recipes/llm-perf/Glm5/B200_k8s/Agg/1k_1k/glm5-fp8-b200-sglang15-agg-c4-1024"
     PROF = {
         "BENCH_CPU_REQUEST": "16",
@@ -509,8 +492,39 @@ class TestBenchCoscheduleDemand(unittest.TestCase):
         "IMAGE_PULL_SECRET": "s",
     }
 
+    @classmethod
+    def setUpClass(cls):
+        cls._temp = tempfile.TemporaryDirectory()
+        cls.colocated_cell = Path(cls._temp.name)
+        rendered = cls.colocated_cell / "rendered"
+        rendered.mkdir()
+        (rendered / "bench-job.yaml").write_text(
+            "kind: ServiceAccount\n"
+            "---\n"
+            "kind: Job\n"
+            "spec:\n"
+            "  template:\n"
+            "    spec:\n"
+            "      affinity:\n"
+            "        podAffinity:\n"
+            "          requiredDuringSchedulingIgnoredDuringExecution:\n"
+            "          - topologyKey: kubernetes.io/hostname\n"
+            "      containers:\n"
+            "      - name: bench\n"
+            "        resources:\n"
+            "          requests:\n"
+            "            cpu: ${BENCH_CPU_REQUEST}\n"
+            "            memory: 16Gi\n"
+            "      volumes:\n"
+            "      - persistentVolumeClaim: { claimName: ${MODEL_CACHE_PVC} }\n"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._temp.cleanup()
+
     def test_colocated_cell_reports_its_demand(self):
-        d = pf.bench_coschedule_demand(self.ROOT / self.KVBM, self.PROF)
+        d = pf.bench_coschedule_demand(self.colocated_cell, self.PROF)
         self.assertEqual(d.get("cpu_m"), 16000)
         self.assertEqual(d.get("mem_gib"), 16)  # a LITERAL in the manifest, not a profile var
 
@@ -520,12 +534,12 @@ class TestBenchCoscheduleDemand(unittest.TestCase):
     def test_multi_document_manifest_is_parsed(self):
         """The bench manifest bundles ServiceAccount/Role/RoleBinding with the Job; safe_load() alone
         returns only the first document and the check would silently no-op."""
-        self.assertTrue(pf.bench_coschedule_demand(self.ROOT / self.KVBM, self.PROF))
+        self.assertTrue(pf.bench_coschedule_demand(self.colocated_cell, self.PROF))
 
     def test_unsubstituted_vars_do_not_break_the_parse(self):
         """`{ claimName: ${MODEL_CACHE_PVC} }` — the `{` of `${...}` opens a nested flow mapping and the
         YAML parse dies. With a bare except that turned the whole gate into a no-op."""
-        d = pf.bench_coschedule_demand(self.ROOT / self.KVBM, {})
+        d = pf.bench_coschedule_demand(self.colocated_cell, {})
         self.assertNotIn("parse_error", d)
         self.assertEqual(d.get("mem_gib"), 16)
 
@@ -537,7 +551,7 @@ class TestBenchCoscheduleDemand(unittest.TestCase):
         _coschedule_verdict skipped the cpu comparison entirely — the exact 180+16 > 192 case this gate was
         written for, silently not checked, then rendered as `180+__llmb_unset__ cpu` inside a PASS.
         """
-        d = pf.bench_coschedule_demand(self.ROOT / self.KVBM, {})
+        d = pf.bench_coschedule_demand(self.colocated_cell, {})
         self.assertEqual(d.get("cpu_m"), 16000)
         self.assertEqual(d.get("cpu_raw"), "16")
         self.assertNotIn(pf._UNSET_TOKEN, d.get("cpu_raw", ""))
@@ -559,7 +573,7 @@ class TestBenchCoscheduleDemand(unittest.TestCase):
         self.assertIn("BENCH_CPU_REQUEST=16", v[0])
         # An explicit profile value still wins over the default.
         self.assertEqual(
-            pf.bench_coschedule_demand(self.ROOT / self.KVBM, {"BENCH_CPU_REQUEST": "64"}).get("cpu_m"),
+            pf.bench_coschedule_demand(self.colocated_cell, {"BENCH_CPU_REQUEST": "64"}).get("cpu_m"),
             64000,
         )
 
@@ -636,6 +650,69 @@ class TestDisaggCacheAccessMode(unittest.TestCase):
         self.assertIsNone(pf.disagg_cache_access_issue({"stack": "sglang-agg"}, ["ReadWriteOnce"]))
 
 
+class TestNodeLocalCacheRollout(unittest.TestCase):
+    """A node-local cache must finish before unconstrained GPU workers can be scheduled."""
+
+    MODEL = "glm5-fp8"
+    REVISION = "4f96cc5e"
+
+    def daemonset(self, **status):
+        return {
+            "metadata": {
+                "labels": {"llmb.nvidia.com/model": self.MODEL, "llmb.nvidia.com/model-revision": self.REVISION}
+            },
+            "status": status,
+        }
+
+    def test_fully_rolled_out_cache_passes(self):
+        self.assertIsNone(
+            pf.node_local_cache_rollout_issue(
+                [
+                    self.daemonset(
+                        desiredNumberScheduled=18,
+                        currentNumberScheduled=18,
+                        updatedNumberScheduled=18,
+                        numberReady=18,
+                        numberAvailable=18,
+                        numberUnavailable=0,
+                    )
+                ],
+                self.MODEL,
+                self.REVISION,
+            )
+        )
+
+    def test_copying_or_verifying_node_blocks_gpu_launch(self):
+        issue = pf.node_local_cache_rollout_issue(
+            [
+                self.daemonset(
+                    desiredNumberScheduled=18,
+                    currentNumberScheduled=18,
+                    updatedNumberScheduled=18,
+                    numberReady=17,
+                    numberAvailable=17,
+                    numberUnavailable=1,
+                )
+            ],
+            self.MODEL,
+            self.REVISION,
+        )
+        self.assertIn("rollout incomplete", issue)
+        self.assertIn("ready=17", issue)
+
+    def test_missing_or_ambiguous_cache_daemonset_fails_closed(self):
+        self.assertIn("found 0", pf.node_local_cache_rollout_issue([], self.MODEL, self.REVISION))
+        healthy = self.daemonset(
+            desiredNumberScheduled=1,
+            currentNumberScheduled=1,
+            updatedNumberScheduled=1,
+            numberReady=1,
+            numberAvailable=1,
+            numberUnavailable=0,
+        )
+        self.assertIn("found 2", pf.node_local_cache_rollout_issue([healthy, healthy], self.MODEL, self.REVISION))
+
+
 class TestLazyCacheResolution(unittest.TestCase):
     """A claim is REQUIRED where it is mounted, and only there — and it is still required there.
 
@@ -643,13 +720,24 @@ class TestLazyCacheResolution(unittest.TestCase):
     end to end, by actually running main() and catching the refusal."""
 
     ROOT = Path(__file__).resolve().parent.parent
-    KVBM = "recipes/llm-perf/kvbm/qwen3-0-6b-b200-vllm-agg-kvbm-pareto"
+    GLM = "recipes/llm-perf/Glm5/B200_k8s/Agg/1k_1k/glm5-fp8-b200-sglang15-agg-c4-1024"
 
-    def test_every_shipped_cell_still_requires_a_claim(self):
+    def test_every_shipped_cell_has_a_gated_or_verified_cache(self):
         cells = [p.parent for p in (self.ROOT / "recipes").glob("**/recipe.yaml") if (p.parent / "rendered").is_dir()]
         self.assertTrue(cells)
-        missed = [c.name for c in cells if not pf.cell_mounts_model_cache(c)]
-        self.assertEqual(missed, [], f"these cells mount the cache but would not be gated: {missed}")
+        missed = []
+        for cell in cells:
+            if pf.cell_mounts_model_cache(cell):
+                continue
+            recipe = yaml.safe_load((cell / "recipe.yaml").read_text())
+            staging = (recipe.get("serving") or {}).get("model_cache_staging") or {}
+            if staging.get("mode") != "node-local-versioned-hostpath" or not staging.get("host_path"):
+                missed.append(cell.name)
+        self.assertEqual(
+            missed,
+            [],
+            f"these cells have neither a gated PVC nor an explicit verified node-local cache: {missed}",
+        )
 
     def test_main_still_refuses_a_mounting_cell_with_no_claim(self):
         """FAIL-CLOSED, end to end. This runs main() far enough to hit the gate; the refusal happens before
@@ -660,7 +748,7 @@ class TestLazyCacheResolution(unittest.TestCase):
             argv = sys.argv[:]
             sys.argv = [
                 "preflight.py",
-                str(self.ROOT / self.KVBM),
+                str(self.ROOT / self.GLM),
                 str(td) + "/nocache",
                 "--stage-only",
             ]
@@ -670,7 +758,7 @@ class TestLazyCacheResolution(unittest.TestCase):
             finally:
                 sys.argv = argv
             self.assertIn("no model-cache PVC resolved", str(ctx.exception))
-            self.assertIn("MODEL_CACHE_PVC_QWEN3_0_6B", str(ctx.exception))
+            self.assertIn("MODEL_CACHE_PVC_GLM5_FP8", str(ctx.exception))
 
 
 class TestWizardWholeNodeReserve(unittest.TestCase):

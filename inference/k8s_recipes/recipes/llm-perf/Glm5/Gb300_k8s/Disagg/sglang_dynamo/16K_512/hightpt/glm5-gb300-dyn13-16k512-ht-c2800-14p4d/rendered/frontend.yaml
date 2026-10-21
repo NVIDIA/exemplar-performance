@@ -1,0 +1,127 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# sglang-disagg — Dynamo HTTP frontend for disaggregated SGLang serving (rendered from a cell's recipe.yaml).
+# {{ ... }} = recipe truth (baked at render). ${ ... } = cluster truth (envsubst at launch).
+#
+# The frontend is the OpenAI-compatible entrypoint: it discovers prefill/decode workers via etcd + NATS
+# (rendered by infra.yaml) and routes disaggregated requests to them. It holds NO GPUs. The Service is
+# named "glm5-gb300-dyn13-16k512-ht-c2800-14p4d-server" so the shared aiperf bench-Job (serving/aiperf/templates) reaches it
+# at http://glm5-gb300-dyn13-16k512-ht-c2800-14p4d-server:8000 with no per-stack special-casing.
+apiVersion: v1
+kind: Service
+metadata:
+  name: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-server
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/served-model: GLM-5-FP8 }
+spec:
+  selector: { app: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-frontend }
+  ports: [{ port: 8000, targetPort: 8000, name: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-frontend
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/served-model: GLM-5-FP8 }
+spec:
+  replicas: 10
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-frontend } }
+  template:
+    metadata: { labels: { app: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-frontend, llmb.nvidia.com/recipe: glm5-gb300-dyn13-16k512-ht-c2800-14p4d } }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      schedulerName: ${SCHEDULER_NAME}
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      # The verify-node-model-cache initContainer and hostPath volume below require the
+      # node-local cache prepared by the node-cache DaemonSet, which only runs on GB300 nodes.
+      nodeSelector:
+        kubernetes.io/arch: arm64
+        nvidia.com/gpu.product: ${GPU_PRODUCT}
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+      # Dynamo 1.3 resolves tokenizer/config metadata from the absolute snapshot path
+      # advertised by workers. Verify and mount the same prepared node cache read-only;
+      # never mount the shared RWO model-cache PVC in this router.
+      initContainers:
+        - name: verify-node-model-cache
+          image: nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:04b328da910ea84550a47757bf6eb79ee0da07d01fe336b89cab6d5c00bf8920
+          imagePullPolicy: IfNotPresent
+          securityContext: { runAsUser: 0 }
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              expected='zai-org/GLM-5-FP8@4f96cc5eec29dcee5d6ded54f7ffe889438f9516'
+              actual=$(cat /node-hf-cache/.llmb-cache-ready 2>/dev/null || true)
+              test "$actual" = "$expected" || {
+                echo "FATAL: node cache is not ready for $expected (marker='$actual')" >&2
+                exit 65
+              }
+              SNAPSHOT=$(python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id='zai-org/GLM-5-FP8', revision='4f96cc5eec29dcee5d6ded54f7ffe889438f9516', cache_dir='/node-hf-cache/hub', local_files_only=True))")
+              test -s "$SNAPSHOT/config.json"
+              shards=$(find -L "$SNAPSHOT" -maxdepth 1 -name '*.safetensors' -type f | wc -l)
+              test "$shards" -eq 142 || { echo "FATAL: expected 142 checkpoint shards, found $shards" >&2; exit 66; }
+              echo "NODE_CACHE_VERIFIED node=$NODE_NAME revision=4f96cc5eec29dcee5d6ded54f7ffe889438f9516 shards=$shards"
+          env:
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+          resources:
+            requests: { cpu: "1", memory: 2Gi }
+            limits: { cpu: "4", memory: 8Gi }
+          volumeMounts:
+            - { mountPath: /node-hf-cache, name: versioned-node-model-cache, readOnly: true }
+      containers:
+        - name: frontend
+          image: nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:04b328da910ea84550a47757bf6eb79ee0da07d01fe336b89cab6d5c00bf8920
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -eu
+              # High-concurrency profiles can exceed the container default of 1024 open files.
+              ulimit -n 524288 || true
+              # This frontend only routes HTTP traffic and never mounts the shared RWO weights PVC.
+              # In node-cache mode Dynamo 1.3 still needs read-only access to worker-advertised
+              # tokenizer/config metadata, supplied by the verified hostPath below.
+              exec python3 -m dynamo.frontend --http-port=8000 --enforce-disagg
+          ports: [{ containerPort: 8000, name: http, protocol: TCP }]
+          env:
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: ETCD_ENDPOINTS, value: "http://glm5-gb300-dyn13-16k512-ht-c2800-14p4d-etcd:2379" }
+            - { name: NATS_SERVER, value: "nats://glm5-gb300-dyn13-16k512-ht-c2800-14p4d-nats:4222" }
+            - { name: DYN_REQUEST_PLANE, value: "nats" }
+            - { name: DYN_SKIP_SGLANG_LOG_FORMATTING, value: "1" }
+            - { name: HF_HOME, value: "/data/hf-cache" }
+            - { name: HF_HUB_OFFLINE, value: "1" }
+            - { name: TRANSFORMERS_OFFLINE, value: "1" }
+            - name: POD_UID
+              valueFrom:
+                fieldRef: { fieldPath: metadata.uid }
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 180   # 30-min budget: workers must register before the frontend is ready
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 8
+          resources:
+            requests: { cpu: "4", memory: 16Gi }
+            limits:   { cpu: "16", memory: 64Gi }
+          volumeMounts:
+            - { mountPath: /data/hf-cache, name: versioned-node-model-cache, readOnly: true }
+      volumes:
+        - name: versioned-node-model-cache
+          hostPath:
+            path: "/mnt/k8s-disks/0/llmb-model-cache/glm5-fp8/4f96cc5eec29dcee5d6ded54f7ffe889438f9516"
+            type: Directory

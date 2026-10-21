@@ -1,0 +1,136 @@
+{
+  "schema_version": "ATIF-v1.5",
+  "session_id": "swebenchpro-representative-fixture",
+  "agent": {
+    "name": "codex",
+    "version": "0.133.0",
+    "model_name": "fixture",
+    "extra": {
+      "originator": "codex_exec",
+      "cwd": "/app"
+    }
+  },
+  "fixture_provenance": {
+    "dataset": "SWE-bench Pro",
+    "curation": "Hermetic commands preserving observed Codex ATIF-v1.5 command, session, patch, and metadata shapes."
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-05-24T18:57:41.956Z",
+      "tool_calls": [
+        {
+          "tool_call_id": "codex-command",
+          "function_name": "exec_command",
+          "arguments": {
+            "cmd": "[[ 1 == 1 ]] && printf 'bash-dialect\\n' > bash-dialect.txt; printf 'codex-stdout\\n'; printf 'codex-stderr\\n' >&2",
+            "yield_time_ms": 1000,
+            "max_output_tokens": 12000
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "codex-command",
+            "content": "Chunk ID: fixture\nWall time: 0.001 seconds\nProcess exited with code 0\nOriginal token count: 2\nOutput:\ncodex-stdout\ncodex-stderr\n"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-05-24T18:57:42.956Z",
+      "tool_calls": [
+        {
+          "tool_call_id": "codex-session-start",
+          "function_name": "exec_command",
+          "arguments": {
+            "cmd": "printf 'session-start\\n'; sleep 0.05; printf 'session-end\\n'; exit 7",
+            "yield_time_ms": 1,
+            "max_output_tokens": 12000
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "codex-session-start",
+            "content": "Chunk ID: fixture\nWall time: 0.001 seconds\nProcess running with session ID 44\nOriginal token count: 0\nOutput:\n"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-05-24T18:57:43.956Z",
+      "tool_calls": [
+        {
+          "tool_call_id": "codex-session-finish",
+          "function_name": "write_stdin",
+          "arguments": {
+            "session_id": 44,
+            "chars": "",
+            "yield_time_ms": 100,
+            "max_output_tokens": 12000
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "codex-session-finish",
+            "content": "Chunk ID: fixture\nWall time: 0.050 seconds\nProcess exited with code 7\nFinal output:\nsession-start\nsession-end\n"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-05-24T18:57:44.956Z",
+      "tool_calls": [
+        {
+          "tool_call_id": "codex-patch",
+          "function_name": "apply_patch",
+          "arguments": {
+            "input": "*** Begin Patch\n*** Add File: patched.txt\n+representative patch\n*** End Patch"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "codex-patch",
+            "content": "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\nA patched.txt\n"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 5,
+      "timestamp": "2026-05-24T18:57:45.956Z",
+      "tool_calls": [
+        {
+          "tool_call_id": "codex-plan",
+          "function_name": "update_plan",
+          "arguments": {
+            "plan": [
+              {
+                "step": "Validate the fixture",
+                "status": "completed"
+              }
+            ]
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "codex-plan",
+            "content": "Plan updated"
+          }
+        ]
+      }
+    }
+  ]
+}

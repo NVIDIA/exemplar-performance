@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -295,6 +277,57 @@ def main() -> int:
     r = subprocess.run([sys.executable, str(ROOT / "scripts/reproduce.py")], capture_output=True, text=True)
     check("make reproduce-check is green on the committed tree", r.returncode == 0, r.stdout + r.stderr)
     cells = R.all_cells()
+    # ── agentic cells: no server, GPUs or weights; the capture cell's one manual step ─────────────────────
+    replay_cell = ROOT / "recipes/agentic/tasktrace-replay/swebench-verified-gb300-cpu"
+    capture_cell = ROOT / "recipes/agentic/tasktrace-capture-replay/swebench-verified-gb300-cpu"
+    if replay_cell.is_dir() and capture_cell.is_dir():
+        r_steps, c_steps = "\n".join(R.three_steps(replay_cell)), "\n".join(R.three_steps(capture_cell))
+        for name, body in (("replay", r_steps), ("capture", c_steps)):
+            check(
+                f"agentic {name}: install stages the TaskTrace tools, not weights",
+                "staged TaskTrace tools" in body and "weights" not in body,
+            )
+            check(
+                f"agentic {name}: no server, sweep or GPU wording",
+                "serve" not in body and "sweep" not in body and "GPU" not in body,
+            )
+        check(
+            "agentic replay: no Secret step; run is step 3",
+            "API-key Secret" not in r_steps and "# 3 · run it: preflight → stage → replay → results" in r_steps,
+        )
+        check(
+            "agentic capture: the Secret step names the profile variable and data key; run is step 4",
+            "TASKTRACE_API_KEY_SECRET" in c_steps
+            and "`api_key`" in c_steps
+            and "# 4 · run it: preflight → stage → capture → replay → results" in c_steps,
+        )
+        check("agentic capture: the Secret step passes the banned-primitive lint", R.banned_hits(c_steps) == [])
+    else:
+        print("  skip agentic: the TaskTrace cells are absent on this branch")
+    # ── agentic GPU cells: their own model server, so weights and GPUs; the capture uses that server, no Secret ─
+    gpu_replay = ROOT / "recipes/agentic/tasktrace-replay/swebench-verified-gb300-gpu"
+    gpu_capture = ROOT / "recipes/agentic/tasktrace-capture-replay/swebench-verified-gb300-gpu"
+    if gpu_replay.is_dir() and gpu_capture.is_dir():
+        g_r, g_c = "\n".join(R.three_steps(gpu_replay)), "\n".join(R.three_steps(gpu_capture))
+        for name, body in (("replay", g_r), ("capture", g_c)):
+            check(
+                f"agentic gpu {name}: install downloads the weights and stages the TaskTrace tools",
+                "weights + staged TaskTrace tools" in body,
+            )
+            check(
+                f"agentic gpu {name}: the run serves and frees the GPUs; no Secret step",
+                "→ serve →" in body and "GPUs freed" in body and "API-key Secret" not in body,
+            )
+        check(
+            "agentic gpu replay: run is step 3, without a capture",
+            "# 3 · run it: preflight → stage → serve → replay → results" in g_r,
+        )
+        check(
+            "agentic gpu capture: run is step 3, the capture calling the in-cluster server",
+            "# 3 · run it: preflight → stage → serve → capture → replay → results" in g_c,
+        )
+    else:
+        print("  skip agentic gpu: the GPU TaskTrace cells are absent on this branch")
     check("every cell README carries the markers", all(R.START in (c / "README.md").read_text() for c in cells))
     check(
         "every cell README has the contract's 'How to reproduce' heading",

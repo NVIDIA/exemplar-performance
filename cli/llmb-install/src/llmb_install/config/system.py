@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 """System configuration persistence for LLMB Install.
 
@@ -32,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from llmb_install.config.models import ClusterSettings, InstallConfig
 from llmb_install.utils.logging import get_logger
@@ -47,6 +29,10 @@ class SystemConfig(ClusterSettings):
     install_path and selected_workloads. Inherits all cluster settings from
     ClusterSettings.
     """
+
+    # Not persisted: NVLink topology is re-detected on every fresh install.
+    nvl_domain: Optional[int] = Field(default=None, exclude=True)
+    nvl_block_sizes: Optional[List[int]] = Field(default=None, exclude=True)
 
     @classmethod
     def from_install_config(cls, install_config: InstallConfig) -> 'SystemConfig':
@@ -110,10 +96,12 @@ class SystemConfigManager:
 
             logger.debug(f"Saved system config to {self.config_path}")
             logger.debug(
-                "Persisted fields: venv_type, install_method, gpu_type, " "node_architecture, slurm, environment_vars"
+                "Persisted fields: venv_type, image_download_method, gpu_type, "
+                "node_architecture, slurm, environment_vars"
             )
             logger.debug(
-                "Excluded changing fields: install_path, selected_workloads, " "venv_path, cache_dirs_configured"
+                "Excluded changing fields: install_path, selected_workloads, "
+                "venv_path, cache_dirs_configured, nvl_domain, nvl_block_sizes"
             )
 
         except (OSError, yaml.YAMLError) as e:

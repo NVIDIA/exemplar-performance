@@ -216,40 +216,6 @@ Repo entries are downloaded to:
 - **Setup remains for transforms**: Conversions, prompt dataset generation, checkpoint transforms, repository patching, and containerized setup should remain in `setup.tasks`.
 - **Migration scope**: Existing recipes with download scripts should be moved to `repos` entries in focused follow-up changes.
 
-### Legacy: hf_tokenizers
-
-The `hf_tokenizers` key is supported for backward compatibility but is restricted to tokenizers only. It does **not** download model configurations.
-
-```yaml
-downloads:
-  hf_tokenizers:
-    - 'meta-llama/Meta-Llama-3-70B'
-```
-
-> [!important]
-> **Exclusivity Rule**: You cannot use both `hf_tokenizers` and `huggingface` within the same `metadata.yaml` file. Mixing them will result in a validation error.
-
-### Migration Guidance
-
-Existing recipes using `hf_tokenizers` should eventually migrate to the `huggingface` structure. Note that `hf_tokenizers` only downloads the tokenizer, while the new `huggingface` key defaults to both tokenizer and config.
-
-**Legacy (Tokenizer only):**
-
-```yaml
-downloads:
-  hf_tokenizers:
-    - 'Qwen/Qwen3-30B-A3B'
-```
-
-**Migrated (Tokenizer only):**
-
-```yaml
-downloads:
-  huggingface:
-    - repo_id: Qwen/Qwen3-30B-A3B
-      assets: [tokenizer]
-```
-
 ### Examples
 
 #### 1. Default (Tokenizer + Config)
@@ -459,6 +425,20 @@ setup:
 
 Setup tasks can be used with or without `dependencies`. If `venv_req: true` is set without dependencies, the installer creates an empty workload-specific virtual environment before running tasks. If `venv_req` is omitted or false, tasks run without a virtual environment.
 
+Every task receives `LLMB_INSTALL`, `LLMB_WORKLOAD` (`$LLMB_INSTALL/workloads/<workload_key>`), `GPU_TYPE`, `LLMB_NODE_ARCHITECTURE` (the compute nodes' CPU architecture from the cluster config, `x86_64` or `aarch64`), `LLMB_HOST_ARCHITECTURE` (the node running the installer), and the user-provided environment variables. `srun` tasks also get `SLURM_ACCOUNT`, `SLURM_PARTITION` and `SLURM_GPUS_PER_NODE`; `sbatch` and `nemo2` tasks get the `SBATCH_*` equivalents. A script that must produce binaries for the compute nodes' CPU architecture can compare the two variables and cross-compile locally, requesting an allocation only when they differ.
+
+### Environment Prompts
+
+Declare environment variables the installer should prompt the user for at install time and export into Slurm jobs at run time:
+
+```yaml
+environment_prompts:
+  - name: PUBLIC_NVIDIA_API_KEY
+    description: API key for the public NVIDIA API (https://build.nvidia.com/settings/api-keys)
+```
+
+A bare string entry (`- PUBLIC_NVIDIA_API_KEY`) is shorthand for `name`. Variables are required by default (`required: true`), but can be marked `required: false` if optional. Declared prompts are gathered by `llmb-install` during installation, saved to the system config, and written to the `environment` section of `cluster_config.yaml`, which `llmb-run` exports into submitted jobs. Express mode prompts only for required variables that have no saved value. Headless installs (`--play`) must list them under `environment_vars`; the installer stops before running tasks if any required variable is missing. Declarations across selected workloads are merged by name (`required` is true if any declaring workload requires it). Values are stored in plain text, exactly like `HF_TOKEN`.
+
 ## Run Section (Required)
 
 Defines how the workload is launched and what configurations to test.
@@ -495,6 +475,7 @@ Recipe requirements:
 - Write run artifacts such as logs, generated configs, metrics, and checkpoints under `LLMB_EXPERIMENT_DIR`.
 - Use `LLMB_INSTALL` to find installed workloads, checkpoints, datasets, and shared tools.
 - Use task variables such as `MODEL_SIZE`, `DTYPE`, `JOB_TOTAL_GPUS`, and `GPU_TYPE` for workload selection. Standard Slurm job variables are also available because the script runs as the `sbatch` payload.
+- A workload that uses no GPUs can set `run.requires_gpus: false`. `llmb-run` then submits it to the cluster's `slurm.cpu` partition when `cluster_config.yaml` configures one (no GPU request), and to the GPU partition otherwise. The script should verify the node matches its container image's architecture.
 
 `llmb-run` writes `llmb-config_<JOBID>.yaml` into `LLMB_EXPERIMENT_DIR` and uses the same directory for job logs, archive collection, and supported post-processing.
 
@@ -511,6 +492,13 @@ Launch scripts should treat values passed through `llmb-run submit --env KEY=val
   Append `${LLMB_MBRIDGE_EXTRA_ARGS:-}` as the final expansion in the `setup_experiment.py` command so explicit environment and workload arguments take precedence.
 
 This contract covers explicit `--env` values and YAML `env:` blocks. Environment variables from cluster config or workload config continue to flow through the normal job environment unless the launch script chooses to add them to its container override mechanism.
+
+Alongside `GPU_TYPE`, every launcher also exports two GPU-platform variables. Recipes whose configuration does not depend on them can ignore them.
+
+- `NVL_DOMAIN`: NVLink domain size in GPUs (e.g. `8` for H100/B200/B300, `72` for GB200/GB300/VR NVL72, `576` for NVL576), taken from the cluster's recorded `nvl_domain`, or a per-GPU-type default for installs made before it was recorded.
+- `MBRIDGE_GPU_TYPE`: the chip name Megatron-Bridge expects for this platform (e.g. `vr` -> `vr200`). It equals `GPU_TYPE` for every type Megatron-Bridge already knows by its LLMB name. Megatron-Bridge recipes should pass `--gpu "$MBRIDGE_GPU_TYPE"` to `setup_experiment.py`.
+
+Every launcher also exports `LLMB_INSTALL`, `LLMB_REPO` (the repository root from `cluster_config.yaml`, for files shared across recipes such as `llmb-tools/`), `LLMB_RECIPE_ROOT` (this recipe's directory within `LLMB_REPO`; use it instead of `$PWD` to locate the recipe's own files), and `LLMB_WORKLOAD` (`$LLMB_INSTALL/workloads/<workload_key>`).
 
 ### GPU Configs
 
@@ -530,7 +518,7 @@ gpu_configs:
         scales: [8, 16, 32, 64]
 ```
 
-**Supported GPU Types**: `h100`, `b200`, `gb200`, `gb300`
+**Supported GPU Types**: `vr`, `gb300`, `gb200`, `b300`, `b200`, `h100`
 
 ### Model Configs
 
@@ -857,7 +845,7 @@ tools:
 **Solution**: Use valid enum values. Check the schema for allowed values:
 
 - workload_type: `pretrain`, `inference`, `finetune`
-- GPU types: `h100`, `b200`, `b300`, `gb200`, `gb300`
+- GPU types: `vr`, `gb300`, `gb200`, `b300`, `b200`, `h100`
 - dtypes: `fp8`, `bf16`, `nvfp4`
 
 ### Repository Commit Issues
@@ -903,7 +891,7 @@ The complete schema is defined in `.gitlab/ci/metadata_schema.yaml`. Key enums a
 
 ### Enums
 
-- **GPU Types**: `h100`, `b200`, `gb200`, `gb300`, `default` (for by_gpu only)
+- **GPU Types**: `vr`, `gb300`, `gb200`, `b300`, `b200`, `h100`, `default` (for by_gpu only)
 - **Workload Types**: `pretrain`, `inference`, `finetune`, `microbenchmark`, `rl`
 - **Dtypes**: `fp8`, `bf16`, `nvfp4`, `mxfp4`
 - **Launcher Types**: `nemo`, `megatron_bridge`, `configured_sbatch`, `sbatch`

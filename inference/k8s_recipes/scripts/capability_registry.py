@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -51,6 +33,9 @@ SATISFIED_STATES = (PROVISIONED,)
 # ── the forced-attention-backend env that engages the NVLink allreduce_rms fusion ──
 FLASHINFER_ENV_NAME = "VLLM_ATTENTION_BACKEND"
 FLASHINFER_ENV_VALUE = "FLASHINFER"
+SGLANG_MNNVL_ENV_NAMES = frozenset({"MC_FORCE_MNNVL", "NCCL_MNNVL_ENABLE"})
+IMEX_TRUE_VALUES = frozenset({"1", "TRUE", "YES", "ON"})
+IMEX_FALSE_VALUE = "0"
 
 # ── nvlink-imex Tier-2 provision identifiers ────────────────────────────────────
 # ComputeDomain identifiers used to create one shared, idempotent channel per namespace.
@@ -124,18 +109,39 @@ def _env_forces_flashinfer(env: list) -> bool:
 
 
 def forces_flashinfer(recipe: dict) -> bool:
-    """Does serving.env FORCE the FlashInfer attention backend (which engages the NVLink allreduce fusion)?"""
+    """Does serving.env force the FlashInfer attention backend?"""
     return _env_forces_flashinfer(_serving(recipe).get("env"))
+
+
+def _env_forces_sglang_mnnvl(env: list) -> bool:
+    """Return whether a container explicitly enables the SGLang/NCCL MNNVL path."""
+    return any(
+        str(item.get("name")) in SGLANG_MNNVL_ENV_NAMES and str(item.get("value")).strip().upper() in IMEX_TRUE_VALUES
+        for item in (env or [])
+    )
+
+
+def _env_requires_imex(env: list) -> bool:
+    """Return whether an environment enables a runtime path that requires IMEX."""
+    return _env_forces_flashinfer(env) or _env_forces_sglang_mnnvl(env)
+
+
+def forces_imex(recipe: dict) -> bool:
+    """Return whether any multi-GPU serving role explicitly requires IMEX."""
+    serving = _serving(recipe)
+    if int(serving.get("tp", 0) or 0) > 1 and _env_requires_imex(serving.get("env")):
+        return True
+    disagg = serving.get("disagg") or {}
+    return any(
+        int(role.get("tp", 0) or 0) > 1 and _env_requires_imex(role.get("env"))
+        for role in (disagg.get("prefill") or {}, disagg.get("decode") or {})
+    )
 
 
 # ── entry 1: nvlink-imex (flagship) ────────────────────────────────────────────
 def _req_nvlink_imex(recipe: dict) -> bool:
-    """Required iff the recipe would ENGAGE the FlashInfer NVLink all-reduce fusion:
-    serving.env forces VLLM_ATTENTION_BACKEND=FLASHINFER  AND  serving.tp > 1  AND  GB-class GPU.
-    tp=1, unforced, or non-GB never engages the multicast fusion → the entry is a no-op (silent).
-    """
-    tp = int(_serving(recipe).get("tp", 0) or 0)
-    return forces_flashinfer(recipe) and tp > 1 and _is_gb_class(recipe)
+    """Return whether a GB-class multi-GPU role enables an IMEX-dependent path."""
+    return forces_imex(recipe) and _is_gb_class(recipe)
 
 
 def _probe_nvlink_imex(facts: dict) -> str:
@@ -158,9 +164,9 @@ def _gap_nvlink_imex(recipe: dict, facts: dict, state: str) -> Gap:
             "nvlink-imex",
             "PASS",
             state,
-            "NVLINK_MULTICAST_IMEX=provisioned — ComputeDomain claim wired; FlashInfer " "allreduce_rms fusion ACTIVE",
+            "NVLINK_MULTICAST_IMEX=provisioned — ComputeDomain claim wired; requested IMEX/MNNVL paths ACTIVE",
         )
-    # available|absent|unknown → Tier-1 GUARD: strip the forced backend so cuMulticastCreate can't crash.
+    # Published GB300 benchmarks require the requested IMEX/MNNVL fabric; do not permit a silent performance fallback.
     recover = (
         (
             "this cluster CAN provision it — recover the fusion (Tier 2): "
@@ -171,13 +177,12 @@ def _gap_nvlink_imex(recipe: dict, facts: dict, state: str) -> Gap:
     )
     return Gap(
         "nvlink-imex",
-        "WARN",
+        "FAIL",
         state,
-        f"NVLINK_MULTICAST_IMEX={state} — {recover}. The forced VLLM_ATTENTION_BACKEND=FLASHINFER will be "
-        "STRIPPED at APPLY time (deploy.sh → merge_imex_strip.py) so the server cannot CrashLoop on "
-        "cuMulticastCreate code=800; the committed rendered/ bytes are unchanged (recipe_hash-neutral) and "
-        "vLLM auto-disables only the allreduce_rms fusion (throughput only, zero quality impact).",
-        action="strip-forced-env",
+        f"NVLINK_MULTICAST_IMEX={state} — {recover}. This GB300 benchmark explicitly requests "
+        "MNNVL and will not launch without a provisioned ComputeDomain claim; preflight blocks the run "
+        "before GPU resources are reserved.",
+        action=None,
         fix=("llmb-k8s profile provision-imex --cluster <c>" if state == AVAILABLE else None),
     )
 
@@ -199,17 +204,23 @@ def relax_serving_env(serving: dict, imex_state: str) -> tuple[list, list[str]]:
     for e in env:
         if str(e.get("name")) == FLASHINFER_ENV_NAME and str(e.get("value")).upper() == FLASHINFER_ENV_VALUE:
             stripped.append(str(e.get("name")))
+        elif str(e.get("name")) in SGLANG_MNNVL_ENV_NAMES and str(e.get("value")).strip().upper() in IMEX_TRUE_VALUES:
+            disabled = dict(e)
+            disabled["value"] = IMEX_FALSE_VALUE
+            kept.append(disabled)
+            stripped.append(str(e.get("name")))
         else:
             kept.append(e)
     return kept, stripped
 
 
 def strip_forced_flashinfer(doc: dict, imex_state: str) -> tuple[dict, int]:
-    """Remove a forced FlashInfer backend when IMEX is unavailable.
+    """Disable IMEX-dependent serving settings when IMEX is unavailable.
 
     The function updates serving Deployment containers in place and returns the document plus the number of
-    removed environment entries. A zero count means IMEX is available or no applicable setting was present.
-    Deployment applies this transformation without changing committed rendered manifests.
+    changed environment entries. It removes forced FlashInfer selection and sets SGLang/NCCL MNNVL toggles
+    to ``0``. A zero count means IMEX is available or no applicable setting was present. Deployment applies
+    this transformation without changing committed rendered manifests.
     """
     if imex_state in SATISFIED_STATES:
         return doc, 0
@@ -273,11 +284,8 @@ def _container_requests_gpu(container: dict) -> bool:
 
 
 def _container_needs_imex(container: dict) -> bool:
-    """PURE. True iff the container ENGAGES the NVLink fusion — it requests a GPU AND forces FLASHINFER.
-    Recipe-scoping mirrors provision_imex._req_nvlink_imex at the container level: a tp=1 / non-fusion /
-    non-forcing GPU container sharing a provisioned profile does NOT need (and must not get) the claim.
-    """
-    return _container_requests_gpu(container) and _env_forces_flashinfer(container.get("env"))
+    """Return whether a GPU container explicitly enables an IMEX-dependent path."""
+    return _container_requests_gpu(container) and _env_requires_imex(container.get("env"))
 
 
 def inject_imex_claim(
@@ -286,9 +294,9 @@ def inject_imex_claim(
     """PURE, in-place. Wire the (B) DRA claim (design §4.2) into a serving Deployment `doc`:
       pod.spec.resourceClaims  += {name: pod_claim, resourceClaimTemplateName: channel_rct}
       each fusion-engaging container.resources.claims += {name: pod_claim}
-    Injection is gated on the container actually FORCING FLASHINFER (not merely requesting a GPU) so a
-    non-fusion / tp=1 / non-FLASHINFER cell sharing a provisioned profile never gets a claim it doesn't
-    need — recipe-scoped, not profile-scoped (mirrors provision_imex._req_nvlink_imex).
+    Injection is gated on the container explicitly enabling an IMEX-dependent path (not merely requesting a
+    GPU), so a non-fusion cell sharing a provisioned profile never gets a claim it doesn't need. The decision
+    is recipe-scoped, not profile-scoped (mirrors provision_imex._req_nvlink_imex).
     Idempotent (never double-adds). Returns (doc, n_containers_wired); n=0 ⇒ no fusion container, untouched.
     This is what merge_imex_claim.py applies to every manifest in the deploy.sh apply pipeline.
     """
@@ -305,7 +313,7 @@ def inject_imex_claim(
         return (
             doc,
             0,
-        )  # no fusion container ⇒ nothing to wire (e.g. non-FLASHINFER cell)
+        )  # no IMEX-dependent container
     claims = pod_spec.setdefault("resourceClaims", [])
     if not any(isinstance(c, dict) and c.get("name") == pod_claim for c in claims):
         claims.append({"name": pod_claim, "resourceClaimTemplateName": channel_rct})
@@ -1060,7 +1068,7 @@ def registry_cred_for(auths: Optional[dict], registry: str) -> Optional[tuple]:
 
 
 def split_image_ref(ref) -> Optional[tuple[str, str, str]]:
-    """PURE. 'nvcr.io/nvidian/my-image@sha256:ab…' → ('nvcr.io', 'nvidian/my-image', 'sha256:ab…').
+    """PURE. 'nvcr.io/example-org/my-image@sha256:ab…' → ('nvcr.io', 'example-org/my-image', 'sha256:ab…').
     Handles digest (@sha256:…) and tag (:v1) refs; a host is the first path segment iff it looks like one
     (has a '.'/':' or is localhost), else the ref is a Docker Hub short name (→ docker.io, library/ padded).
     None for empty input."""
@@ -1076,11 +1084,11 @@ def split_image_ref(ref) -> Optional[tuple[str, str, str]]:
     else:
         registry = "docker.io"
         repo = name if "/" in name else "library/" + name
-    if not reference:
-        seg = repo.split("/")
-        if ":" in seg[-1]:  # a trailing :tag on the last repo segment
-            seg[-1], reference = seg[-1].rsplit(":", 1)
-            repo = "/".join(seg)
+    seg = repo.split("/")
+    if ":" in seg[-1]:  # a trailing :tag on the last repo segment; a digest, when present, stays the reference
+        seg[-1], tag = seg[-1].rsplit(":", 1)
+        repo = "/".join(seg)
+        reference = reference or tag
     if not reference:
         reference = "latest"
     return registry, repo, reference

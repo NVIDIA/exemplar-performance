@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -92,10 +74,12 @@ def benchmark_identity(recipe: dict) -> dict:
     replay_traces = [
         r.get("trace_sha256") for r in (replay.get("rungs") or []) if isinstance(r, dict) and r.get("trace_sha256")
     ]
-    if not any((dataset_sha256, synthetic, replay_traces)):
+    tasktrace = recipe.get("tasktrace") or {}
+    tasktrace_trace_sha256 = (tasktrace.get("trace") or {}).get("sha256") if isinstance(tasktrace, dict) else None
+    if not any((dataset_sha256, synthetic, replay_traces, tasktrace_trace_sha256)):
         raise UnknownBenchmarkIdentity(
             "workload is UNKNOWN: need bench.dataset.sha256, a non-empty bench.synthetic block, "
-            "or replay.rungs[].trace_sha256"
+            "replay.rungs[].trace_sha256, or tasktrace.trace.sha256"
         )
     ident = {
         "envelope": {k: env.get(k) for k in IDENTITY_ENVELOPE_KEYS},
@@ -130,6 +114,16 @@ def benchmark_identity(recipe: dict) -> dict:
     # replay: the workload is the set of traces — identify by their content hashes (not engine args).
     if replay:
         ident["replay_traces"] = replay_traces
+    # agentic: the trajectory, pacing, CPUs and rungs; the image digest is excluded, as for every image.
+    if tasktrace:
+        ident["tasktrace"] = {
+            "trace_sha256": tasktrace_trace_sha256,
+            "pacing": (tasktrace.get("replay") or {}).get("pacing"),
+            "cpus": (tasktrace.get("replay") or {}).get("cpus"),
+            "container_cpu": (tasktrace.get("resources") or {}).get("cpu"),
+            "rungs": (tasktrace.get("sweep") or {}).get("rungs"),
+            "capture_model": (tasktrace.get("capture") or {}).get("model"),
+        }
     return ident
 
 

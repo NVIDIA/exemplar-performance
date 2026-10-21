@@ -1,3 +1,7 @@
+{#
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+#}
 # vllm-agg — aggregated vLLM OpenAI server (rendered from a cell's recipe.yaml).
 # {{ '{{ ... }}' }} = recipe truth (baked at render). ${ ... } = cluster truth (envsubst at launch).
 # One cell = one concrete config: offload on/off are SEPARATE cells (no runtime branching here).
@@ -96,7 +100,7 @@ spec:
               set -eu
               SNAPSHOT=$(python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id='{{ serving.model_repo }}'{% if serving.get('model_revision') %}, revision='{{ serving.model_revision }}'{% endif %}, cache_dir='/data/hf-cache/hub', local_files_only=True))")
               test -s "$SNAPSHOT/config.json" || { echo "FATAL: model snapshot missing at $SNAPSHOT" >&2; exit 64; }
-              exec python3 -m vllm.entrypoints.openai.api_server \
+              exec {% if serving.get('cpuset') %}taskset -c {{ serving.cpuset }} {% endif %}python3 -m vllm.entrypoints.openai.api_server \
                 --model "$SNAPSHOT" \
                 --served-model-name {{ serving.served_model }} \
                 --tensor-parallel-size {{ serving.tp }} \

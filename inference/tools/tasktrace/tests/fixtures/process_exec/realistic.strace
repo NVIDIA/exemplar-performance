@@ -1,0 +1,10 @@
+100 1700000000.000000001 execve("/bin/bash", ["/bin/bash", "-c", "build"], 0x1 /* 1 var */) = 0
+100 1700000000.010000000 chdir("/app/work") = 0
+100 1700000000.020000000 clone(child_stack=NULL, flags=CLONE_VM|CLONE_VFORK|SIGCHLD) = 101
+101 1700000000.021000000 execve("/usr/bin/python3", ["python3", "build.py"], 0x1) = 0
+101 1700000000.030000000 chdir("sub") = 0
+101 1700000000.040000000 clone3({flags=CLONE_VM|CLONE_VFORK, exit_signal=SIGCHLD}, 88) = 102
+102 1700000000.041000000 execveat(AT_FDCWD, "../bin/helper", ["helper", "--x"], 0x1, 0) = 0
+102 1700000000.050000000 +++ exited with 0 +++
+101 1700000000.060000000 +++ exited with 0 +++
+100 1700000000.070000000 +++ exited with 0 +++

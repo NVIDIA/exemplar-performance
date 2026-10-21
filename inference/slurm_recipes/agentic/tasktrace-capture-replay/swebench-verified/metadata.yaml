@@ -1,0 +1,106 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# TaskTrace capture + replay: run one live agentic coding task with
+# tasktrace-capture (riptide) against an external OpenAI-compatible endpoint,
+# recording every shell command the agent issues, then replay that fresh
+# trajectory's tool-side (CPU) half with `tasktrace` (riptide-agent-replay) in
+# the same task container and check that every command reproduces its recorded
+# outcome. Both phases run in one allocation. The model is remote: no GPU work.
+# Front-door: llmb-install + llmb-run.
+
+general:
+  workload: tasktrace_capture_replay
+  workload_type: inference   # Auto-skipped by llmb-run's post-processing pipeline
+                             # (UNSUPPORTED_PP_WORKLOAD_TYPES); the recipe writes
+                             # its own summary.json under $LLMB_EXPERIMENT_DIR.
+  framework: tasktrace
+  display_name: tasktrace-capture-replay-swebench-verified
+
+# The task container is a public GHCR image (anonymous pull). Declaring it here
+# lets llmb-install import it to $LLMB_INSTALL/images/ with enroot on the CPU
+# partition, skip it when already present, and honor a shared images folder
+# (`install.sh -i`). Filename follows the installer rule
+# <parent>+<name>+<tag>.sqsh, which launch.sh reproduces. launch.sh seeds
+# tasktrace-capture's image cache with this file, so the live run uses the
+# installer's image and needs no registry pull on the compute node. One entry
+# per supported trajectory; arm64 images. gb300 and gb200 are the SKU keys we ship;
+# see the agentic README for other Arm clusters.
+container:
+  images:
+    by_gpu:
+      gb300:
+        - 'ghcr.io#epoch-research/swe-bench.eval.arm64.django__django-11490:sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78'
+      gb200:
+        - 'ghcr.io#epoch-research/swe-bench.eval.arm64.django__django-11490:sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78'
+
+# The live capture needs an API key for the endpoint. Declaring it here makes
+# llmb-install prompt for it (after HF_TOKEN) and store it with the other
+# environment variables, so llmb-run exports it into the job and nothing has
+# to be exported in the submitting shell. launch.sh reads the variable named
+# by RUN_CONF_API_KEY_VAR (default: this one).
+environment_prompts:
+  - name: PUBLIC_NVIDIA_API_KEY
+    description: >-
+      The live capture sends the agent's requests to the public NVIDIA API
+      (integrate.api.nvidia.com) with this key (https://build.nvidia.com/settings/api-keys).
+
+setup:
+  # No login-node venv: the capture tool runs on the compute node's host and
+  # needs wheels for the compute nodes' CPU architecture, so install_tasktrace_capture.sh builds its own
+  # venv there.
+  venv_req: false
+
+  tasks:
+    # 1. Build a static musl `tasktrace` on the install host, cross-compiled
+    #    for LLMB_NODE_ARCHITECTURE (shared script; see
+    #    ../../common/install_tasktrace_replay.sh). Built once per
+    #    $LLMB_INSTALL and shared with the replay-only recipe; no allocation.
+    - name: install_tasktrace_replay
+      cmd: '../../common/install_tasktrace_replay.sh'
+      job_type: local
+    # 2. Build the tasktrace-capture (riptide) venv with a uv-managed CPython
+    #    (shared script; see ../../common/install_tasktrace_capture.sh). Built
+    #    on the install host when its CPU architecture matches the compute nodes, otherwise
+    #    on a compute node via srun; job_type:srun so SLURM_ACCOUNT/SLURM_PARTITION
+    #    are injected for that fallback.
+    - name: install_tasktrace_capture
+      cmd: '../../common/install_tasktrace_capture.sh'
+      job_type: srun
+      requires_gpus: false
+
+run:
+  # configured_sbatch: the framework injects --job-name, --output and the
+  # experiment directory (LLMB_EXPERIMENT_DIR). launch.sh declares only
+  # #SBATCH --time.
+  launcher_type: 'configured_sbatch'
+  launch_script: 'launch.sh'
+
+  # scales: [1] is one node running one live task and then replaying its
+  # trajectory. The workload itself uses no GPUs: llmb-run submits it to
+  # cluster_config's slurm.cpu partition when one is configured and to the
+  # GPU partition otherwise. launch.sh refuses a node whose architecture
+  # differs from the task image.
+  requires_gpus: false
+  #
+  # model_size is the trace selector (`llmb-run submit -s <model_size>`):
+  # <model>_<agent-harness>_<task>, the same selector the replay-only recipe
+  # uses. The model token names the reference capture this run reproduces
+  # (and the trajectories-tree directory the output is staged under); the live
+  # endpoint's model name is a RUN_CONF_MODEL knob (default: the public NVIDIA
+  # API's catalog id for the same model family). dtypes must be a schema enum
+  # value; nvfp4 is the precision of the reference capture's deployment, and
+  # the public endpoint does not declare one. The recipe itself loads no model.
+  gpu_configs:
+    gb300:
+      model_configs:
+        - model_size: 'nemotron-3-ultra_miniswe_django-11490'
+          dtypes: ['nvfp4']
+          scales: [1]
+          exact_scales: true
+    gb200:
+      model_configs:
+        - model_size: 'nemotron-3-ultra_miniswe_django-11490'
+          dtypes: ['nvfp4']
+          scales: [1]
+          exact_scales: true

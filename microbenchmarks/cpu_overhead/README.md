@@ -9,6 +9,11 @@ We consider two CPU overhead scenarios:
 
 The script uses TRT-LLM release containers to benchmark tokenization throughput for the [GPT-OSS-120B](https://huggingface.co/openai/gpt-oss-120b) model on GB300/GB200/B300/B200/H100 platforms.
 
+# Platform support
+
+- **Slurm:** use the `llmb-run` instructions below to run the automated tests.
+- **Kubernetes:** No Kubernetes support is provided yet.
+
 # Prerequisites
 
 A HuggingFace account is required and you will need to [create a HuggingFace access token](https://huggingface.co/settings/tokens). You will need this token during the LLMB Installation when preparing your environment.
@@ -25,13 +30,13 @@ The following directory layout and key variables are used in the recipe:
 
 ## Slurm
 
-We reference a number of Slurm commands and parameters in this document. A brief summary is included below. It's important to note these are a guide and might not be applicable to all environments. Please consult with your system administrator for the parameters that are specific to your system.
+This document references several Slurm commands and parameters. A brief summary is included below. Note that these are guidelines and might not apply to all environments. Consult your system administrator for the parameters specific to your system.
 
 **Common parameters:**
 
 - `SBATCH_PARTITION` or `-p` - Partition (or queue) to use.
-- `SBATCH_ACCOUNT` or `-A` - Slurm account to associate with your job, different from your user. Meant for accounting purposes.
-- `SBATCH_GPUS_PER_NODE` or `--gres=gpu:<num gpus>` - If your cluster is configured with GRES this should be set to all GPUs in a node. Ignore if not configured.
+- `SBATCH_ACCOUNT` or `-A` - Slurm account to associate with your job, different from your user. Used for accounting purposes.
+- `SBATCH_GPUS_PER_NODE` or `--gres=gpu:<num gpus>` - If your cluster is configured with GRES, this should be set to all GPUs in a node. Ignore if not configured.
   - Encountering errors such as 'GPUs not found' or 'Cannot submit to this partition without GPU resources' means this setting is required.
 
 These parameters can be set either by exporting the environment variable or using the corresponding `sbatch` flag.

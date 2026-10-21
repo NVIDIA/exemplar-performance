@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# TaskTrace replay on Kubernetes, the twin of inference/slurm_recipes/agentic/tasktrace-replay/swebench-verified:
+# replays the shipped trajectory's tool calls in the task image. CPU only, on GB300 nodes.
+envelope:
+  name: tasktrace-replay-swebench-verified-gb300-cpu
+  model: nemotron-3-ultra-nvfp4
+  gpu_type: gb300
+  arch: arm64
+  engine: none
+  serving_mode: none
+  scenario: agentic
+  distribution: swebench-verified
+  mode: tasktrace-replay
+  launcher: tasktrace
+  goal: replay-fidelity
+  status: wip
+  results_link: ./RESULTS.md
+  provenance:
+    schema_version: k8s.agentic.v1
+    image_ref: ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78
+    image_digest: sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78
+  exemplar:
+    metric: replay_tool_busy_sec
+    unit: s
+    reference: null
+    tolerance_pct: 5
+    comparison: longest per-container replay tool time over every rung, measured without a reference; every replay must pass the TaskTrace check (fidelity PASS, clean exits); scored by analysis/agentic/aggregate_metrics.py + scripts/run_result.py
+  requires:
+    tolerations: [nvidia.com/gpu, kubernetes.io/arch]  # GB300 nodes: some clusters taint them for GPU pods only
+    storage: [MODEL_CACHE_PVC]      # the staged tasktrace tools and trajectory
+    secrets: [IMAGE_PULL_SECRET]
+
+tasktrace:
+  trace:
+    selector: nemotron-3-ultra_miniswe_django-11490
+    path: inference/trajectories/nemotron-3-ultra-nvfp4/mini-swe-agent/swebench-verified/django__django-11490
+    sha256: a3e4e65d90359d94b2a2aa5b6b3e048615db360f50f3810f61abf303a586d144
+  image:
+    ref: ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78
+    digest: sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78
+    arch: aarch64
+    workdir: /testbed
+  replay:
+    pacing: unpaced  # the Slurm recipes' default
+    cpus: 4              # Slurm RUN_CONF_TASKTRACE_CPUS
+    cpuset: "4-7"        # first Grace, past CPU 0's block (the kubelet, system daemons and most interrupts)
+  resources:
+    cpu: 8               # Slurm --cpus-per-task=8
+    memory: 64Gi
+    wall_limit_sec: 1800 # Slurm --time=00:30:00
+  sweep:
+    rungs: [1]           # one replay, the Slurm shape

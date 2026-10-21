@@ -1,0 +1,35 @@
+{
+  "schema_version": "ATIF-v1.5",
+  "session_id": "generic-bare-bash-negative-fixture",
+  "agent": {
+    "name": "unknown-agent",
+    "version": "fixture"
+  },
+  "fixture_provenance": {
+    "dataset": "negative contract",
+    "curation": "Ensures mini-swe bash normalization cannot leak into generic ATIF inputs."
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-05-24T19:56:19.772Z",
+      "tool_calls": [
+        {
+          "tool_call_id": "unsupported-bash",
+          "function_name": "bash",
+          "arguments": {
+            "command": "printf should-not-run > unsupported.txt"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "unsupported-bash",
+            "content": "Process exited with code 0"
+          }
+        ]
+      }
+    }
+  ]
+}

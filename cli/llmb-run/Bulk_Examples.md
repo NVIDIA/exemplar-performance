@@ -56,14 +56,14 @@ There are two supported file formats for file-based bulk job submission:
 ### Basic Configuration
 
 ```yaml
-pretrain_llama3.1_8b:
+pretrain_llama3.1_70b:
   tasks:
     - dtypes: 'fp8'
-      scales: [16, 32, 64]
+      scales: [64, 128, 256]
       repeats: 3
 ```
 
-**Explanation**: This will run Llama 3.1 8B with fp8 precision at three different scales (16, 32, and 64 GPUs), repeating each configuration 3 times. Total of 9 jobs will be submitted.
+**Explanation**: This will run Llama 3.1 70B with fp8 precision at three different scales (64, 128, and 256 GPUs), repeating each configuration 3 times. Total of 9 jobs will be submitted.
 
 ### Multiple Data Types
 

@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 """Configuration file generation for individual test runs."""
 
@@ -32,7 +14,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from llmb_run.config_manager import ClusterConfig
+from llmb_run.config_manager import ClusterConfig, ExecutionTarget
 from llmb_run.constants import USER_ENV_VARS
 from llmb_run.slurm_utils import get_cluster_name
 
@@ -341,7 +323,14 @@ def create_llmb_config(task, job_id, workdir, config: ClusterConfig, workloads):
                     f"   cluster_name: {cluster_name}\n"
                     f"{'='*80}"
                 )
-            if _internal_modules_available and not cluster_name:
+            if (
+                _internal_modules_available
+                and config.execution_target != ExecutionTarget.KUBERNETES
+                and not cluster_name
+            ):
+                # Kubernetes installs have no Slurm cluster name; everywhere
+                # else a missing name means results cannot be submitted, so
+                # refuse the run instead of silently skipping submission.
                 logger.error("Cluster name not configured and unable to auto-detect.")
                 return None
     except Exception as e:
@@ -387,6 +376,8 @@ def create_llmb_config(task, job_id, workdir, config: ClusterConfig, workloads):
         'cluster_info': {
             'cluster_name': cluster_name,
             'gpus_per_node': config.slurm.gpus_per_node(target='gpu'),
+            'nvl_domain': config.nvl_domain,
+            'nvl_block_sizes': config.nvl_block_sizes,
             'llmb_install': config.llmb_install,
             'llmb_repo': config.llmb_repo,
             'slurm_account': gpu_slurm_env.get('SBATCH_ACCOUNT', ''),

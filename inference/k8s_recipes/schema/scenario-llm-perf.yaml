@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 $schema: "https://json-schema.org/draft/2020-12/schema"
 title: llm-perf recipe (aiperf load-replay)
@@ -50,8 +32,40 @@ properties:
       model_repo:    { type: string, description: HF repo id to snapshot-download (e.g. nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4) }
       model_revision: { type: string, description: "Optional HF snapshot revision to pin (deterministic snapshot_download; avoids ambiguity when a cache holds multiple revisions)." }
       served_model:  { type: string, description: OpenAI served-model-name (e.g. nemotron-ultra-3) }
-      telemetry_container: { type: string, description: "Optional: container name AIPerf scrapes for per-GPU telemetry when the serving container is NOT named after the engine (e.g. Dynamo+vLLM names it 'dynamo-vllm', not 'vllm'). Consumed by serving/aiperf/templates/bench-job.yaml.j2 (SERVER_CONTAINER); defaults to envelope.engine. Without this the KVBM/Dynamo stack can't be authored without hand-editing the schema." }
+      model_cache_staging:
+        type: object
+        additionalProperties: false
+        description: >
+          Optional staging of the shared model cache onto node-local disk. The emptyDir mode is
+          intended only for one-run storage A/B diagnostics. The versioned-hostpath mode consumes
+          a separately prepared, revision-pinned node cache and verifies it before serving starts.
+          Omit this block for the normal shared-PVC path.
+        required: [mode]
+        properties:
+          mode: { enum: [node-local-emptydir, node-local-versioned-hostpath] }
+          size_limit: { type: string, pattern: "^[1-9][0-9]*(Gi|Ti)$" }
+          host_path:
+            type: string
+            pattern: "^/[^\n]+$"
+            description: Absolute, revision-specific node cache path; required by node-local-versioned-hostpath.
+          expected_shards:
+            type: integer
+            minimum: 1
+            description: >
+              Checkpoint shard count the serving init container verifies in the staged cache (fail closed on
+              mismatch). Must match the model revision's node-cache DaemonSet. Defaults to 142.
+        allOf:
+          - if:
+              properties: { mode: { const: node-local-emptydir } }
+            then:
+              required: [size_limit]
+          - if:
+              properties: { mode: { const: node-local-versioned-hostpath } }
+            then:
+              required: [host_path]
+      telemetry_container: { type: string, description: "Optional: container name AIPerf scrapes for per-GPU telemetry when the serving container is not named after the engine. Consumed by serving/aiperf/templates/bench-job.yaml.j2 (SERVER_CONTAINER); defaults to envelope.engine." }
       tp:            { type: integer, minimum: 1, description: tensor-parallel size (= GPUs/instance) }
+      frontend_replicas: { type: integer, minimum: 1, default: 1, description: "Number of stateless Dynamo frontend replicas. Omit for the existing single-frontend behavior." }
       context_length: { type: integer, minimum: 1, description: "Model context length (--context-length). Used by disaggregated SGLang serving (serving.disagg)." }
       dynamo_log: { type: string, minLength: 1, description: "Optional recipe-scoped DYN_LOG filter for Dynamo frontend and workers; omitted recipes preserve the default info level." }
       disagg:
@@ -66,6 +80,16 @@ properties:
           transfer_backend:
             enum: [nixl, mooncake, ucx]
             description: Cross-worker KV-cache transfer backend (--disaggregation-transfer-backend).
+          deepep_config:
+            type: object
+            additionalProperties: false
+            required: [normal_dispatch, normal_combine]
+            properties:
+              normal_dispatch: { $ref: "#/$defs/deepep_tuning" }
+              normal_combine:  { $ref: "#/$defs/deepep_tuning" }
+            description: >
+              Recipe-owned DeepEP tuning rendered into /configs/deepep_config.json for workers that
+              explicitly pass --deepep-config. This replaces Slurm's implicit source-tree /configs mount.
           # `ucx:` IS DELIBERATELY ABSENT — and `additionalProperties: false` above makes any
           # serving.disagg.ucx.* key a HARD schema failure. Same category error, same remedy as the
           # rejected `requires.cache.name`: UCX fabric config is CLUSTER truth, not recipe truth.
@@ -181,7 +205,15 @@ properties:
           seed:                     { type: integer, description: "aiperf --random-seed for deterministic generation" }
           nominal_isl:              { type: integer, minimum: 1, description: "provenance: source-config nominal input length (before range-ratio)" }
           nominal_osl:              { type: integer, minimum: 1, description: "provenance: source-config nominal output length (before range-ratio)" }
-          range_ratio:              { type: number,  description: "provenance: source random-range-ratio (lengths uniform in [r·L, L])" }
+          range_ratio:              { type: number, exclusiveMinimum: 0, maximum: 1, description: "source random-range-ratio (lengths uniform in [r·L, L])" }
+          length_distribution:      { type: string, enum: [normal, bounded_uniform], description: "synthetic length sampler; bounded_uniform deterministically samples independent integer ISL/OSL values in [range_ratio * nominal, nominal]" }
+        allOf:
+        - if:
+            required: [length_distribution]
+            properties:
+              length_distribution: { const: bounded_uniform }
+          then:
+            required: [nominal_isl, nominal_osl, range_ratio, seed, request_count_multiplier]
       dataset:
         type: object
         additionalProperties: false
@@ -225,6 +257,12 @@ properties:
           CONDITIONAL-HASH: omit for the legacy fixed-trace-pass behavior — the bench-Job renders
           byte-identically when `depth` is absent, so adding this axis does NOT churn existing cells'
           recipe_hash until they opt in. Applies to both goals (pareto and SLA).
+      warmup_request_multiplier:
+        type: integer
+        minimum: 0
+        description: >
+          Excluded warmup requests per rung = this × concurrency for trace/custom datasets.
+          Synthetic cells declare the equivalent value inside bench.synthetic. Default: 1.
       sweep_mode:
         enum: [fixed, adaptive]
         default: fixed
@@ -387,6 +425,17 @@ properties:
           Use "dcgm" or false on clusters that restrict exec into application containers.
 
 $defs:
+  deepep_tuning:
+    type: object
+    additionalProperties: false
+    required: [num_sms, num_max_nvl_chunked_send_tokens, num_max_nvl_chunked_recv_tokens, num_max_rdma_chunked_send_tokens, num_max_rdma_chunked_recv_tokens]
+    properties:
+      num_sms: { type: integer, minimum: 1 }
+      num_max_nvl_chunked_send_tokens: { type: integer, minimum: 1 }
+      num_max_nvl_chunked_recv_tokens: { type: integer, minimum: 1 }
+      num_max_rdma_chunked_send_tokens: { type: integer, minimum: 1 }
+      num_max_rdma_chunked_recv_tokens: { type: integer, minimum: 1 }
+
   disagg_role:
     type: object
     additionalProperties: false
@@ -402,6 +451,14 @@ $defs:
           (1P8D … 2P1D) is expressible in the recipe. requires.gpu.count must equal
           (prefill.replicas + decode.replicas) × tp. Hashed CONDITIONALLY (only when != the default 1),
           so a role that keeps 1 fingerprints byte-identically to a recipe that omits it — no churn.
+      nodes_per_worker:
+        type: integer
+        minimum: 1
+        default: 1
+        description: >
+          Kubernetes nodes participating in one distributed worker. Omit for independent single-node
+          workers. For a multi-node worker, tp must be divisible by nodes_per_worker and each rank pod
+          requests tp / nodes_per_worker GPUs.
       tp: { type: integer, minimum: 1, description: tensor-parallel size (--tensor-parallel-size) }
       dp: { type: integer, minimum: 1, description: data-parallel size (--data-parallel-size) }
       ep: { type: integer, minimum: 1, description: expert-parallel size (--expert-parallel-size) }
@@ -409,6 +466,16 @@ $defs:
         type: array
         items: { type: string }
         description: Role-specific engine flags baked into the recipe (GPU/model-tuned; NOT a shared overlay).
+      env:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [name, value]
+          properties:
+            name:  { type: string, minLength: 1 }
+            value: { type: string }
+        description: Role-specific serving environment copied verbatim into that worker container.
 
 allOf:
   # goal=max-concurrency-sla → bench.sla is REQUIRED (its metric is defined by the SLA crossing). Any other

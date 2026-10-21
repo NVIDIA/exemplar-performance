@@ -41,25 +41,6 @@ secrets = [
     "detect-secrets>=1.5.0",
 ]
 
-# Lets the CI "Publish to Artifactory" job use `uv publish --index nv`
-# instead of spelling out --publish-url/--check-url separately; see
-# https://docs.astral.sh/uv/guides/package/#publishing-your-package.
-# explicit = true: nothing here is pinned to this index via
-# [tool.uv.sources], so this keeps it out of ordinary dependency
-# resolution (uv sync / uv pip install) and usable only when named
-# explicitly, e.g. by `uv publish --index nv`.
-[[tool.uv.index]]
-name = "nv"
-url = "https://urm.nvidia.com/artifactory/api/pypi/nv-shared-pypi-local/simple"
-publish-url = "https://urm.nvidia.com/artifactory/api/pypi/nv-shared-pypi-local"
-explicit = true
-
-# Pins llmb-capabilities to the internal index explicitly, rather than
-# relying on index resolution order, so a same-named package published to
-# public PyPI in the future could never be resolved instead.
-[tool.uv.sources]
-llmb-capabilities = { index = "nv" }
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

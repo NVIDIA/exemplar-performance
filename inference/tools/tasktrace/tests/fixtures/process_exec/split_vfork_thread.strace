@@ -1,0 +1,12 @@
+310 1700000250.000000000 execve("/bin/worker", ["worker"], 0x1) = 0
+310 1700000250.100000000 clone(child_stack=0x1, flags=CLONE_VM|CLONE_FS|CLONE_THREAD <unfinished ...>
+311 1700000250.120000000 clone(child_stack=0x2, flags=CLONE_VM|CLONE_FS|CLONE_THREAD) = 312
+312 1700000250.140000000 +++ exited with 0 +++
+311 1700000250.150000000 +++ exited with 0 +++
+310 1700000250.200000000 <... clone resumed>) = 311
+310 1700000250.210000000 vfork( <unfinished ...>
+320 1700000250.220000000 execve("/missing/tool", ["tool"], 0x1) = -1 ENOENT (No such file or directory)
+320 1700000250.230000000 execve("/usr/bin/tool", ["tool", "--build"], 0x1) = 0
+310 1700000250.240000000 <... vfork resumed>) = 320
+320 1700000250.250000000 +++ exited with 0 +++
+310 1700000250.300000000 +++ exited with 0 +++

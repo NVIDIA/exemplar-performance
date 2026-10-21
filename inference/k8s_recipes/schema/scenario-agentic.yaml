@@ -1,0 +1,258 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: agentic recipe (TaskTrace tool-side replay / capture+replay)
+description: >
+  Full recipe.yaml schema for scenario=agentic. The Kubernetes twin of inference/slurm_recipes/agentic/:
+  TaskTrace re-executes the tool-side (CPU) half of a recorded agentic coding run inside the original
+  task container and checks that every recorded command reproduces its recorded outcome, measuring the
+  container's CPU from its own cgroup. The task pods' container IS the task image. Without a `serving`
+  block there is no model server and no GPU, and (mode tasktrace-capture-replay) the live capture talks to
+  an EXTERNAL OpenAI-compatible endpoint. With one (the -gpu cells), an in-cluster vLLM server is deployed
+  first: the capture talks to it, and the replay also replays the recorded model calls against it (the
+  Slurm *-gpu recipes). CI validates a recipe.yaml against THIS schema when envelope.scenario == agentic.
+  The envelope is shared (see envelope.yaml); `tasktrace` and `serving` are the scenario-specific part.
+type: object
+additionalProperties: false
+required: [envelope, tasktrace]
+properties:
+  envelope:
+    allOf:
+      - $ref: "envelope.yaml#/$defs/envelope"
+      - properties:
+          scenario: { const: agentic }
+          launcher: { const: tasktrace }
+          engine: { enum: [none, vllm] }
+          serving_mode: { enum: [none, aggregated] }
+          goal: { const: replay-fidelity }
+          # The recipe kind — the Slurm recipe directory this cell mirrors. Selects the lane (lane.py).
+          mode: { enum: [tasktrace-replay, tasktrace-capture-replay] }
+        required: [goal]
+
+  tasktrace:
+    type: object
+    additionalProperties: false
+    required: [trace, image, replay, resources, sweep]
+    properties:
+      trace:
+        type: object
+        additionalProperties: false
+        required: [selector, path, sha256]
+        description: >
+          The shipped trajectory this cell replays: a directory of inference/trajectories/<model>/<harness>/
+          <dataset>/<task>/ holding trajectory.jsonl + trace.json (the manifest tasktrace_recipe.py
+          resolve-trace reads). Staged onto the cache PVC by scripts/stage-tasktrace.sh.
+        properties:
+          selector:
+            type: string
+            description: The trace selector (Slurm's model_size), e.g. nemotron-3-ultra_miniswe_django-11490.
+          path:
+            type: string
+            pattern: "^inference/trajectories/[^/]+/[^/]+/[^/]+/[^/]+$"
+            description: Repo-relative trajectory directory.
+          sha256:
+            type: string
+            pattern: "^[0-9a-f]{64}$"
+            description: sha256 of trajectory.jsonl — the content pin staging verifies (comparability gate).
+      image:
+        type: object
+        additionalProperties: false
+        required: [ref, digest, arch, workdir]
+        description: >
+          The task container image. It is the Job pod's container (Kubernetes pulls it; nothing is built)
+          and must be the image trace.json names, so the replay runs where the trajectory was recorded.
+        properties:
+          ref:
+            type: string
+            pattern: "^[a-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$"
+            description: >-
+              Digest-pinned OCI reference (registry/repo@sha256:...). It may also name the tag the digest was
+              resolved from (registry/repo:tag@sha256:...); the pod still pulls by digest, and the capture
+              runtime uses the tag to match a task definition that names repo:tag.
+          digest:
+            type: string
+            pattern: "^sha256:[0-9a-f]{64}$"
+            description: The same digest, standalone; the image identity capture and replay must agree on.
+          arch:
+            enum: [aarch64, x86_64]
+            description: CPU architecture of the image (trace.json image.arch); selects the node arch.
+          workdir:
+            type: string
+            pattern: "^/"
+            description: The task working directory inside the image (SWE-bench images use /testbed).
+      replay:
+        type: object
+        additionalProperties: false
+        required: [pacing, cpus]
+        properties:
+          pacing:
+            enum: [recorded, unpaced]
+            description: >
+              tasktrace --pacing; `recorded` replays the recorded inter-action gaps, `unpaced` runs the actions
+              back to back.
+          cpus:
+            type: integer
+            minimum: 1
+            description: >
+              Logical CPUs each replay is pinned to with taskset inside its container (Slurm's
+              RUN_CONF_TASKTRACE_CPUS) and reported as tasktrace's --allocated-cpus denominator.
+          cpuset:
+            type: string
+            pattern: '^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$'
+            description: >
+              Optional fixed CPU list each replay is pinned to (taskset -c), e.g. "4-7"; it must name exactly `cpus`
+              CPUs the pod may use. Default: the first `cpus` CPUs the pod may use.
+          timeout_sec:
+            type: number
+            exclusiveMinimum: 0
+            description: Optional per-action timeout (tasktrace --timeout-sec).
+      resources:
+        type: object
+        additionalProperties: false
+        required: [cpu, memory]
+        description: >
+          Per-container requests == limits (Guaranteed QoS), so cpu.max is a real allocation tasktrace can
+          read and, where the kubelet runs the static CPU-manager policy, integer CPUs become exclusive
+          cores. Mirrors Slurm's --cpus-per-task headroom above replay.cpus.
+        properties:
+          cpu:
+            type: integer
+            minimum: 1
+            description: Logical CPUs per container (integer → eligible for exclusive cores).
+          memory:
+            type: string
+            pattern: "^[0-9]+(Mi|Gi)$"
+          wall_limit_sec:
+            type: integer
+            minimum: 60
+            description: >
+              Job activeDeadlineSeconds (Slurm's #SBATCH --time). Default 1800 for tasktrace-replay,
+              5400 for tasktrace-capture-replay.
+      sweep:
+        type: object
+        additionalProperties: false
+        required: [rungs]
+        description: >
+          Concurrency rungs. ONE rung = ONE Job pod with K containers, each replaying the SAME trace in
+          its own cgroup (co-located contention, per-container CPU accounting). Rungs run one after
+          another. [1] is a single replay — the Slurm recipes' shape.
+        properties:
+          rungs:
+            type: array
+            minItems: 1
+            uniqueItems: true
+            items: { type: integer, minimum: 1 }
+      capture:
+        type: object
+        additionalProperties: false
+        required: [model, agent_timeout_sec]
+        description: >
+          mode tasktrace-capture-replay only: the live run that records a fresh trajectory before the
+          replay. Without `serving` the endpoint is EXTERNAL (api_base) and the key comes from a Secret
+          named by a cluster-profile variable, never from the recipe; with `serving` it is the in-cluster
+          server's Service, which takes no key.
+        properties:
+          model:
+            type: string
+            pattern: "^[^/]+/.+$"
+            description: mini-swe-agent model id, <provider>/<model> (Slurm's RUN_CONF_MODEL).
+          api_base:
+            type: string
+            pattern: "^https?://"
+            description: >-
+              OpenAI-compatible base URL ending in /v1 (Slurm's RUN_CONF_API_BASE). Required without `serving`,
+              absent with it.
+          api_key_secret:
+            type: string
+            pattern: "^[A-Z][A-Z0-9_]*$"
+            description: >
+              Cluster-profile VARIABLE naming the Kubernetes Secret (key `api_key`) that holds the external
+              endpoint's key; must also appear in envelope.requires.secrets so preflight verifies it exists.
+              Required without `serving`, absent with it.
+          agent_timeout_sec:
+            type: integer
+            minimum: 1
+            description: tasktrace-capture --agent-timeout (Slurm's RUN_CONF_AGENT_TIMEOUT).
+          skip_endpoint_check:
+            type: boolean
+            default: false
+            description: Skip the one-token endpoint probe before the capture (RUN_CONF_SKIP_ENDPOINT_CHECK).
+          source_image_bashrc:
+            type: boolean
+            default: true
+            description: >
+              tasktrace-capture --source-image-bashrc (RUN_CONF_SOURCE_IMAGE_BASHRC): the agent's non-interactive
+              Bash sources the image's /root/.bashrc, where SWE-bench images activate their conda env.
+          trajectory_timings:
+            type: string
+            enum: [keep, omit]
+            default: keep
+            description: >
+              tasktrace-capture --trajectory-timings (RUN_CONF_CAPTURE_TRAJECTORY_TIMINGS): omit writes the captured
+              trajectory without its measured timings, for one to publish; the replay then runs unpaced.
+          extra_args:
+            type: string
+            default: ""
+            description: >
+              Extra tasktrace-capture arguments, split on whitespace and appended after the cell's own
+              (RUN_CONF_CAPTURE_ARGS).
+
+  serving:
+    type: object
+    additionalProperties: false
+    description: >
+      The in-cluster model server of a -gpu cell: the shared serving stack the llm-perf cells use, rendered
+      by serving/<stack>/templates and deployed before the TaskTrace pods. Mirrors the Slurm *-gpu recipes'
+      common/serving/<config>.env. The vLLM image is envelope.provenance.image_ref.
+    required: [stack, tp, served_model, model_repo, model_revision, max_model_len, gpu_mem_util]
+    properties:
+      stack: { const: vllm-agg }
+      tp: { type: integer, minimum: 1 }
+      served_model: { type: string, description: The model id the server serves and the capture and LLM replay request. }
+      api_protocol: { enum: [openai-compatible] }
+      model_repo: { type: string }
+      model_revision: { type: string, pattern: "^[0-9a-f]{40}$" }
+      max_model_len: { type: integer, minimum: 1 }
+      gpu_mem_util: { type: number, exclusiveMinimum: 0, maximum: 1 }
+      startup_timeout_s: { type: integer, minimum: 60, default: 2400 }
+      liveness_enabled: { type: boolean }
+      readiness_enabled: { type: boolean }
+      offload: { type: boolean, default: false }
+      extra_args: { type: array, items: { type: string } }
+      env:
+        type: array
+        items: { type: object, additionalProperties: false, required: [name, value], properties: { name: { type: string }, value: { type: string } } }
+      cpuset:
+        type: string
+        pattern: "^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$"
+        description: >
+          CPUs the server is pinned to (taskset), leaving the replay's tasktrace.replay.cpus out of it, as the
+          Slurm *-gpu recipes split one node's CPUs between the replay and the server.
+      resources:
+        type: object
+        additionalProperties: false
+        properties:
+          requests: { type: object, additionalProperties: false, properties: { cpu: { type: string }, memory: { type: string }, ephemeral_storage: { type: string } } }
+          limits: { type: object, additionalProperties: false, properties: { cpu: { type: string }, memory: { type: string }, ephemeral_storage: { type: string } } }
+
+allOf:
+  # capture+replay carries the capture block; replay-only must not.
+  - if:
+      properties: { envelope: { properties: { mode: { const: tasktrace-capture-replay } } } }
+    then:
+      properties: { tasktrace: { required: [capture] } }
+    else:
+      properties: { tasktrace: { not: { required: [capture] } } }
+  # A cell with an in-cluster server is a vLLM cell whose capture talks to that server; one without is engine none
+  # and its capture needs the external endpoint and its key.
+  - if:
+      required: [serving]
+    then:
+      properties:
+        envelope: { properties: { engine: { const: vllm }, serving_mode: { const: aggregated } } }
+        tasktrace: { properties: { capture: { properties: { api_base: false, api_key_secret: false } } } }
+    else:
+      properties:
+        envelope: { properties: { engine: { const: none }, serving_mode: { const: none } } }
+        tasktrace: { properties: { capture: { required: [api_base, api_key_secret] } } }

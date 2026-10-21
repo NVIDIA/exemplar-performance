@@ -1,24 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # shellcheck disable=SC1003,SC1090,SC2012,SC2015,SC2016,SC2034,SC2116,SC2207,SC2221,SC2222,SC2295,SC2317
 
@@ -38,6 +20,9 @@
 #      into every per-concurrency dir. We exclude that by default —
 #      it's a debug artifact, not a result. Pass `--with-inputs` to
 #      include it if you actually need it for replay.
+#   3. A long exec stream can be truncated by the connection carrying
+#      it, so each entry is gzipped remote-side and decompressed locally
+#      when both ends support it (see resolve_stream_compression).
 #
 # Usage:
 #   ./scripts/fetch_results.sh <RUN_ID>                  # resolves cell/profile/PVC from results/.submits
@@ -49,6 +34,7 @@
 #   ./scripts/fetch_results.sh <CELL_DIR> <PROFILE> <RUN_ID>
 #   ./scripts/fetch_results.sh --artifacts-pvc <PVC> <CELL_DIR> <PROFILE> <RUN_ID>
 #   (a RESULTS_LOCAL_DIR you export also wins over recipe.env; --out takes precedence over both)
+#   LLMB_FETCH_NO_COMPRESS=1 ./scripts/fetch_results.sh <RUN_ID>   # disable stream compression
 
 set -eu
 # pipefail so a non-zero `kubectl exec ... -- tar c` isn't masked by a
@@ -437,12 +423,14 @@ trap cleanup EXIT
 # we collect failures and report at the end.
 MAX_TRIES=3
 
-log "Spawning transient mounter pod $POD ..."
-# Disable client-side schema validation for this tiny, static Pod manifest.
-# On Teleport-fronted clusters the OpenAPI schema download can timeout before
-# the pod is submitted, even though the manifest itself is valid and the API is
-# otherwise reachable. Server admission still validates the object.
-cat << EOF | llmb::kc apply --validate=false -f -
+# ── Mounter pod ─────────────────────────────────────────────────────────────
+# The pod idles until it is deleted or reaches activeDeadlineSeconds, which bounds how long a pod left behind
+# by an interrupted fetch keeps the claim mounted. PID 1 exits on TERM, so a delete completes without waiting
+# out the grace period. A fetch that outlives the pod starts another (ensure_mounter).
+MOUNTER_DEADLINE_S=3600
+
+mounter_manifest() {
+    cat << EOF
 apiVersion: v1
 kind: Pod
 metadata:
@@ -457,11 +445,12 @@ metadata:
     llmb.nvidia.com/owner: ${OWNER}
 spec:
   restartPolicy: Never
+  activeDeadlineSeconds: ${MOUNTER_DEADLINE_S}
 ${FETCH_PLACEMENT_YAML}
   containers:
   - name: mounter
     image: ${UTIL_IMAGE}
-    command: ["sh", "-c", "sleep 3600"]
+    command: ["sh", "-c", "trap 'exit 0' TERM; while :; do sleep 600 & wait; done"]
     volumeMounts:
     - name: artifacts
       mountPath: /artifacts
@@ -472,22 +461,56 @@ ${FETCH_PLACEMENT_YAML}
       claimName: ${ARTIFACTS_PVC_NAME}
       readOnly: false
 EOF
+}
 
-log "Waiting for $POD to be Ready (timeout 5m)..."
-# Retry the Ready wait across a transient auth/network blip: a single `kubectl wait` returns non-zero on an
-# expired cert, which would abort the fetch. heal_auth re-auths on an auth signal; two short waits ride out a
-# brief proxy stall without extending the effective ceiling much.
-_pod_ready=0
-for _wtry in 1 2 3; do
-    if llmb::kc wait pod/"$POD" --for=condition=Ready --timeout=150s; then
-        _pod_ready=1
-        break
+# Start a fresh mounter pod and wait until it is Ready. A pod with the same name, such as a previous fetch's
+# that is still terminating, is deleted and waited out first, and `create` refuses to reuse one that remains:
+# exec sessions in a terminating pod are killed when it stops.
+# --validate=false skips the client-side OpenAPI download, which can time out on a proxied API server; server
+# admission still validates the pod.
+spawn_mounter() {
+    local try created=0
+    for try in 1 2 3; do
+        if llmb::kc delete pod "$POD" --ignore-not-found --wait=true --timeout=120s \
+            && mounter_manifest | llmb::kc create --validate=false -f -; then
+            created=1
+            break
+        fi
+        llmb::heal_auth
+    done
+    if [ "$created" -eq 0 ]; then
+        err "Could not create mounter pod $POD."
+        return 1
     fi
-    llmb::heal_auth
-done
-if [ "$_pod_ready" -eq 0 ]; then
+    log "Waiting for $POD to be Ready (timeout 7.5m)..."
+    # heal_auth between waits, so an expired credential does not end the wait early.
+    for try in 1 2 3; do
+        llmb::kc wait pod/"$POD" --for=condition=Ready --timeout=150s && return 0
+        llmb::heal_auth
+    done
     err "Mounter pod failed to become Ready. Diagnostic:"
     llmb::kc describe pod "$POD" | tail -30 || true
+    return 1
+}
+
+# Start a new mounter when the current one has stopped running: deleted, evicted, or past its deadline. When
+# the pod's state cannot be read, the next exec reports the failure instead.
+ensure_mounter() {
+    local state
+    state="$(llmb::kc get pod "$POD" --ignore-not-found \
+        -o jsonpath='{.status.phase}/{.metadata.deletionTimestamp}' 2> /dev/null)" || return 0
+    case "$state" in
+        Running/) return 0 ;;
+        "") state="not found" ;;
+        */?*) state="terminating" ;;
+        *) state="${state%/}" ;;
+    esac
+    log "  mounter pod $POD is $state; starting a new one"
+    spawn_mounter
+}
+
+log "Spawning transient mounter pod $POD ..."
+if ! spawn_mounter; then
     [ "$PARTIAL" = 1 ] && {
         err "(--partial) nothing to recover — mounter unavailable"
         exit 0
@@ -540,6 +563,66 @@ TAR_EXCLUDES=""
 if [ "$WITH_INPUTS" -ne 1 ]; then
     TAR_EXCLUDES="--exclude=inputs.json"
 fi
+
+# ── Stream compression ──────────────────────────────────────────────────────
+# Sets TAR_Z to "z" when both the local tar and the mounter image can round-trip
+# gzip, otherwise "". Each end stays a single process, so pipefail still catches
+# a failed remote tar; the gzip trailer (CRC32 + length) also rejects a stream
+# cut short when the remote tar exits 0.
+#
+# Probed on every fetch because UTIL_IMAGE is overridable. The probes only read
+# and pipe, since the mounter's root filesystem may be read-only.
+# LLMB_FETCH_NO_COMPRESS=1 skips probing and streams uncompressed.
+resolve_stream_compression() {
+    TAR_Z=""
+    if [ -n "${LLMB_FETCH_NO_COMPRESS:-}" ]; then
+        log "  stream: uncompressed (LLMB_FETCH_NO_COMPRESS is set)"
+        return 0
+    fi
+    # Local: compress /dev/null and require the member name back; an empty
+    # stream also lists with exit 0. Listing is used instead of `gzip -t`
+    # because some tars pad their output, which gzip -t reports as garbage.
+    if ! tar -cz -C /dev -- null 2> /dev/null | tar -tzf - 2> /dev/null | grep -q null; then
+        err "  stream: UNCOMPRESSED — the local '$(command -v tar)' cannot round-trip 'tar -z'."
+        return 0
+    fi
+    # Remote: the same round-trip, after checking gzip exists. Where tar forks
+    # the compressor, a missing gzip can kill the mounter container instead of
+    # returning an error. The script always exits 0 and prints a verdict, so a
+    # failed exec or a missing verdict means the probe did not run, which is
+    # reported separately from an image that cannot compress.
+    local remote_probe verdict="" try
+    remote_probe='command -v gzip > /dev/null 2>&1 || { echo LLMBZ_NOGZIP; exit 0; }
+if tar -cz -C /dev -- null 2> /dev/null | tar -tzf - 2> /dev/null | grep -q null
+then echo LLMBZ_OK; else echo LLMBZ_NOTARZ; fi
+exit 0'
+    # Heal auth and retry once before treating the probe as unrunnable.
+    for try in 1 2; do
+        verdict="$(llmb::kc exec "$POD" -c mounter -- sh -c "$remote_probe" 2> /dev/null)" || verdict=""
+        case "$verdict" in *LLMBZ_*) break ;; esac
+        if [ "$try" -eq 1 ]; then llmb::heal_auth; fi
+    done
+    case "$verdict" in
+        *LLMBZ_OK*)
+            TAR_Z="z"
+            log "  stream: gzip-compressed remote-side (${UTIL_IMAGE:-?})"
+            return 0
+            ;;
+        *LLMBZ_NOGZIP*)
+            err "  stream: UNCOMPRESSED — mounter image ${UTIL_IMAGE:-?} has no gzip binary on PATH."
+            ;;
+        *LLMBZ_NOTARZ*)
+            err "  stream: UNCOMPRESSED — mounter image ${UTIL_IMAGE:-?} ships gzip but its tar refuses -z."
+            ;;
+        *)
+            # Support unknown: an untested compressor could kill the mounter.
+            err "  stream: UNCOMPRESSED — could not probe pod $POD (exec failed twice); gzip support UNKNOWN."
+            return 0
+            ;;
+    esac
+    err "          Long uncompressed streams are more likely to truncate; set UTIL_IMAGE to an image with gzip."
+}
+resolve_stream_compression
 
 entry_stats() {
     python3 - "$1" << 'PY'
@@ -645,11 +728,15 @@ stream_entry() {
     # -h on the cluster side so symlinks (the post-symlink-fix per-step
     # inputs.json) are streamed as their real contents — matters if
     # WITH_INPUTS=1.
+    # TAR_Z is "z" only when resolve_stream_compression confirmed both ends;
+    # empty or unset streams uncompressed. Two pipeline stages either way, so
+    # pipefail still catches a remote tar that fails or is truncated.
+    local z="${TAR_Z:-}"
     local rc=0
     llmb::kc exec "$POD" -c mounter -- sh -c \
-        "cd '$REMOTE_RUN_DIR' && tar -ch $TAR_EXCLUDES -- '$entry'" \
+        "cd '$REMOTE_RUN_DIR' && tar -c${z}h $TAR_EXCLUDES -- '$entry'" \
         2> "$stderr_file" \
-        | tar xf - -C "$attempt_dir" \
+        | tar "x${z}f" - -C "$attempt_dir" \
         || rc=$?
     if [ "$rc" -ne 0 ] && [ -s "$stderr_file" ]; then
         err "  stderr from failed stream ($entry):"
@@ -685,7 +772,7 @@ for entry in $ENTRIES; do
     attempt=0
     while [ $attempt -lt $MAX_TRIES ]; do
         attempt=$((attempt + 1))
-        if stream_entry "$entry"; then
+        if ensure_mounter && stream_entry "$entry"; then
             log "  [$DONE/$TOTAL] $entry (attempt $attempt) ✓"
             write_done_marker "$marker" "$local_dir/$entry" "$MODE_TAG"
             break
@@ -706,7 +793,8 @@ done
 
 echo
 if [ -n "$FAILED" ]; then
-    write_receipt false # publish refuses an incomplete fetch receipt
+    ensure_mounter || true # the receipt counts the source through the mounter
+    write_receipt false    # publish refuses an incomplete fetch receipt
     err "Some entries failed to stream:$FAILED"
     err "Inspect remote state with:"
     err "  kubectl -n $NAMESPACE exec -it $POD -c mounter -- ls -la $REMOTE_RUN_DIR"
@@ -721,11 +809,17 @@ fi
 # ── cluster identity + live fingerprint (M3) ────────────────────────────────────────────────────────────
 # Record cluster identity at collection time without overwriting an existing value.
 if [ -f "$local_dir/run_meta.json" ]; then
+    # Written as the bench Job writes it (indent 2, trailing newline) and only when the value changes, so a
+    # run that already records its cluster keeps the source's bytes.
     [ -n "${CLUSTER:-}" ] && python3 - "$local_dir/run_meta.json" "$CLUSTER" << 'PY'
 import json, sys
 p, c = sys.argv[1], sys.argv[2]
-d = json.load(open(p)); d["cluster"] = d.get("cluster") or c
-json.dump(d, open(p, "w"), indent=2)
+d = json.load(open(p))
+if not d.get("cluster"):
+    d["cluster"] = c
+    with open(p, "w") as fh:
+        json.dump(d, fh, indent=2)
+        fh.write("\n")
 PY
     python3 "$_SCRIPT_DIR/cluster_fingerprint.py" \
         --context "${KUBE_CONTEXT:-$(kubectl config current-context 2> /dev/null)}" \
@@ -756,6 +850,7 @@ fi
 
 # Assert the postcondition. write_receipt DOWNGRADES to complete=false if the evidence (files/bytes landed,
 # reconciled against the source) doesn't back the claim — so this is a request, not a decree.
+ensure_mounter || true
 write_receipt true
 if [ "$FETCH_SHORT" = 1 ]; then
     # A short fetch must fail LOUD. Nothing downstream may treat this tree as a complete copy, and the PVC

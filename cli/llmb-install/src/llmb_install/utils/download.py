@@ -1,53 +1,74 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 
 """Shared download helpers for LLMB installer."""
 
+import ssl
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    TextColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
 
-def download_file(url: str, dest_path: str | Path) -> None:
-    """Download a file from URL to a destination path with progress indication.
+# Per socket operation (connect / each read), not a cap on total download time.
+_DOWNLOAD_TIMEOUT_SECONDS = 60
+# Large enough that per-read overhead (Python calls, progress updates) is negligible.
+_CHUNK_SIZE = 1024 * 1024
+
+
+def download_file(url: str, dest_path: str | Path, *, verify: bool = True) -> None:
+    """Download a file from URL to a destination path with a progress bar.
+
+    Progress is rendered with rich: a live bar on a terminal, and only the final
+    state when stdout is not a TTY (CI, log files), so logs are not spammed.
 
     Args:
         url: URL to download from
         dest_path: Local path to save file to
+        verify: Whether to verify the server's TLS certificate. Pass False only
+            for servers whose CA/chain is not in the default trust store (see
+            NSYS_SOURCES in constants.py); callers should log a warning when
+            disabling verification.
 
     Raises:
-        RuntimeError: If the download fails for any reason.
+        RuntimeError: If the download fails, or is cut short of its
+            Content-Length (a truncated download would otherwise be cached
+            as complete by callers).
     """
+    context = ssl.create_default_context()
+    if not verify:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+    received = 0
     try:
-
-        def _progress_hook(block_num, block_size, total_size):
-            """Simple progress indicator."""
-            if total_size > 0:
-                percent = min(100, (block_num * block_size * 100) // total_size)
-                if block_num % 50 == 0:  # Update every 50 blocks to avoid spam
-                    print(f"  Progress: {percent}%", end='\r', flush=True)
-
-        urllib.request.urlretrieve(url, dest_path, reporthook=_progress_hook)
-        print("  Progress: 100%")  # Final progress update
+        with (
+            urllib.request.urlopen(url, context=context, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response,
+            open(dest_path, 'wb') as out_file,
+            Progress(
+                TextColumn("  {task.description}"),
+                BarColumn(),
+                DownloadColumn(),
+                TransferSpeedColumn(),
+                TimeRemainingColumn(),
+            ) as progress,
+        ):
+            total_size = int(response.headers.get('Content-Length') or 0)
+            # total=None (no Content-Length) renders a pulsing bar instead of a percentage.
+            task = progress.add_task(Path(urllib.parse.urlparse(url).path).name, total=total_size or None)
+            while chunk := response.read(_CHUNK_SIZE):
+                out_file.write(chunk)
+                received += len(chunk)
+                progress.advance(task, len(chunk))
 
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"Failed to download from {url}: HTTP {e.code} - {e.reason}") from e
@@ -55,3 +76,11 @@ def download_file(url: str, dest_path: str | Path) -> None:
         raise RuntimeError(f"Failed to download from {url}: {e.reason}") from e
     except Exception as e:
         raise RuntimeError(f"Failed to download from {url}: {str(e)}") from e
+
+    # read() returns b'' at EOF rather than raising, so a cut-off download would look
+    # complete; refuse short downloads. Responses without a Content-Length (e.g.
+    # chunked) cannot be checked.
+    if total_size > 0 and received < total_size:
+        raise RuntimeError(
+            f"Failed to download from {url}: incomplete download, received {received} of {total_size} bytes"
+        )

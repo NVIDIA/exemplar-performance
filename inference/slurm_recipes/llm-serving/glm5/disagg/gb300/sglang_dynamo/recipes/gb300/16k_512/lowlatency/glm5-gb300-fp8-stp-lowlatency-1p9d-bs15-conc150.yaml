@@ -1,0 +1,149 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+base:
+  # Derived for 16K/512 from NVIDIA recipes/gb300-fp8/glm5.yaml:zip_override_8k1k_lowlat[0]
+  # STP only. Topology: 1 prefill + 9 decode nodes = 10 nodes / 40 GPUs.
+  name: glm5-gb300-fp8-stp-16k512-lowlatency-1p9d-bs15-conc150
+
+  model:
+    path: glm5-fp8
+    container: sglang-runtime-1.3.0
+    precision: fp8
+
+  identity:
+    model:
+      repo: zai-org/GLM-5-FP8
+      revision: 4f96cc5eec29dcee5d6ded54f7ffe889438f9516
+    container:
+      image: nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.3.0
+    frameworks:
+      dynamo: 1.3.0
+      sglang: 0.5.14
+
+  slurm:
+    time_limit: "01:30:00"
+
+  resources:
+    gpu_type: gb300
+    gpus_per_node: 4
+    prefill_nodes: 1
+    prefill_workers: 1
+    decode_nodes: 9
+    decode_workers: 9
+
+  frontend:
+    type: dynamo
+    nginx_container: nginx-1.27.4
+
+  dynamo:
+    version: 1.3.0
+    install: false
+
+  backend:
+    prefill_environment:
+      TORCH_DISTRIBUTED_DEFAULT_TIMEOUT: "1800"
+      UCX_MODULE_DIR: "/usr/local/lib/python3.12/dist-packages/nixl_cu13.libs/ucx"
+      UCX_TLS: "rc,cuda_copy,cuda_ipc"
+      UCX_NET_DEVICES: "all"
+      PYTHONUNBUFFERED: "1"
+      DYN_SKIP_SGLANG_LOG_FORMATTING: "1"
+      SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE: "100000"
+      SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT: "100000"
+      SGLANG_DISAGGREGATION_WAITING_TIMEOUT: "100000"
+      MC_TE_METRIC: "true"
+      MC_FORCE_MNNVL: "1"
+      NCCL_MNNVL_ENABLE: "1"
+      NCCL_CUMEM_ENABLE: "1"
+      SGLANG_MOONCAKE_CUSTOM_MEM_POOL: "True"
+      SGLANG_USE_MESSAGE_QUEUE_BROADCASTER: "0"
+      SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK: "1"
+      DYN_REQUEST_PLANE: nats
+
+    decode_environment:
+      TORCH_DISTRIBUTED_DEFAULT_TIMEOUT: "1800"
+      UCX_MODULE_DIR: "/usr/local/lib/python3.12/dist-packages/nixl_cu13.libs/ucx"
+      UCX_TLS: "rc,cuda_copy,cuda_ipc"
+      UCX_NET_DEVICES: "all"
+      PYTHONUNBUFFERED: "1"
+      DYN_SKIP_SGLANG_LOG_FORMATTING: "1"
+      SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE: "100000"
+      SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT: "100000"
+      SGLANG_DISAGGREGATION_WAITING_TIMEOUT: "100000"
+      MC_TE_METRIC: "true"
+      MC_FORCE_MNNVL: "1"
+      NCCL_MNNVL_ENABLE: "1"
+      NCCL_CUMEM_ENABLE: "1"
+      SGLANG_MOONCAKE_CUSTOM_MEM_POOL: "True"
+      SGLANG_USE_MESSAGE_QUEUE_BROADCASTER: "0"
+      SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK: "1"
+      DYN_REQUEST_PLANE: nats
+      SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK: "512"
+
+    sglang_config:
+      prefill:
+        port: 6500
+        disaggregation-bootstrap-port: 6600
+        served-model-name: GLM-5-FP8
+        trust-remote-code: true
+        quantization: fp8
+        kv-cache-dtype: fp8_e4m3
+        disaggregation-mode: prefill
+        disaggregation-transfer-backend: nixl
+        max-running-requests: 160
+        cuda-graph-max-bs-decode: 160
+        mem-fraction-static: 0.7
+        context-length: 16896
+        chunked-prefill-size: 65536
+        max-prefill-tokens: 16384
+        tensor-parallel-size: 4
+        data-parallel-size: 4
+        expert-parallel-size: 1
+        enable-dp-attention: true
+        enable-dp-lm-head: true
+        load-balance-method: total_tokens
+        dsa-decode-backend: trtllm
+        dsa-prefill-backend: trtllm
+        moe-runner-backend: flashinfer_trtllm
+        flashinfer-allreduce-fusion-backend: auto
+        disable-radix-cache: true
+        weight-loader-prefetch-checkpoints: true
+        model-loader-extra-config: '{"enable_multithread_load": true}'
+
+      decode:
+        port: 6500
+        served-model-name: GLM-5-FP8
+        trust-remote-code: true
+        skip-tokenizer-init: true
+        quantization: fp8
+        kv-cache-dtype: fp8_e4m3
+        disaggregation-mode: decode
+        disaggregation-transfer-backend: nixl
+        mem-fraction-static: 0.8
+        context-length: 16896
+        tensor-parallel-size: 4
+        data-parallel-size: 1
+        expert-parallel-size: 1
+        dsa-decode-backend: trtllm
+        dsa-prefill-backend: trtllm
+        moe-runner-backend: flashinfer_trtllm
+        flashinfer-allreduce-fusion-backend: auto
+        max-running-requests: 15
+        cuda-graph-max-bs-decode: 15
+        disable-radix-cache: true
+        stream-interval: 30
+        weight-loader-prefetch-checkpoints: true
+        model-loader-extra-config: '{"enable_multithread_load": true}'
+
+  health_check:
+    max_attempts: 360
+    interval_seconds: 10
+
+  benchmark:
+    type: sa-bench
+    req_rate: inf
+    isl: 16384
+    osl: 512
+    concurrencies: "150"
+
+override_validated: {}

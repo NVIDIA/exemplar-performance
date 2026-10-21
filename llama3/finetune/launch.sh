@@ -1,28 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
-if [ ${BASH_VERSION:0:1} -lt 4 ] || [ ${BASH_VERSION:0:1} -eq 4 ] && [ ${BASH_VERSION:2:1} -lt 2 ]; then
-    printf "Unsupported %s version: %s\n" "${BASH}" "${BASH_VERSION}" >&2
-    echo "Requires Bash 4.2 or greater." >&2
+if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 2))); then
+    printf 'Requires Bash 4.2 or greater (running: %s).\n' "${BASH_VERSION:-not Bash}" >&2
     exit 1
 fi
 
@@ -30,8 +11,13 @@ set -eu -o pipefail
 
 # Required environment variables
 : "${LLMB_INSTALL:?Required variable LLMB_INSTALL}"
-: "${SBATCH_ACCOUNT:?Required variable SBATCH_ACCOUNT}"
-: "${SBATCH_PARTITION:?Required variable SBATCH_PARTITION}"
+
+CLUSTER_TYPE=${CLUSTER_TYPE:-slurm}
+# Slurm-specific requirements — only validated on non-kubernetes clusters.
+if [[ $CLUSTER_TYPE != "kubernetes" ]]; then
+    : "${SBATCH_ACCOUNT:?Required variable SBATCH_ACCOUNT}"
+    : "${SBATCH_PARTITION:?Required variable SBATCH_PARTITION}"
+fi
 
 export WORKLOAD_TYPE=finetune
 export MODEL_NAME=llama3
@@ -40,7 +26,16 @@ if [[ $MODEL_SIZE != "70b" ]]; then
     echo "ERROR: Only 70b LoRA is supported. MODEL_SIZE=$MODEL_SIZE is not supported."
     exit 1
 fi
-export FW_VERSION=26.06.01
+export GPU_TYPE=${GPU_TYPE:?GPU_TYPE is a required variable.}
+export GPU_TYPE=${GPU_TYPE,,}
+
+if [[ $GPU_TYPE == "h100" ]]; then
+    export FW_VERSION=26.06.01
+    FINETUNE_TASK=lora
+else
+    export FW_VERSION=26.08.01
+    FINETUNE_TASK=peft
+fi
 
 export OPENBLAS_NUM_THREADS=1 # Required for login nodes with tight memory restrictions. Do not remove.
 
@@ -54,8 +49,6 @@ export NEMO_HOME=${NEMO_HOME:-$LLMB_WORKLOAD}
 
 export DTYPE=${DTYPE:-fp8}
 export DTYPE=${DTYPE,,}
-export GPU_TYPE=${GPU_TYPE:?GPU_TYPE is a required variable.}
-export GPU_TYPE=${GPU_TYPE,,}
 export JOB_TOTAL_GPUS=${JOB_TOTAL_GPUS:?JOB_TOTAL_GPUS is a required variable.}
 export TIME_LIMIT=${TIME_LIMIT:-"00:30:00"}
 export MAX_STEPS=${MAX_STEPS:-50}
@@ -70,6 +63,8 @@ GPU_METRICS_ENABLED=${ENABLE_GPU_METRICS:-false}
 GPU_METRICS_ENABLED=${GPU_METRICS_ENABLED,,}
 ENABLE_VBOOST=${ENABLE_VBOOST:-false}
 ENABLE_VBOOST=${ENABLE_VBOOST,,}
+ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING:-false}
+ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING,,}
 
 # Handle additional SLURM parameters from environment variable
 ADDITIONAL_SLURM_PARAMS=${ADDITIONAL_SLURM_PARAMS:-""}
@@ -152,8 +147,12 @@ if [[ $PROFILE_ENABLED == "true" ]]; then
     CONFIG_OVERRIDES+=" --profiling_start_step=$PROFILE_START_STEP "
     CONFIG_OVERRIDES+=" --profiling_stop_step=$PROFILE_STOP_STEP "
     CONFIG_OVERRIDES+=" --nsys_trace=cuda,nvtx "
-    CONFIG_OVERRIDES+=" --nsys_extra_args=--nvtx-domain-include=NCCL "
-    CONFIG_OVERRIDES+=" --profiling_ranks=$(seq -s, 0 $((JOB_TOTAL_GPUS - 1))) "
+    if [[ $GPU_TYPE == "h100" ]]; then
+        CONFIG_OVERRIDES+=" --nsys_extra_args=--nvtx-domain-include=NCCL "
+    else
+        CONFIG_OVERRIDES+=" --nsys_extra_args=--nvtx-domain-include=NCCL,--discard-environment=true "
+    fi
+    CONFIG_OVERRIDES+=" --profiling_ranks=$(seq -s, 0 $((JOB_TOTAL_GPUS - 1)) | sed 's/,$//') "
     if [[ $GPU_METRICS_ENABLED == true ]]; then
         CONFIG_OVERRIDES+=" --profiling_gpu_metrics "
     fi
@@ -183,6 +182,26 @@ if [[ $ENABLE_VBOOST == true ]]; then
     CONFIG_OVERRIDES+=" --enable_vboost true "
 fi
 
+CONFIG_OVERRIDES+=" --enable_pct_binding $ENABLE_PCT_BINDING "
+EXECUTOR_ARGS=()
+if [[ $CLUSTER_TYPE == "kubernetes" ]]; then
+    EXECUTOR_ARGS=(--nvcre_namespace "${NVCRE_NAMESPACE:?NVCRE_NAMESPACE required for kubernetes}")
+    [[ -n ${NVCRE_IMAGE_PULL_SECRET:-} ]] && EXECUTOR_ARGS+=(--nvcre_image_pull_secret "$NVCRE_IMAGE_PULL_SECRET")
+    [[ -n ${NVCRE_WORKDIR_PVC:-} ]] && EXECUTOR_ARGS+=(--nvcre_workdir_pvc "$NVCRE_WORKDIR_PVC")
+    [[ -n ${NVCRE_NODE_SELECTOR_JSON:-} ]] && EXECUTOR_ARGS+=(--nvcre_node_selector_json "$NVCRE_NODE_SELECTOR_JSON")
+    EXECUTOR_ARGS+=(--nvcre_timeout_per_job "${NVCRE_TIMEOUT_PER_JOB:-12h}")
+    [[ -n ${NVCRE_GANG_SCHEDULER_NAME:-} ]] && EXECUTOR_ARGS+=(--nvcre_gang_scheduler_name "$NVCRE_GANG_SCHEDULER_NAME")
+    # Run this checkout's Megatron-Bridge commit in the pods instead of the image's copy.
+    EXECUTOR_ARGS+=(--nvcre_use_mbridge_commit)
+    [[ -n ${NVCRE_HF_TOKEN_SECRET_NAME:-} ]] && EXECUTOR_ARGS+=(--nvcre_hf_token_secret_name "$NVCRE_HF_TOKEN_SECRET_NAME" --nvcre_hf_token_secret_key "${NVCRE_HF_TOKEN_SECRET_KEY:-token}")
+elif [[ $CLUSTER_TYPE == "slurm" ]]; then
+    read -ra SLURM_ARG_WORDS <<< "$SLURM_ARGS"
+    EXECUTOR_ARGS=(--account "$SBATCH_ACCOUNT" --partition "$SBATCH_PARTITION" --time_limit "$TIME_LIMIT" ${SLURM_ARG_WORDS[@]+"${SLURM_ARG_WORDS[@]}"})
+else
+    echo "Unsupported CLUSTER_TYPE=${CLUSTER_TYPE}. Aborting"
+    exit 1
+fi
+
 # run command
 pushd $LLMB_WORKLOAD/Megatron-Bridge
 python3 scripts/performance/setup_experiment.py \
@@ -194,17 +213,14 @@ python3 scripts/performance/setup_experiment.py \
     --gpu $GPU_TYPE \
     --num_gpus $JOB_TOTAL_GPUS \
     --gpus_per_node $GPUS_PER_NODE \
-    --task "lora" \
+    --task "$FINETUNE_TASK" \
     --pretrained_checkpoint $LLMB_WORKLOAD/checkpoint_and_dataset/llama3_70b \
     --data squad_packed \
     --dataset_root $LLMB_WORKLOAD/checkpoint_and_dataset/datasets \
     ${CONFIG_OVERRIDES} \
-    --account $SBATCH_ACCOUNT \
-    --partition $SBATCH_PARTITION \
     --log_dir $NEMORUN_HOME \
-    --time_limit $TIME_LIMIT \
     --max_steps $MAX_STEPS \
-    $SLURM_ARGS \
+    "${EXECUTOR_ARGS[@]}" \
     ${LLMB_MBRIDGE_EXTRA_ARGS:-}
 
 popd

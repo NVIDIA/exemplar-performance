@@ -309,7 +309,7 @@ This `llmb` group is the `llmb-collector`-aware integration path — callers kno
 
 For consumers that want to stay decoupled from `llmb-collector` entirely, the same features are advertised as named capabilities under the neutral `llmb_capabilities` entry-point group (shared with `llmb-auth` and any other producer). The group name, the `Capability` shape, and each capability's `invoke` signature are the only contract; neither side imports the other, and any producer can register additional providers for the same capability names.
 
-`Capability` and the `system.collect` / `system.commands-config` name constants are defined by the [`llmb-capabilities`](https://gitlab-master.nvidia.com/unified-cloud-benchmarking/sanitation-tools/llmb-capabilities) contract package, giving every producer and consumer one shared definition of the entry-point group name, the `Capability` shape, and each capability's supported `version` ceiling. `llmb_collector.capabilities` re-exports `Capability`, so embedders don't need a direct `llmb-capabilities` import just to type-hint against it.
+`Capability` and the `system.collect` / `system.commands-config` name constants are defined by the `llmb-capabilities` contract package, giving every producer and consumer one shared definition of the entry-point group name, the `Capability` shape, and each capability's supported `version` ceiling. `llmb_collector.capabilities` re-exports `Capability`, so embedders don't need a direct `llmb-capabilities` import just to type-hint against it.
 
 `llmb-collector` ships two capabilities:
 

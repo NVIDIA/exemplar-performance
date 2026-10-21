@@ -1,0 +1,1 @@
+{"task_id":"cpu__parallel_burn","trial_name":"cpu__parallel_burn.default","turn":0,"num_turns":1,"question":"Run a brief parallel CPU workload.","answer":"[Tool Call: exec]\n{\"command\":\"set -e\\npids=''\\nfor i in 1 2 3 4; do\\n  yes > /dev/null &\\n  pids=\\\"$pids $!\\\"\\ndone\\nsleep 0.5\\nkill $pids\\nwait $pids 2>/dev/null || true\"}"}

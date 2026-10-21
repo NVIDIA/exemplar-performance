@@ -24,10 +24,6 @@ declarative `recipe.yaml` renders to flat, committed manifests.
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-> **Editing or adding recipes?** Start with the schema files and an existing recipe. This repository can be extended by adding structured recipes: edit the structured `recipe.yaml`, install the validation dependencies with
-> `python3 -m pip install -r requirements-validation.txt`, then run `make validate render-check matrix`.
-> The schema/CI tell you exactly what's missing.
-
 ## Getting Started
 
 ### Step 0 — Before you begin (prerequisites)
@@ -165,7 +161,7 @@ Continue?  [Y]es, write profile / [e]dit / [q]uit: ⏎
 banner-lined with an honest ETA (`▸ <stage> — <eta>`):
 
 ```console
-$ scripts/llmb-k8s install gb300-cluster --recipes llm-perf/kvbm/qwen3-0-6b-gb300-vllm-agg-kvbm-pareto
+$ scripts/llmb-k8s install gb300-cluster --recipes <cell>
 
 ── Prerequisites (namespace · secrets) ─────────────────────────────
   ✓ created namespace 'example-benchmark'
@@ -175,12 +171,12 @@ $ scripts/llmb-k8s install gb300-cluster --recipes llm-perf/kvbm/qwen3-0-6b-gb30
 ── Per-recipe model caches ────────────────────────────────────────
   ▸ Provisioning model-cache PVC(s)  (a WaitForFirstConsumer block class (e.g. EBS) stays Pending
     until the first pod mounts it — a brief Pending here is NORMAL, not a hang)
-  ✓ llm-perf/kvbm/qwen3-0-6b-gb300-vllm-agg-kvbm-pareto [recipe] → created PVC 'qwen3-model-cache' (20Gi, ReadWriteOnce, sc=ebs)
+  ✓ <cell> [recipe] → created PVC '<model-cache-pvc>'
 
 ── Downloading ────────────────────────────────────────────────────
   ▸ Pulling the downloader image
 
-  → Qwen/Qwen3-0.6B  → cache qwen3-model-cache
+  → <model>  → cache <model-cache-pvc>
   ▸ Downloading model to cache
     Applying Job llmb-download-… ✓
     ✓ verified
@@ -195,7 +191,7 @@ ACTIVE  1 run · 1 GPU (ours)   |   fleet 1 up · 1/16 GPU used · 2026-07-30 12
 ━━ gb300-cluster  [NVIDIA-GB300]  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    namespace example-benchmark · nodes 3/4 free · ours 1 node (1g)
      STATUS     RUN / SERVER                         GPU  AGE / EXPECTED  SWEEP
-     ● RUNNING  qwen3-0-6b-gb300  c=64 sweep          1    12m / ~26m     ●●●○
+     ● RUNNING  <cell>  c=64 sweep                    1    12m / ~26m     ●●●○
 
 legend  ● RUNNING · ● LOADING (server warming) · ● PENDING · ● STUCK (crash-loop) · ✓ done · ✗ FAILED · SWEEP = concurrency rungs
 ```
@@ -247,11 +243,11 @@ Secrets     ✓ Image-pull: nvcr-cred       ✓ HF token: hf-token
 Model cache ❌ PVC "shared-model-cache" does not exist in namespace example-benchmark.
                A run WILL start against a non-existent cache and fail after GPU allocation.
                Fix — choose one:  [1] existing RWX PVC  [2] provision now  [3] name I'll create at stage
-               Selection: 1  →  ✓ qwen3-model-cache
+               Selection: 1  →  ✓ model-cache
 
 ── Confirm ────────────────────────────────────────────────────────────────
 🔒 Cluster (profile name): gb300-cluster     🔒 Kube context: example.k8s.company.net-gb300
-   Namespace: example-benchmark   GPU/arch: NVIDIA-GB300 / arm64   Model-cache PVC: qwen3-model-cache
+   Namespace: example-benchmark   GPU/arch: NVIDIA-GB300 / arm64   Model-cache PVC: model-cache
    Fields marked 🔒 are identity — changing them means a different profile.
 Continue?  [Yes, write profile]  > Yes
 
@@ -295,7 +291,7 @@ $ llmb-k8s install b200-cluster --list-recipes
 ── Recipes matching NVIDIA-B200 on b200-cluster ─────────────────────
      cell                                                               install
      ────────────────────────────────────────────────────────────────  ──────────────────────
-  🔒 llm-perf/kvbm/qwen3-0-6b-b200-vllm-agg-kvbm-pareto                 installed
+  🔒 llm-perf/Glm5/B200_k8s/Agg/16k_512/glm5-fp8-b200-sglang15-agg-c4-256  installed
      llm-perf/Glm5/B200_k8s/Agg/1k_1k/glm5-fp8-b200-sglang15-…-c4-1024  —
 
   2 matching · 1 installed · 1 available
@@ -308,7 +304,7 @@ $ llmb-k8s install --cluster b200-cluster
 ── Recipe selection ───────────────────────────────────────────────
   Cells matching this cluster's GPU  (🔒 = already installed, non-selectable)
 
-  🔒  --  llm-perf/kvbm/qwen3-0-6b-b200-vllm-agg-kvbm-pareto              kvbm · pareto
+  🔒  --  llm-perf/Glm5/B200_k8s/Agg/16k_512/glm5-fp8-b200-sglang15-agg-c4-256  16k/512 · pareto
        1  llm-perf/Glm5/B200_k8s/Agg/1k_1k/glm5-fp8-b200-…-c4-1024        1k/1k · pareto
        2  llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/…-c2576-1p1d  1k/1k · pareto
 
@@ -316,17 +312,17 @@ Select recipes to set up (comma-separated numbers, or 'all', or empty to skip):
   ? [all]: 1
 
 ── Model cache ─────────────────────────────────────────────────────
-  ✓ Qwen/Qwen3-0.6B  already on PVC (qwen3-model-cache)
+  ✓ <model>  already on PVC (<model-cache-pvc>)
 
 ── Per-cell setup ─────────────────────────────────────────────────────
-  → llm-perf/kvbm/qwen3-0-6b-gb300-vllm-agg-kvbm-pareto  (kvbm · pareto)
+  → <cell>  (1k/1k · pareto)
     staging via stage-dataset.sh ... ✓
     preflight ... ✓
 
 ── Summary ────────────────────────────────────────────────────────
   ✓ ready: 1   ⚠ needs-input: 0   ❌ blocked: 0
 
-  Next: llmb-k8s run llm-perf/kvbm/qwen3-0-6b-gb300-vllm-agg-kvbm-pareto gb300-cluster
+  Next: llmb-k8s run <cell> b200-cluster
 ```
 
 A staging or preflight failure marks that cell `❌ blocked` with a concrete one-line fix and moves to the
@@ -340,8 +336,8 @@ sweep** — with per-rung `✓/✗` progress injected into the live log so you c
 wading through aiperf output:
 
 ```console
-$ llmb-k8s run llm-perf/kvbm/qwen3-0-6b-gb300-vllm-agg-kvbm-pareto gb300-cluster
-  run-id: 20260729-qwen3-0-6b-gb300-vllm-agg-kvbm-pareto-a1b2   (dated, sortable, unique)
+$ llmb-k8s run <cell> gb300-cluster
+  run-id: 20260729-example-a1b2   (dated, sortable, unique)
   ✓ staged  ✓ deployed  ✓ server ready (1/1 GPU)  →  sweeping
 
 ───────────────────────────────────────────────────────────────────────
@@ -363,7 +359,7 @@ stops exactly that active detached run; and `llmb-k8s collect <run-id>` fetches 
 ### ④ `publish` — record the result
 
 ```console
-$ llmb-k8s publish llm-perf/kvbm/qwen3-0-6b-gb300-vllm-agg-kvbm-pareto gb300-cluster runs/20260729-…-a1b2
+$ llmb-k8s publish <cell> gb300-cluster runs/20260729-…-a1b2
   ✓ metric        pareto_geomean = <value>   (exemplar ≥ ref × (1 − tol%))  PASS
   ✓ RESULTS.md    updated        ✓ catalog rebuilt        ✓ runs.jsonl appended
 ```
@@ -378,7 +374,7 @@ benchmarking · how many GPUs are mine · ETA*, with idle/infra servers collapse
 ```console
 $ llmb-k8s fleet
   CLUSTER            RUN (active first)                          GPU  ETA      STATE
-  gb300-cluster   qwen3-0-6b-gb300  c=64 sweep                1    ~14m     ▶ benchmarking
+  gb300-cluster   <cell>  c=64 sweep                           1    ~14m     ▶ benchmarking
   b200-cluster     glm5-fp8-b200-1k1k  c=2576 point           16   ~31m     ▶ benchmarking
   example-gpu-cluster        —                                          0    —        · 6 idle · 2 infra
   Legend  ▶ active · · idle/infra collapsed · GPU = ours only    (watch: llmb-k8s fleet --watch 15)
@@ -465,26 +461,32 @@ auto-generated matrix below.
 | **GLM-5** · B200                | llm-perf, fixed ISL/OSL token throughput at target concurrency, aiperf `pareto` | sglang aggregated                     | 3     |
 | **GLM-5** · B200                | llm-perf, fixed ISL/OSL token throughput at target concurrency, aiperf `pareto` | Dynamo + sglang prefill/decode + NIXL | 24    |
 | **Nemotron Ultra NVFP4** · B200 | llm-perf, fixed ISL/OSL token throughput at target concurrency, aiperf `pareto` | Dynamo + sglang prefill/decode + NIXL | 3     |
-| **Qwen3 KVBM** · B200           | Dynamo KV feature testing — KVBM offload to CPU memory, aiperf `pareto`         | vllm aggregated                       | 1     |
 
 ## Matrix — supported / validated
 
 <!-- MATRIX:START -->
 _Auto-generated by `scripts/build_catalog.py` — do not hand-edit between the markers._
 
-**31 recipes**
+**64 recipes**
 
 ### Coverage
 
-_✓ marks a covered model·GPU × engine·serving combo (`×N` = N cells there). Engine column: `engine` when no orchestration framework, `engine+framework` (e.g. `sglang+dynamo`) when one is used. Empty = not covered yet._
+_✓ marks a covered model·GPU × engine·serving combo (`×N` = N cells there). Engine column: `engine` when no orchestration framework, `engine+framework` (e.g. `sglang+dynamo`) when one is used. Agentic panels show agent · task · mode instead. Empty = not covered yet._
 
-**llm-perf · pareto** — glm5-9600-agentic-code-500s-seed42-sessionfit9000-20260715, synthetic
+**agentic · replay-fidelity** — swebench-verified
 
-| model · gpu | sglang+dynamo-disaggregated | sglang-aggregated | vllm+dynamo-aggregated |
-|---|---|---|---|
-| glm5-fp8 · B200 | ✓ ×24 | ✓ ×3 |  |
-| nemotron-ultra-nvfp4 · B200 | ✓ ×3 |  |  |
-| qwen3-0-6b · B200 |  |  | ✓ |
+| model · gpu | mini-swe-agent · django__django-11490 · capture-replay | mini-swe-agent · django__django-11490 · replay |
+|---|---|---|
+| nemotron-3-ultra-nvfp4 · gb300 | ✓ ×2 | ✓ ×2 |
+
+**llm-perf · pareto** — synthetic
+
+| model · gpu | sglang+dynamo-disaggregated | sglang-aggregated |
+|---|---|---|
+| glm5-fp8 · GB300 | ✓ ×21 |  |
+| glm5-fp8 · B200 | ✓ ×24 | ✓ ×3 |
+| nemotron-ultra-nvfp4 · GB300 | ✓ ×9 |  |
+| nemotron-ultra-nvfp4 · B200 | ✓ ×3 |  |
 
 ### Recipes
 
@@ -492,37 +494,70 @@ _Two identities per row. **`benchmark_id`** = the stable identity of *what is me
 
 | recipe | model | gpu | arch | agent | engine | serving | scenario | goal | distribution | mode | launcher | benchmark_id | recipe_hash | wall h (p50) | GPU·h (p50) | results |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| [qwen3-0-6b-b200-vllm-agg-kvbm-pareto](recipes/llm-perf/kvbm/qwen3-0-6b-b200-vllm-agg-kvbm-pareto/) | qwen3-0-6b | B200 | amd64 |  | vllm+dynamo | aggregated | llm-perf | pareto | glm5-9600-agentic-code-500s-seed42-sessionfit9000-20260715 | mooncake-trace | aiperf | `2f9d41edfe49` | `b5427e6cfa09` |  |  |  |
-| [glm5-agg-16k512-sglang15-c4-256](recipes/llm-perf/Glm5/B200_k8s/Agg/16k_512/glm5-fp8-b200-sglang15-agg-c4-256/) | glm5-fp8 | B200 | amd64 |  | sglang | aggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `9e5a169d1a95` | `ffd0650b40ad` |  |  |  |
-| [glm5-agg-1k1k-sglang15-c4-1024](recipes/llm-perf/Glm5/B200_k8s/Agg/1k_1k/glm5-fp8-b200-sglang15-agg-c4-1024/) | glm5-fp8 | B200 | amd64 |  | sglang | aggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `06399fbaa6f7` | `9780c34d907a` |  |  |  |
-| [glm5-agg-8k1k-sglang15-c4-256](recipes/llm-perf/Glm5/B200_k8s/Agg/8k_1k/glm5-fp8-b200-sglang15-agg-c4-256/) | glm5-fp8 | B200 | amd64 |  | sglang | aggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `4388f43080d7` | `7b78a0a2010d` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c224-1p2d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c224-1p2d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `636b4bea01d0` | `198cda36e06d` |  |  |  |
-| [glm5-16k512-hightpt-dynamo14-c240-1p1d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c240-1p1d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `ddc55b211bbe` | `a1a3465a458a` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c304-2p1d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c304-2p1d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `4939baeeec3d` | `e71482135c31` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `a43d9a5ea0fc` | `0b4f0d074647` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p3d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p3d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `034d730aa00b` | `e7adb48d8a5a` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c32-1p7d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c32-1p7d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `d7366f36ae80` | `6ccd9959fd5d` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c64-1p5d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c64-1p5d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `4e56b4f775cc` | `86e0722e12d6` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c8-1p8d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c8-1p8d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `c67c34b422d2` | `c4655d8cd469` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c96-1p4d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c96-1p4d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `ac567418ce9e` | `28df2b98d321` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c1248-1p2d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c1248-1p2d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `cab044a1772a` | `5748dbc318d5` |  |  |  |
-| [glm5-1k1k-hightpt-dynamo14-c2576-1p1d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c2576-1p1d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `719a5a33c947` | `24212feecd36` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c576-1p4d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c576-1p4d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `5c0a5734f9c0` | `d79e2c2329dd` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `de276ba22abd` | `d65630005ed7` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `97aa11d008e5` | `eb4b613d807d` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c512x256x128x64x32-1p8d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c512x256x128x64x32-1p8d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `baa1c238bc35` | `457e23ee6224` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c224-1p2d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c224-1p2d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `434af2573699` | `5744224d58cb` |  |  |  |
-| [glm5-8k1k-hightpt-dynamo14-c240-1p1d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c240-1p1d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `b1ac06c0546e` | `3f177e600f41` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c560-2p1d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c560-2p1d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `a39a60cc2038` | `75f81c9a4f30` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c12-1p8d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c12-1p8d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `baf77c9f1e9b` | `102235fe74da` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c128-1p5d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c128-1p5d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `1ee2e4a85355` | `2b7e30967def` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c200-1p4d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c200-1p4d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `d6fce654a1f8` | `3c038dbf0307` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c256-1p2d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c256-1p2d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `09c404d1052f` | `4bb529a24f85` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c256-1p3d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c256-1p3d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `7bf69c8bf844` | `62a85e106a7a` |  |  |  |
-| [glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c64-1p7d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c64-1p7d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `b8c65d1bb5bf` | `9c3e6cb6cf31` |  |  |  |
-| [nemotron-ultra-nvfp4-b200-sglang-dynamo14-10k16k-1p1d](recipes/llm-perf/nemotron_ultra_disagg/sglang_dynamo/10k16k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-10k16k-1p1d/) | nemotron-ultra-nvfp4 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `baf8a32834a7` | `619fd2fb855d` |  |  |  |
-| [nemotron-ultra-nvfp4-b200-sglang-dynamo14-50k2k-1p1d](recipes/llm-perf/nemotron_ultra_disagg/sglang_dynamo/50k2k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-50k2k-1p1d/) | nemotron-ultra-nvfp4 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `46f50067f0b5` | `6281dca0bc24` |  |  |  |
-| [nemotron-ultra-nvfp4-b200-sglang-dynamo14-8k64k-1p1d](recipes/llm-perf/nemotron_ultra_disagg/sglang_dynamo/8k64k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-8k64k-1p1d/) | nemotron-ultra-nvfp4 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `3bd5b03ce3e9` | `826577c5ab08` |  |  |  |
+| [tasktrace-capture-replay-swebench-verified-gb300-cpu](recipes/agentic/tasktrace-capture-replay/swebench-verified-gb300-cpu/) | nemotron-3-ultra-nvfp4 | gb300 | arm64 |  | none | none | agentic | replay-fidelity | swebench-verified | tasktrace-capture-replay | tasktrace | `2d1f831659cb` | `334326f23adf` |  |  |  |
+| [tasktrace-capture-replay-swebench-verified-gb300-gpu](recipes/agentic/tasktrace-capture-replay/swebench-verified-gb300-gpu/) | nemotron-3-ultra-nvfp4 | gb300 | arm64 |  | vllm | aggregated | agentic | replay-fidelity | swebench-verified | tasktrace-capture-replay | tasktrace | `d2568cc623f1` | `af19264060d4` |  |  |  |
+| [tasktrace-replay-swebench-verified-gb300-cpu](recipes/agentic/tasktrace-replay/swebench-verified-gb300-cpu/) | nemotron-3-ultra-nvfp4 | gb300 | arm64 |  | none | none | agentic | replay-fidelity | swebench-verified | tasktrace-replay | tasktrace | `81f19c9e2619` | `66b6fa1c8917` |  |  |  |
+| [tasktrace-replay-swebench-verified-gb300-gpu](recipes/agentic/tasktrace-replay/swebench-verified-gb300-gpu/) | nemotron-3-ultra-nvfp4 | gb300 | arm64 |  | vllm | aggregated | agentic | replay-fidelity | swebench-verified | tasktrace-replay | tasktrace | `6fc3ae0166bd` | `71dea36de360` |  |  |  |
+| [glm5-gb300-dyn13-16k512-ht-c1300-10p8d](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/16K_512/hightpt/glm5-gb300-dyn13-16k512-ht-c1300-10p8d/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `63bb3c48d528` | `d668dfbd38d8` |  |  |  |
+| [glm5-gb300-dyn13-16k512-ht-c1700-12p6d](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/16K_512/hightpt/glm5-gb300-dyn13-16k512-ht-c1700-12p6d/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `39e99a5d2243` | `f0477ab39d23` |  |  |  |
+| [glm5-gb300-dyn13-16k512-ht-c2800-14p4d](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/16K_512/hightpt/glm5-gb300-dyn13-16k512-ht-c2800-14p4d/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `0a75f9d3044f` | `f6178c71d911` |  |  |  |
+| [glm5-gb300-dyn13-16k512-ht-c900-8p10d](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/16K_512/hightpt/glm5-gb300-dyn13-16k512-ht-c900-8p10d/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `0cd89b46ac18` | `99bbb16468d2` |  |  |  |
+| [glm5-gb300-dyn13-16k512-ll-c128-1p17d-bs8](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/16K_512/lowlatency/glm5-gb300-dyn13-16k512-ll-c128-1p17d-bs8/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `e6e2a448753d` | `fb58bb7ffc72` |  |  |  |
+| [glm5-gb300-dyn13-16k512-ll-c150-1p9d-bs15](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/16K_512/lowlatency/glm5-gb300-dyn13-16k512-ll-c150-1p9d-bs15/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `15b0dc6c10cc` | `fd297376677b` |  |  |  |
+| [glm5-gb300-dyn13-16k512-ll-c32-1p17d-bs8](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/16K_512/lowlatency/glm5-gb300-dyn13-16k512-ll-c32-1p17d-bs8/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `bd21c809f832` | `8c6c94133fdd` |  |  |  |
+| [glm5-gb300-dyn13-16k512-ll-c64-1p17d-bs8](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/16K_512/lowlatency/glm5-gb300-dyn13-16k512-ll-c64-1p17d-bs8/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `623c092d53d5` | `bb3ea82ccff4` |  |  |  |
+| [glm5-gb300-dyn13-1k1k-ht-c5700-4p14d](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/1k_1k/hightpt/glm5-gb300-dyn13-1k1k-ht-c5700-4p14d/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `717e6e8311a9` | `07ff3ceda37f` |  |  |  |
+| [glm5-gb300-dyn13-1k1k-ll-c128-1p17d-bs32](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/1k_1k/lowlatency/glm5-gb300-dyn13-1k1k-ll-c128-1p17d-bs32/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `5c615b071376` | `d81b1bea033e` |  |  |  |
+| [glm5-gb300-dyn13-1k1k-ll-c256-1p17d-bs32](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/1k_1k/lowlatency/glm5-gb300-dyn13-1k1k-ll-c256-1p17d-bs32/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `3f1e4e14f69d` | `d51df0598911` |  |  |  |
+| [glm5-gb300-dyn13-1k1k-ll-c512-1p17d-bs32](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/1k_1k/lowlatency/glm5-gb300-dyn13-1k1k-ll-c512-1p17d-bs32/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `4bb39bb2be47` | `9af8a1aadd86` |  |  |  |
+| [glm5-gb300-dyn13-1k1k-ll-c64-1p17d-bs32](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/1k_1k/lowlatency/glm5-gb300-dyn13-1k1k-ll-c64-1p17d-bs32/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `a2f0192b5df9` | `bd5c5177f1e4` |  |  |  |
+| [glm5-gb300-dyn13-8k1k-ht-c1300-10p8d](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/8k_1k/hightpt/glm5-gb300-dyn13-8k1k-ht-c1300-10p8d/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `c71099693906` | `21614a2def13` |  |  |  |
+| [glm5-gb300-dyn13-8k1k-ht-c1700-12p6d](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/8k_1k/hightpt/glm5-gb300-dyn13-8k1k-ht-c1700-12p6d/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `d982743f0c54` | `8a718bcaee40` |  |  |  |
+| [glm5-gb300-dyn13-8k1k-ht-c2800-14p4d](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/8k_1k/hightpt/glm5-gb300-dyn13-8k1k-ht-c2800-14p4d/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `59819fff73bc` | `2ac021dabf7d` |  |  |  |
+| [glm5-gb300-dyn13-8k1k-ht-c900-8p10d](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/8k_1k/hightpt/glm5-gb300-dyn13-8k1k-ht-c900-8p10d/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `04caa23b96a5` | `c6e838e76582` |  |  |  |
+| [glm5-gb300-dyn13-8k1k-ll-c128-1p17d-bs8](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/8k_1k/lowlatency/glm5-gb300-dyn13-8k1k-ll-c128-1p17d-bs8/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `11f149810f2e` | `47ebf0b18dc7` |  |  |  |
+| [glm5-gb300-dyn13-8k1k-ll-c150-1p9d-bs15](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/8k_1k/lowlatency/glm5-gb300-dyn13-8k1k-ll-c150-1p9d-bs15/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `58b0a01508e1` | `2d62a88aeeff` |  |  |  |
+| [glm5-gb300-dyn13-8k1k-ll-c32-1p17d-bs8](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/8k_1k/lowlatency/glm5-gb300-dyn13-8k1k-ll-c32-1p17d-bs8/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `fefacbf938a6` | `067b64efe701` |  |  |  |
+| [glm5-gb300-dyn13-8k1k-ll-c64-1p17d-bs8](recipes/llm-perf/Glm5/Gb300_k8s/Disagg/sglang_dynamo/8k_1k/lowlatency/glm5-gb300-dyn13-8k1k-ll-c64-1p17d-bs8/) | glm5-fp8 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `b3ee84eeeb50` | `5b720ed45d1e` |  |  |  |
+| [glm5-agg-16k512-sglang15-c4-256](recipes/llm-perf/Glm5/B200_k8s/Agg/16k_512/glm5-fp8-b200-sglang15-agg-c4-256/) | glm5-fp8 | B200 | amd64 |  | sglang | aggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `9e5a169d1a95` | `e4bf6cf6a84c` |  |  |  |
+| [glm5-agg-1k1k-sglang15-c4-1024](recipes/llm-perf/Glm5/B200_k8s/Agg/1k_1k/glm5-fp8-b200-sglang15-agg-c4-1024/) | glm5-fp8 | B200 | amd64 |  | sglang | aggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `06399fbaa6f7` | `8cd54c281d76` |  |  |  |
+| [glm5-agg-8k1k-sglang15-c4-256](recipes/llm-perf/Glm5/B200_k8s/Agg/8k_1k/glm5-fp8-b200-sglang15-agg-c4-256/) | glm5-fp8 | B200 | amd64 |  | sglang | aggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `4388f43080d7` | `30a7affd4784` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c224-1p2d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c224-1p2d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `636b4bea01d0` | `d628e5e7f8e1` |  |  |  |
+| [glm5-16k512-hightpt-dynamo14-c240-1p1d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c240-1p1d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `ddc55b211bbe` | `f19db6eb5cb3` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c304-2p1d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-hightpt-c304-2p1d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `4939baeeec3d` | `0d195277fa42` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p2d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `a43d9a5ea0fc` | `4150142bb2b9` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p3d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c128-1p3d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `034d730aa00b` | `a610ce23a505` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c32-1p7d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c32-1p7d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `d7366f36ae80` | `285e55c435d4` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c64-1p5d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c64-1p5d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `4e56b4f775cc` | `282a926db8b3` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c8-1p8d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c8-1p8d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `c67c34b422d2` | `1cc1411b9870` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c96-1p4d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/16k_512/glm5-fp8-b200-sglang-dynamo14-16k512-lowlat-c96-1p4d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `ac567418ce9e` | `fbe3ef19525b` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c1248-1p2d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c1248-1p2d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `cab044a1772a` | `361d9a4a0f95` |  |  |  |
+| [glm5-1k1k-hightpt-dynamo14-c2576-1p1d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c2576-1p1d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `719a5a33c947` | `b31ea6331adc` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c576-1p4d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c576-1p4d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `5c0a5734f9c0` | `025fab68faaa` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c800-1p3d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `de276ba22abd` | `b91d6e3e1ed1` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c16-1p8d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `97aa11d008e5` | `60c2d8747a46` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c512x256x128x64x32-1p8d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-lowlat-c512x256x128x64x32-1p8d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `baa1c238bc35` | `22191203cfe5` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c224-1p2d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c224-1p2d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `434af2573699` | `8c3ec0234539` |  |  |  |
+| [glm5-8k1k-hightpt-dynamo14-c240-1p1d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c240-1p1d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `b1ac06c0546e` | `679c0ea95182` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c560-2p1d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-hightpt-c560-2p1d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `a39a60cc2038` | `3aafef6ded33` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c12-1p8d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c12-1p8d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `baf77c9f1e9b` | `a9f4b8c97b60` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c128-1p5d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c128-1p5d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `1ee2e4a85355` | `b3e9613194ac` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c200-1p4d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c200-1p4d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `d6fce654a1f8` | `18272602f37d` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c256-1p2d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c256-1p2d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `09c404d1052f` | `756015642769` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c256-1p3d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c256-1p3d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `7bf69c8bf844` | `00cd77596763` |  |  |  |
+| [glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c64-1p7d](recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/8k_1k/glm5-fp8-b200-sglang-dynamo14-8k1k-lowlat-c64-1p7d/) | glm5-fp8 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `b8c65d1bb5bf` | `ae41e9eb0a30` |  |  |  |
+| [nemotron-ultra-gb300-sglang-dynamo14-10k16k-1p1d](recipes/llm-perf/nemotron_ultra_disagg/Gb300_k8s/Disagg/sglang_dynamo/10k16k/nemotron-ultra-gb300-sglang-dynamo14-10k16k-1p1d/) | nemotron-ultra-nvfp4 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `9f2c77978bf4` | `d277e8f3d841` |  |  |  |
+| [nemotron-ultra-gb300-sglang-dynamo14-10k16k-1p3d](recipes/llm-perf/nemotron_ultra_disagg/Gb300_k8s/Disagg/sglang_dynamo/10k16k/nemotron-ultra-gb300-sglang-dynamo14-10k16k-1p3d/) | nemotron-ultra-nvfp4 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `6da4fbf11cec` | `f8d0e8fee0d7` |  |  |  |
+| [nemotron-ultra-gb300-sglang-dynamo14-10k16k-4p4d](recipes/llm-perf/nemotron_ultra_disagg/Gb300_k8s/Disagg/sglang_dynamo/10k16k/nemotron-ultra-gb300-sglang-dynamo14-10k16k-4p4d/) | nemotron-ultra-nvfp4 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `4c74a0f969e9` | `ac2cc907bbd3` |  |  |  |
+| [nemotron-ultra-gb300-sglang-dynamo14-50k2k-10p2d](recipes/llm-perf/nemotron_ultra_disagg/Gb300_k8s/Disagg/sglang_dynamo/50k2k/nemotron-ultra-gb300-sglang-dynamo14-50k2k-10p2d/) | nemotron-ultra-nvfp4 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `8c59419cd80b` | `ce1141a86e13` |  |  |  |
+| [nemotron-ultra-gb300-sglang-dynamo14-50k2k-1p1d](recipes/llm-perf/nemotron_ultra_disagg/Gb300_k8s/Disagg/sglang_dynamo/50k2k/nemotron-ultra-gb300-sglang-dynamo14-50k2k-1p1d/) | nemotron-ultra-nvfp4 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `7fa07f7eb929` | `7324bbb09548` |  |  |  |
+| [nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d](recipes/llm-perf/nemotron_ultra_disagg/Gb300_k8s/Disagg/sglang_dynamo/50k2k/nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d/) | nemotron-ultra-nvfp4 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `9ea2f8d5bfd9` | `b88c758cb04c` |  |  |  |
+| [nemotron-ultra-gb300-sglang-dynamo14-8k64k-1p1d](recipes/llm-perf/nemotron_ultra_disagg/Gb300_k8s/Disagg/sglang_dynamo/8k64k/nemotron-ultra-gb300-sglang-dynamo14-8k64k-1p1d/) | nemotron-ultra-nvfp4 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `f1e89811f186` | `b1ea41c08bc2` |  |  |  |
+| [nemotron-ultra-gb300-sglang-dynamo14-8k64k-1p3d](recipes/llm-perf/nemotron_ultra_disagg/Gb300_k8s/Disagg/sglang_dynamo/8k64k/nemotron-ultra-gb300-sglang-dynamo14-8k64k-1p3d/) | nemotron-ultra-nvfp4 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `4c10011e53a6` | `c8f456684715` |  |  |  |
+| [nemotron-ultra-gb300-sglang-dynamo14-8k64k-4p4d](recipes/llm-perf/nemotron_ultra_disagg/Gb300_k8s/Disagg/sglang_dynamo/8k64k/nemotron-ultra-gb300-sglang-dynamo14-8k64k-4p4d/) | nemotron-ultra-nvfp4 | GB300 | arm64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `8ccbb88eb5d3` | `79d5042c7e6c` |  |  |  |
+| [nemotron-ultra-nvfp4-b200-sglang-dynamo14-10k16k-1p1d](recipes/llm-perf/nemotron_ultra_disagg/B200_k8s/Disagg/sglang_dynamo/10k16k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-10k16k-1p1d/) | nemotron-ultra-nvfp4 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `baf8a32834a7` | `5d0d3c4feda4` |  |  |  |
+| [nemotron-ultra-nvfp4-b200-sglang-dynamo14-50k2k-1p1d](recipes/llm-perf/nemotron_ultra_disagg/B200_k8s/Disagg/sglang_dynamo/50k2k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-50k2k-1p1d/) | nemotron-ultra-nvfp4 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `46f50067f0b5` | `9964cee3bdf8` |  |  |  |
+| [nemotron-ultra-nvfp4-b200-sglang-dynamo14-8k64k-1p1d](recipes/llm-perf/nemotron_ultra_disagg/B200_k8s/Disagg/sglang_dynamo/8k64k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-8k64k-1p1d/) | nemotron-ultra-nvfp4 | B200 | amd64 |  | sglang+dynamo | disaggregated | llm-perf | pareto | synthetic | synthetic | aiperf | `3bd5b03ce3e9` | `584ebc8cc5b5` |  |  |  |
 <!-- MATRIX:END -->
 
 - Coverage grid is faceted by scenario; **recipe** link opens the cell, **results** opens its `RESULTS.md`.

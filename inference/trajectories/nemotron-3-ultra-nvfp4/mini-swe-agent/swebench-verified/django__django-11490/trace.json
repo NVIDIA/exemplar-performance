@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "kind": "tasktrace-trace",
+  "selector": "nemotron-3-ultra_miniswe_django-11490",
+  "model": "nemotron-3-ultra-nvfp4",
+  "agent_harness": "mini-swe-agent",
+  "dataset": "swebench-verified",
+  "task": "django__django-11490",
+  "agent": "mini-swe-agent",
+  "live_model_default": "openai/nvidia/nemotron-3-ultra-550b-a55b",
+  "image": {
+    "reference": "ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490:sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78",
+    "arch": "aarch64"
+  }
+}

@@ -1,24 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
-
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 
 """Container image management for LLMB installation.
 
@@ -140,7 +121,7 @@ def fetch_container_images(
     images: Dict[str, str],
     install_path: str,
     node_architecture: str,
-    install_method: str,
+    image_download_method: str,
     slurm_info: Dict[str, Any],
     shared_images_dir: Optional[str] = None,
 ) -> None:
@@ -150,7 +131,7 @@ def fetch_container_images(
         images: Dictionary mapping image URLs to desired filenames
         install_path: Directory where the sqsh files should be saved
         node_architecture: The selected node architecture ('x86_64' or 'aarch64')
-        install_method: The selected installation method ('local' or 'slurm')
+        image_download_method: Where to run image downloads ('local' = current node, 'slurm' = CPU partition job) ('local' or 'slurm')
         slurm_info: Dictionary containing SLURM configuration information
         shared_images_dir: Optional path to a shared directory for images.
 
@@ -171,7 +152,7 @@ def fetch_container_images(
         source_images_dir = local_images_dir
 
     # Detect virtual environment and prepare clean environment for SLURM
-    if detect_virtual_environment() and install_method == 'slurm':
+    if detect_virtual_environment() and image_download_method == 'slurm':
         print("Detected virtual environment. Preparing clean environment for SLURM execution...")
         clean_env = get_clean_environment_for_subprocess()
     else:
@@ -189,7 +170,7 @@ def fetch_container_images(
                     cmd_args.extend(["-a", node_architecture])
                 cmd_args.append(f"docker://{image_url}")
 
-                if install_method == 'slurm':
+                if image_download_method == 'slurm':
                     # Validate required SLURM configuration fields
                     try:
                         account = slurm_info['slurm']['account']
@@ -223,7 +204,7 @@ def fetch_container_images(
                     print(f"Successfully downloaded {source_sqsh_file}\n")
                 except subprocess.CalledProcessError as e:
                     print(f"Error: Failed to download {source_sqsh_file}: {str(e)}\n")
-                    if install_method == 'slurm':
+                    if image_download_method == 'slurm':
                         print(
                             "Please ensure the compute nodes you selected in the 'CPU_PARTITION' option are configured correctly, or try a local installation (if available)."
                         )

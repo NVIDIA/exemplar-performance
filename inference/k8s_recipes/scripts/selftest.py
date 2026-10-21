@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -41,8 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 fails = []
 
-# The 256k max-concurrency-sla cell family was pruned in the strict consolidation (only the 2 north-star
-# recipes survive: KVBM/GLM-5 — all goal=pareto or agentic-behavior). The exemplar_check / publish /
+# The 256k max-concurrency-sla cell family was pruned in the strict consolidation. The exemplar_check / publish /
 # export_record tests below assert SLA-goal semantics (metric max_concurrency_at_sla), so we synthesize a
 # minimal, schema-complete goal=max-concurrency-sla cell in a tempdir instead of pointing at a real cell.
 # NB: created UNDER the repo root (not /tmp) so export_record's `cell.relative_to(ROOT)` resolves; the dotdir
@@ -100,14 +81,9 @@ def run(*args):
     return subprocess.run([sys.executable, *[str(a) for a in args]], capture_output=True, text=True)
 
 
-# Migrated off the pruned 256k SLA family to the surviving Qwen3-KVBM gb300 cell (status: runs; carries an
-# sla block ttft_ms=10000/tpot_ms=100 so the exemplar_check SLA gate below still resolves 128 pass / 256 fail).
-B200 = ROOT / "recipes/llm-perf/kvbm/qwen3-0-6b-b200-vllm-agg-kvbm-pareto"
-# A currently-PUBLISHED (status: runs) cell, for the checks that need a real published record
-# (provenance impact MATCH/DRIFT, observe.status_rows). Kept SEPARATE from B200 because both KVBM cells
-# went `runs → wip` under the whole-node policy (their shared-node numbers were invalidated), so B200 is
-# no longer published. These checks are scenario-agnostic, so any published cell works.
-PUBLISHED = ROOT / "scripts/fixtures/sample_cells/nemotron-ultra-3-gb300-vllm-agg-pareto-c16"
+B200 = ROOT / "recipes/llm-perf/Glm5/B200_k8s/Agg/1k_1k/glm5-fp8-b200-sglang15-agg-c4-1024"
+# A surviving cell for the scenario-agnostic provenance and status checks below.
+PUBLISHED = B200
 
 # --- exemplar_check: the SLA gate must EXCLUDE failing rungs ---
 with tempfile.TemporaryDirectory() as td:
@@ -556,7 +532,7 @@ r = subprocess.run(
     [
         sys.executable,
         str(ROOT / "scripts/adaptive_sweep.py"),
-        str(ROOT / "recipes/llm-perf/kvbm/qwen3-0-6b-b200-vllm-agg-kvbm-pareto"),
+        str(B200),
         "dummy",
         "--dry-run",
         "--curve-crossing",
@@ -849,7 +825,7 @@ with tempfile.TemporaryDirectory() as td:
 r3 = run(ROOT / "analysis/compare.py", "--all")
 # A digest needs >=2 cells carrying VALUES. Which facets exist depends on which cells have published
 # numbers TODAY, so asserting on one named facet pins the repo's DATA rather than compare's BEHAVIOUR —
-# and then a perfectly good publish turns CI red. (It did: publishing the KVBM cell produced a
+# and then a perfectly good publish turns CI red. (Publishing a cell produced a
 # `pareto_geomean` facet, which is neither "the expected facet" nor "nothing to compare", so both
 # branches missed and the check failed on a correct result.)
 # The invariant that actually matters, and holds at every data state: compare --all EXITS CLEANLY and
@@ -1174,8 +1150,7 @@ check(
 )
 check(
     "fleet_status.cell_label: disambiguates same leaf recipe names by context path",
-    _fs.cell_label(ROOT / "recipes/llm-perf/kvbm/qwen3-0-6b-b200-vllm-agg-kvbm-pareto")
-    == "llm-perf/kvbm/qwen3-0-6b-b200-vllm-agg-kvbm-pareto",
+    _fs.cell_label(B200) == "llm-perf/Glm5/B200_k8s/Agg/1k_1k/glm5-fp8-b200-sglang15-agg-c4-1024",
 )
 
 # --- preflight pure checks (cluster-side wrappers untested offline): profile-completeness + secret content ---
@@ -1689,9 +1664,18 @@ check(
 import lane as _lane  # noqa: E402
 
 check(
-    "lane: llm-perf → stage-dataset + sweep (mode ignored), kind=bench",
+    "lane: llm-perf → stage-dataset + sweep (mode ignored), kind=bench, server=deploy",
     _lane.resolve_lane("llm-perf", "mooncake-trace")
-    == {"stage": "stage-dataset.sh", "bench": "sweep.sh", "needs": "", "kind": "bench"},
+    == {"stage": "stage-dataset.sh", "bench": "sweep.sh", "needs": "", "kind": "bench", "server": "deploy"},
+)
+check(
+    "lane: agentic/tasktrace-replay → stage-tasktrace + tasktrace, kind=tt, server=none",
+    _lane.resolve_lane("agentic", "tasktrace-replay")
+    == {"stage": "stage-tasktrace.sh", "bench": "tasktrace.sh", "needs": "", "kind": "tt", "server": "none"},
+)
+check(
+    "lane: agentic/tasktrace-capture-replay → same lane scripts as replay",
+    _lane.resolve_lane("agentic", "tasktrace-capture-replay") == _lane.resolve_lane("agentic", "tasktrace-replay"),
 )
 
 # --- recipe-change impact guard: DRIFT when the published record no longer matches ---
@@ -1701,9 +1685,7 @@ import provenance as _prov  # noqa: E402
 
 with tempfile.TemporaryDirectory() as td:
     _dst = Path(td) / "cell"
-    # SYNTHESIZE a published cell rather than depending on a live one: every committed cell is currently
-    # `wip` (the KVBM numbers were withdrawn for re-baseline), and a fixture that needs a PUBLISHED
-    # cell should not silently erode the moment the published set changes. Copy a real cell for its
+    # SYNTHESIZE a published cell rather than depending on a live one. Copy a real cell for its
     # recipe.yaml + rendered/ (so recipe_hash is real), then mark it published and cite that exact hash.
     shutil.copytree(PUBLISHED, _dst)
     _rc = _dst / "recipe.yaml"

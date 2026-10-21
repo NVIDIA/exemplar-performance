@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -473,15 +455,209 @@ class LlmParetoHandler(LlmPerfHandler):
         )
 
 
+# ════════════════════════════════ agentic (TaskTrace) ═════════════════════════════════════════════════════
+def _agentic_rows_ok(rows):
+    return [r for r in rows if str(r.get("verdict") or "").upper() == "PASS"]
+
+
+def agentic_replay_tool_time(rows):
+    """(value, per_point): the longest replay tool time in seconds, None unless every replay passed the shared
+    TaskTrace check. per_point keeps every replay's tool time, its ratio when the summary has one, and its verdict."""
+    pts = []
+    for r in rows:
+        pts.append(
+            {
+                "rung": int(_f(r.get("rung")) or 1),
+                "container": int(_f(r.get("container")) or 0),
+                "tool_busy_sec": _f(r.get("replay_tool_busy_sec")),
+                "ratio": _f(r.get("replay_tool_time_ratio")),
+                "verdict": str(r.get("verdict") or ""),
+                "fidelity": r.get("fidelity"),
+                "cpu_regime": r.get("cpu_regime"),
+            }
+        )
+    passing = [p["tool_busy_sec"] for p in pts if p["verdict"].upper() == "PASS" and p["tool_busy_sec"] is not None]
+    if not rows or len(passing) != len(rows):
+        return None, pts
+    return round(max(passing), 3), pts
+
+
+def agentic_rung_table(rows) -> str:
+    hdr = "| rung | container | verdict | fidelity | tool-time ratio | replay tool s | live tool s | CPU s | avg cores | util % | regime |"
+    sep = "|---|---|---|---|---|---|---|---|---|---|---|"
+    out = [hdr, sep]
+    for r in sorted(rows, key=lambda x: (_f(x.get("rung")) or 0, _f(x.get("container")) or 0)):
+
+        def cell(k, digits=3):
+            v = _f(r.get(k))
+            return "" if v is None else (f"{v:.{digits}f}" if isinstance(v, float) else str(v))
+
+        out.append(
+            f"| {cell('rung', 0)} | {cell('container', 0)} | {r.get('verdict') or ''} | {r.get('fidelity') or ''} | "
+            f"{cell('replay_tool_time_ratio')} | {cell('replay_tool_busy_sec', 1)} | "
+            f"{cell('live_tool_busy_sec', 1)} | "
+            f"{cell('cpu_usage_sec')} | {cell('cpu_average_logical_cores_used')} | {cell('cpu_utilization_percent_of_allocation', 1)} | "
+            f"{r.get('cpu_regime') or ''} |"
+        )
+    return "\n".join(out)
+
+
+class AgenticReplayFidelityHandler(GoalHandler):
+    """C — agentic · replay-fidelity → replay_tool_busy_sec (lower is better): every replay must pass the shared
+    TaskTrace check; the value is the longest passing replay's tool time. The cells set no reference, so the
+    value is measured, not graded."""
+
+    scenario = "agentic"
+    goal = "replay-fidelity"
+    metric = "replay_tool_busy_sec"
+    unit = "s"
+    higher_better = False
+    _chart_key = "agentic-replay"
+    summary_csv = "tasktrace_summary.csv"
+    required_fields = ("tasktrace.trace.sha256", "tasktrace.sweep.rungs")
+    rung_keys = (
+        "concurrency",  # = the rung (K containers replaying concurrently); CORE's concurrency column in exports
+        "container",
+        "verdict",
+        "fidelity",
+        "replay_tool_time_ratio",
+        "replay_to_live_tool_ratio",
+        "replay_tool_busy_sec",
+        "live_tool_busy_sec",
+        "actions_executed",
+        "actions_recorded",
+        "source_outcome_mismatch_count",
+        "cpu_usage_sec",
+        "cpu_wall_sec",
+        "cpu_average_logical_cores_used",
+        "cpu_utilization_percent_of_allocation",
+        "cpu_regime",
+        "image_identity_match",
+        "rung_wall_seconds",
+    )
+    _NUMERIC = (
+        "replay_tool_time_ratio",
+        "replay_to_live_tool_ratio",
+        "replay_tool_busy_sec",
+        "live_tool_busy_sec",
+        "actions_executed",
+        "actions_recorded",
+        "source_outcome_mismatch_count",
+        "cpu_usage_sec",
+        "cpu_wall_sec",
+        "cpu_average_logical_cores_used",
+        "cpu_utilization_percent_of_allocation",
+    )
+
+    def rung_from_native(self, x: dict) -> dict:
+        rung = {
+            "concurrency": int(_f(x.get("rung")) or 1),
+            "container": int(_f(x.get("container")) or 0),
+            "verdict": x.get("verdict") or "",
+            "fidelity": x.get("fidelity") or "",
+            "cpu_regime": x.get("cpu_regime") or "",
+        }
+        for k in self._NUMERIC:
+            rung[k] = _f(x.get(k))
+        m = x.get("image_identity_match")
+        rung["image_identity_match"] = None if m in (None, "") else (str(m).lower() == "true")
+        rws = _f(x.get("replay_wall_sec"))
+        if rws is not None:
+            rung["rung_wall_seconds"] = rws
+        return rung
+
+    def native_from_rung(self, r: dict) -> dict:
+        native = {
+            "rung": r.get("concurrency"),
+            "container": r.get("container"),
+            "verdict": r.get("verdict"),
+            "fidelity": r.get("fidelity"),
+            "cpu_regime": r.get("cpu_regime"),
+            "image_identity_match": r.get("image_identity_match"),
+            "replay_wall_sec": r.get("rung_wall_seconds") or None,
+        }
+        for k in self._NUMERIC:
+            native[k] = r.get(k)
+        return native
+
+    def aggregate_summary(self, run_dir, goal=None):
+        out = Path(run_dir) / self.summary_csv
+        subprocess.run(
+            [_sys.executable, str(ROOT / "analysis/agentic/aggregate_metrics.py"), str(run_dir), "--out", str(out)],
+            capture_output=True,
+            text=True,
+        )
+        return out
+
+    def set_baseline(self, cell, csv_path=None, value=None) -> None:
+        """Commit the measured value as exemplar.reference (the recipe's `reference:` line, comments kept)."""
+        import re as _re
+
+        if value is None and csv_path is not None:
+            value, _ = agentic_replay_tool_time(_read_csv(csv_path))
+        if value is None:
+            return
+        rp = Path(cell) / "recipe.yaml"
+        text = rp.read_text()
+        new, n = _re.subn(r"(?m)^(\s+reference:\s*)[^\n#]*", lambda m: f"{m.group(1)}{value}", text, count=1)
+        if n:
+            rp.write_text(new)
+
+    def compute_metric(self, rows, recipe=None, prices=None):
+        v, _pts = agentic_replay_tool_time(rows)
+        return self.metric, v, "max_over_passing_container_replays"
+
+    def result_fields(self, rows, recipe=None, prices=None) -> dict:
+        v, pts = agentic_replay_tool_time(rows)
+        n_pass = sum(1 for p in pts if p["verdict"].upper() == "PASS")
+        return {
+            "value": v,
+            "value_source": "max_over_passing_container_replays",
+            "per_point": pts,
+            "replays_passed": n_pass,
+            "replays_total": len(pts),
+            "cpu_regimes": sorted({p["cpu_regime"] for p in pts if p.get("cpu_regime")}),
+        }
+
+    def headline(self, hres: dict) -> str:
+        v = hres.get("value")
+        passed, total = hres.get("replays_passed"), hres.get("replays_total")
+        regimes = ", ".join(hres.get("cpu_regimes") or []) or "unknown"
+        if v is None:
+            return f"`{self.metric}` = **n/a** ({passed}/{total} container replays passed the TaskTrace check) · cores: {regimes}"
+        return (
+            f"`{self.metric}` = **{v}** (the longest replay tool time of {total} passing replay(s)) · cores: {regimes}"
+        )
+
+    def table(self, rows, recipe=None) -> str:
+        return agentic_rung_table(rows)
+
+    def headline_from_record(self, record: dict) -> str:
+        res = record.get("result") or {}
+        pts = res.get("per_point") or []
+        return self.headline(
+            {
+                "value": res.get("value"),
+                "replays_passed": res.get(
+                    "replays_passed", sum(1 for p in pts if str(p.get("verdict", "")).upper() == "PASS")
+                ),
+                "replays_total": res.get("replays_total", len(pts)),
+                "cpu_regimes": res.get("cpu_regimes")
+                or sorted({p.get("cpu_regime") for p in pts if p.get("cpu_regime")}),
+            }
+        )
+
+
 # ── registry ─────────────────────────────────────────────────────────────────────────────────────────────
 _HANDLERS = [
     LlmSlaHandler(),
     LlmParetoHandler(),
+    AgenticReplayFidelityHandler(),
 ]
 REGISTRY = {(h.scenario, h.goal): h for h in _HANDLERS}
 
-# The scenario DEFAULT goal (used when envelope.goal is absent). llm-perf always declares a goal.
-SCENARIO_DEFAULT_GOAL: dict = {}
+# The goal a scenario defaults to when envelope.goal is absent.
+SCENARIO_DEFAULT_GOAL: dict = {"agentic": "replay-fidelity"}
 
 # metric → its default handler goal, for legacy/back-compat lookups by metric alone.
 METRIC_TO_KEY = {m: (h.scenario, h.goal) for h in _HANDLERS for m in (h.metric, *h.alt_metrics)}

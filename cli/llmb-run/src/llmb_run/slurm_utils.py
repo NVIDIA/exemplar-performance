@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 """SLURM utilities for job management."""
 
@@ -38,6 +20,7 @@ class SlurmJob:
     job_status: str | None = None
     job_workdir: str | None = None
     llmb_config_path: str | None = None
+    submit_time: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,7 +72,7 @@ def get_slurm_job_statuses(
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=SACCT_TIMEOUT_SECONDS)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         stderr = getattr(e, 'stderr', '') or str(e)
-        logger.warning(f"Unable to refresh Slurm job status with sacct: {stderr}")
+        logger.debug(f"Unable to refresh Slurm job status with sacct: {stderr}")
         return None
 
     records: dict[int, SlurmAccountingRecord] = {}
@@ -144,6 +127,9 @@ def get_cluster_name():
         logger.debug("ClusterName not found in SLURM config output")
         return None
 
+    except FileNotFoundError:
+        logger.debug("scontrol not found; not a Slurm environment")
+        return None
     except subprocess.CalledProcessError as e:
         logger.error(f"Error running scontrol show config: {e.stderr}")
         return None

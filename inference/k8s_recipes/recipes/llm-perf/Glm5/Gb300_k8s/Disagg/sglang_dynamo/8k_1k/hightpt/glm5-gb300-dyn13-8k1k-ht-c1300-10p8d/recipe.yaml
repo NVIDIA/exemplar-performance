@@ -1,0 +1,211 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+envelope:
+  name: glm5-gb300-dyn13-8k1k-ht-c1300-10p8d
+  model: glm5-fp8
+  gpu_type: GB300
+  arch: arm64
+  engine: sglang
+  serving_mode: disaggregated
+  framework: dynamo
+  scenario: llm-perf
+  distribution: synthetic
+  mode: synthetic
+  launcher: aiperf
+  goal: pareto
+  status: wip
+  results_link: ./RESULTS.md
+  provenance:
+    schema_version: k8s.llm-perf.v1
+    official: false
+    source_image_tag: nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.3.0
+    image_digest: sha256:04b328da910ea84550a47757bf6eb79ee0da07d01fe336b89cab6d5c00bf8920
+    image_ref: nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:04b328da910ea84550a47757bf6eb79ee0da07d01fe336b89cab6d5c00bf8920
+    source_frameworks:
+      dynamo: 1.3.0
+      sglang: 0.5.14
+  exemplar:
+    metric: pareto_geomean
+    unit: geomean(tps/gpu*tps/user)
+    reference: null
+    tolerance_pct: 5
+    comparison: point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung
+  requires:
+    gpu:
+      count: 72
+    rdma: true
+    infra:
+    - etcd
+    - nats
+    tolerations:
+    - nvidia.com/gpu
+serving:
+  stack: sglang-disagg-gb300
+  model_repo: zai-org/GLM-5-FP8
+  model_revision: 4f96cc5eec29dcee5d6ded54f7ffe889438f9516
+  served_model: GLM-5-FP8
+  # The separately prepared cache is pinned to this exact model revision. Workers mount it
+  # read-only and fail closed unless the ready marker and all 142 checkpoint shards verify.
+  model_cache_staging:
+    mode: node-local-versioned-hostpath
+    host_path: /mnt/k8s-disks/0/llmb-model-cache/glm5-fp8/4f96cc5eec29dcee5d6ded54f7ffe889438f9516
+  telemetry_container: sglang
+  startup_timeout_s: 21600
+  tp: 4
+  frontend_replicas: 10
+  context_length: 9600
+  disagg:
+    transfer_backend: nixl
+    deepep_config:
+      normal_dispatch:
+        num_sms: 128
+        num_max_nvl_chunked_send_tokens: 28
+        num_max_nvl_chunked_recv_tokens: 256
+        num_max_rdma_chunked_send_tokens: 6
+        num_max_rdma_chunked_recv_tokens: 256
+      normal_combine:
+        num_sms: 128
+        num_max_nvl_chunked_send_tokens: 15
+        num_max_nvl_chunked_recv_tokens: 256
+        num_max_rdma_chunked_send_tokens: 6
+        num_max_rdma_chunked_recv_tokens: 128
+    prefill:
+      replicas: 10
+      nodes_per_worker: 1
+      tp: 4
+      dp: 4
+      ep: 1
+      env:
+      - name: SGLANG_MOONCAKE_CUSTOM_MEM_POOL
+        value: 'True'
+      - name: UCX_MODULE_DIR
+        value: '/usr/local/lib/python3.12/dist-packages/nixl_cu13.libs/ucx'
+      - name: PYTHONUNBUFFERED
+        value: '1'
+      - name: DYN_SKIP_SGLANG_LOG_FORMATTING
+        value: '1'
+      - name: SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE
+        value: '100000'
+      - name: SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT
+        value: '100000'
+      - name: SGLANG_DISAGGREGATION_WAITING_TIMEOUT
+        value: '100000'
+      - name: MC_TE_METRIC
+        value: 'true'
+      - name: MC_FORCE_MNNVL
+        value: '1'
+      - name: NCCL_MNNVL_ENABLE
+        value: '1'
+      - name: NCCL_CUMEM_ENABLE
+        value: '1'
+      - name: SGLANG_USE_MESSAGE_QUEUE_BROADCASTER
+        value: '0'
+      - name: SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK
+        value: '1'
+      - name: DYN_REQUEST_PLANE
+        value: nats
+      extra_args:
+      - --trust-remote-code
+      - --quantization fp8
+      - --kv-cache-dtype fp8_e4m3
+      - --max-running-requests 256
+      - --cuda-graph-max-bs-decode 256
+      - --mem-fraction-static 0.7
+      - --chunked-prefill-size 32768
+      - --max-prefill-tokens 8192
+      - --enable-dp-attention
+      - --enable-dp-lm-head
+      - --load-balance-method total_tokens
+      - --dsa-decode-backend trtllm
+      - --dsa-prefill-backend trtllm
+      - --moe-runner-backend flashinfer_trtllm
+      - --flashinfer-allreduce-fusion-backend auto
+      - --disable-radix-cache
+      - --weight-loader-prefetch-checkpoints
+      - '--model-loader-extra-config ''{"enable_multithread_load": true}'''
+    decode:
+      replicas: 1
+      nodes_per_worker: 8
+      tp: 32
+      dp: 32
+      ep: 32
+      env:
+      - name: SGLANG_MOONCAKE_CUSTOM_MEM_POOL
+        value: 'True'
+      - name: UCX_MODULE_DIR
+        value: '/usr/local/lib/python3.12/dist-packages/nixl_cu13.libs/ucx'
+      - name: NVSHMEM_ENABLE_NIC_PE_MAPPING
+        value: '1'
+      - name: PYTHONUNBUFFERED
+        value: '1'
+      - name: DYN_SKIP_SGLANG_LOG_FORMATTING
+        value: '1'
+      - name: SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE
+        value: '100000'
+      - name: SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT
+        value: '100000'
+      - name: SGLANG_DISAGGREGATION_WAITING_TIMEOUT
+        value: '100000'
+      - name: MC_TE_METRIC
+        value: 'true'
+      - name: MC_FORCE_MNNVL
+        value: '1'
+      - name: NCCL_MNNVL_ENABLE
+        value: '1'
+      - name: NCCL_CUMEM_ENABLE
+        value: '1'
+      - name: SGLANG_USE_MESSAGE_QUEUE_BROADCASTER
+        value: '0'
+      - name: SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK
+        value: '1'
+      - name: DYN_REQUEST_PLANE
+        value: nats
+      - name: SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK
+        value: '512'
+      extra_args:
+      - --trust-remote-code
+      - --skip-tokenizer-init
+      - --quantization fp8
+      - --kv-cache-dtype fp8_e4m3
+      - --mem-fraction-static 0.8
+      - --enable-dp-attention
+      - --enable-dp-lm-head
+      - --moe-dense-tp-size 1
+      - --ep-num-redundant-experts 32
+      - --ep-dispatch-algorithm static
+      - --moe-a2a-backend deepep
+      - --deepep-mode low_latency
+      - --deepep-config /configs/deepep_config.json
+      - --dsa-decode-backend trtllm
+      - --dsa-prefill-backend trtllm
+      - --max-running-requests 1280
+      - --cuda-graph-max-bs-decode 40
+      - --disable-radix-cache
+      - --weight-loader-prefetch-checkpoints
+      - --stream-interval 30
+      - '--model-loader-extra-config ''{"enable_multithread_load": true}'''
+bench:
+  synthetic:
+    isl: 7373
+    isl_stddev: 473
+    osl: 922
+    osl_stddev: 59
+    num_entries: 13000
+    request_count_multiplier: 10
+    warmup_request_multiplier: 2
+    seed: 0
+    nominal_isl: 8192
+    nominal_osl: 1024
+    range_ratio: 0.8
+    length_distribution: bounded_uniform
+  sweep_concurrency:
+  - 1300
+  sweep_mode: fixed
+  endpoint_type: completions
+  extra_inputs: "ignore_eos:true"
+  connection_reuse: sticky-user-sessions
+  request_timeout_s: 3600
+  aiperf_ref: git+https://github.com/ai-dynamo/aiperf.git@38687855e98044fcf12ee48c6794128f10b6780b
+  aiperf_unsafe_override: false
+  gpu_telemetry: true

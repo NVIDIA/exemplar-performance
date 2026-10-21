@@ -1,3 +1,7 @@
+{#
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+#}
 # vllm-agg — aiperf concurrency sweep Job (rendered from a cell's recipe.yaml).
 # {{ '{{ .. }}' }} = recipe truth (baked at render). ${ .. } = cluster/runtime (envsubst in run.sh).
 # The runner is environment-driven. Update this template and regenerate rendered manifests.
@@ -20,6 +24,9 @@
 {% set _adaptive = bench.get('adaptive_sweep') or {} %}
 {# Synthetic workloads use AIPerf's ISL/OSL generator; trace workloads mount a dataset. #}
 {% set _synthetic = envelope.mode == 'synthetic' %}
+{% set _bounded_synthetic = _synthetic and bench.synthetic.get('length_distribution') == 'bounded_uniform' %}
+{% set _gb300_imex_provenance = serving.get('stack') == 'sglang-disagg-gb300' %}
+{% set _startup_timeout_s = serving.get('startup_timeout_s', 600) %}
 {#
   bench.depth sets the number of measured requests per concurrency slot. For trace workloads it also
   disables fixed-schedule replay so AIPerf maintains the requested concurrency. When depth is omitted,
@@ -141,7 +148,7 @@ spec:
             - { name: NAMESPACE, value: "${NAMESPACE}" }
             - { name: RECIPE_SHORTNAME, value: "{{ envelope.name }}" }
             - { name: SERVER_URL, value: "http://{{ envelope.name }}-server:8000" }
-{% if serving.get('stack') == 'sglang-disagg' %}
+{% if serving.get('stack') in ('sglang-disagg', 'sglang-disagg-gb300') %}
             # Disaggregated traffic and HTTP metrics use the frontend Service,
             # but GPU telemetry/fingerprinting must exec into a GPU worker.
             - { name: SERVER_LABEL_SELECTOR, value: "app={{ envelope.name }}-decode" }
@@ -150,8 +157,13 @@ spec:
 {% endif %}
             - { name: SERVER_SERVICE, value: "{{ envelope.name }}-server" }
 {# Disagg telemetry targets a GPU decode worker; other stacks use their engine-derived or explicit container. #}
-            - { name: SERVER_CONTAINER, value: "{{ 'sglang' if serving.get('stack') == 'sglang-disagg' else serving.get('telemetry_container', envelope.engine) }}" }
+            - { name: SERVER_CONTAINER, value: "{{ 'sglang' if serving.get('stack') in ('sglang-disagg', 'sglang-disagg-gb300') else serving.get('telemetry_container', envelope.engine) }}" }
             - { name: SERVER_RUNTIME, value: "{{ envelope.engine }}" }
+{% if _gb300_imex_provenance %}
+            # Persist the fabric state with the result. deploy.sh may safely disable MNNVL at APPLY time
+            # when this is not provisioned; publishing it as indistinguishable from MNNVL-on is misleading.
+            - { name: NVLINK_MULTICAST_IMEX, value: "${NVLINK_MULTICAST_IMEX}" }
+{% endif %}
             - { name: GPU_TELEMETRY, value: "{{ _gt_mode }}" }
             # true GPU count from the recipe → stamped into run_meta so aggregate_metrics never guesses the
             # TPS/GPU denominator when DCGM telemetry is absent (default 8 would halve a 4-GPU node's TPS/GPU).
@@ -181,6 +193,12 @@ spec:
             - { name: SYN_OSL, value: "{{ bench.synthetic.osl }}" }
             - { name: SYN_OSL_STDDEV, value: "{{ bench.synthetic.get('osl_stddev', '') }}" }
             - { name: SYN_SEED, value: "{{ bench.synthetic.get('seed', '') }}" }
+{% if _bounded_synthetic %}
+            - { name: SYN_LENGTH_DISTRIBUTION, value: "{{ bench.synthetic.get('length_distribution', 'normal') }}" }
+            - { name: SYN_NOMINAL_ISL, value: "{{ bench.synthetic.get('nominal_isl', bench.synthetic.isl) }}" }
+            - { name: SYN_NOMINAL_OSL, value: "{{ bench.synthetic.get('nominal_osl', bench.synthetic.osl) }}" }
+            - { name: SYN_RANGE_RATIO, value: "{{ bench.synthetic.get('range_ratio', '') }}" }
+{% endif %}
 {% endif %}
             - { name: AIPERF_ENDPOINT_TYPE, value: "{{ bench.get('endpoint_type', 'chat') }}" }
             # sweep_mode=fixed: CONCURRENCIES is the exact list; adaptive path in the shell is inactive.
@@ -226,7 +244,7 @@ spec:
             - { name: PRE_SWEEP_SMOKE_PROMPT_TOKENS, value: "{{ [ (bench.synthetic.isl * 0.75) | int, 600000 ] | min }}" }
 {% endif %}
             - { name: PRE_SWEEP_SMOKE_TIMEOUT_SECONDS, value: "1200" }
-{% if not _synthetic %}
+{% if not _synthetic or _bounded_synthetic %}
             - { name: NUM_DATASET_ENTRIES, value: "" }
 {% else %}
             - { name: NUM_DATASET_ENTRIES, value: "{{ bench.synthetic.get('num_entries', '') }}" }
@@ -243,6 +261,9 @@ spec:
             - { name: MODEL_REPO, value: "{{ serving.model_repo }}" }
             - { name: AIPERF_MODEL_ID, value: "{{ serving.served_model }}" }
             - { name: AIPERF_TOKENIZER_ID, value: "{{ serving.model_repo }}" }
+{% if _bounded_synthetic %}
+            - { name: AIPERF_TOKENIZER_REVISION, value: "{{ serving.model_revision }}" }
+{% endif %}
             - { name: KUBECTL_VERSION, value: "v1.34.7" }
             - { name: ARTIFACTS_ROOT, value: "/artifacts/${RUN_ID}" }
             - { name: PYTHONUNBUFFERED, value: "1" }
@@ -300,8 +321,9 @@ spec:
 
               # ------- Wait for server to be reachable ----------------------
               echo "[$(date -u +%H:%M:%S)] Waiting for $SERVER_URL/health ..."
-              ATTEMPTS=0
-              MAX_ATTEMPTS=120  # 10 min
+              ATTEMPTS=0{% endraw %}{% if _gb300_imex_provenance %}{% raw %}
+              MAX_ATTEMPTS=$(( ({% endraw %}{{ _startup_timeout_s }}{% raw %} + 4) / 5 )){% endraw %}{% else %}{% raw %}
+              MAX_ATTEMPTS=120  # 10 min{% endraw %}{% endif %}{% raw %}
               until curl -fsS --connect-timeout 5 --max-time 10 "$SERVER_URL/health" >/dev/null 2>&1; do
                 ATTEMPTS=$((ATTEMPTS + 1))
                 if [ $ATTEMPTS -ge $MAX_ATTEMPTS ]; then
@@ -627,7 +649,10 @@ spec:
                   } | tee "$status_file"
                 fi
               }
-              scrape_loop() {
+              scrape_loop() {{% endraw %}{% if _gb300_imex_provenance %}{% raw %}
+                # Each scrape call has a strict request timeout. Do not use group-wide cleanup here: this background subshell shares
+                # the Job process group with its parent, so that signal could
+                # terminate the benchmark itself. Bounded calls finish after the loop exits.{% endraw %}{% else %}{% raw %}
                 # Process-group cleanup. When the parent kills this
                 # background subshell (via `kill $SCRAPE_PID` after
                 # aiperf exits), the in-flight `kubectl exec` child
@@ -636,7 +661,7 @@ spec:
                 # dies together. Combined with the per-exec
                 # `--request-timeout=15s` above, the scrape loop has
                 # both a soft (per-tick) and hard (loop-exit) cleanup.
-                trap 'kill 0 2>/dev/null || true' EXIT
+                trap 'kill 0 2>/dev/null || true' EXIT{% endraw %}{% endif %}{% raw %}
                 local out="$1"
                 local interval="${SCRAPE_INTERVAL:-10}"
                 mkdir -p "$out/server_metrics_timeseries"
@@ -948,8 +973,19 @@ spec:
                   "dataset_num_sessions": maybe_int_env("DATASET_NUM_SESSIONS"),
                   "dataset_seed": maybe_int_env("DATASET_SEED"),
                   "dataset_max_isl": maybe_int_env("DATASET_MAX_ISL"),
-                  "num_dataset_entries": maybe_int_env("NUM_DATASET_ENTRIES"),
-                  "bench_duration": maybe_int_env("BENCH_DURATION"),
+                  "num_dataset_entries": maybe_int_env("NUM_DATASET_ENTRIES"),{% endraw %}{% if _bounded_synthetic %}{% raw %}
+                  "synthetic_length_distribution": os.environ.get("SYN_LENGTH_DISTRIBUTION", ""),
+                  "synthetic_nominal_isl": maybe_int_env("SYN_NOMINAL_ISL"),
+                  "synthetic_nominal_osl": maybe_int_env("SYN_NOMINAL_OSL"),
+                  "synthetic_range_ratio": maybe_float_env("SYN_RANGE_RATIO"),
+                  "synthetic_seed": maybe_int_env("SYN_SEED"),{% endraw %}{% endif %}{% raw %}
+{% endraw %}{% if _gb300_imex_provenance %}{% raw %}
+                  "fabric_nvlink_multicast_imex": os.environ.get("NVLINK_MULTICAST_IMEX", ""),
+                  "fabric_mnnvl_mode": (
+                      "provisioned" if os.environ.get("NVLINK_MULTICAST_IMEX", "") == "provisioned"
+                      else "fallback"
+                  ),
+{% endraw %}{% endif %}{% raw %}                  "bench_duration": maybe_int_env("BENCH_DURATION"),
                   "sweep_mode": summary["mode"],
                   "sweep_stop_reason": summary["stop_reason"],
                   "coarse_max": summary["coarse_max"],
@@ -990,7 +1026,143 @@ spec:
               else:
                   print("refine_gate_not_met")
               PY
+              }{% endraw %}{% if _bounded_synthetic %}{% raw %}
+              generate_bounded_uniform_trace() {
+                local concurrency="$1"
+                local output_path="$2"
+                local measured_count=$(( REQUEST_COUNT_MULTIPLIER * concurrency ))
+                local warmup_count=$(( WARMUP_REQUEST_MULTIPLIER * concurrency ))
+
+                python3 - "$output_path" "$AIPERF_TOKENIZER_ID" "$AIPERF_TOKENIZER_REVISION" \
+                  "$SYN_NOMINAL_ISL" "$SYN_NOMINAL_OSL" "$SYN_RANGE_RATIO" \
+                  "$SYN_SEED" "$warmup_count" "$measured_count" <<'PY'
+              import json
+              import sys
+
+              import numpy as np
+              from transformers import AutoTokenizer
+
+              (
+                  output_path,
+                  tokenizer_id,
+                  tokenizer_revision,
+                  nominal_isl_raw,
+                  nominal_osl_raw,
+                  ratio_raw,
+                  seed_raw,
+                  warmup_count_raw,
+                  measured_count_raw,
+              ) = sys.argv[1:]
+
+              nominal_isl = int(nominal_isl_raw)
+              nominal_osl = int(nominal_osl_raw)
+              ratio = float(ratio_raw)
+              seed = int(seed_raw)
+              warmup_count = int(warmup_count_raw)
+              measured_count = int(measured_count_raw)
+
+              if nominal_isl <= 0 or nominal_osl <= 0:
+                  raise ValueError("nominal ISL and OSL must be positive")
+              if not 0 < ratio <= 1:
+                  raise ValueError("range ratio must be in (0, 1]")
+              if measured_count <= 0 or warmup_count < 0:
+                  raise ValueError("request counts are invalid")
+
+              tokenizer = AutoTokenizer.from_pretrained(
+                  tokenizer_id,
+                  revision=tokenizer_revision,
+                  trust_remote_code=True,
+              )
+              chat_template_length = len(
+                  tokenizer.encode(
+                      tokenizer.apply_chat_template(
+                          [{"role": "user", "content": "a"}],
+                          add_generation_prompt=True,
+                          tokenize=False,
+                      ),
+                      add_special_tokens=False,
+                  )
+              ) - 1
+              content_isl = nominal_isl - chat_template_length
+              if content_isl <= 0:
+                  raise ValueError(
+                      f"nominal ISL {nominal_isl} does not exceed "
+                      f"chat-template overhead {chat_template_length}"
+                  )
+
+              def sampled_requests(count):
+                  # SA-Bench starts a seed-0 process for each warmup/profile rung.
+                  rng = np.random.RandomState(seed)
+                  input_lengths = rng.randint(
+                      int(content_isl * ratio) if content_isl > 1 else 1,
+                      content_isl + 1,
+                      size=count,
+                  )
+                  output_lengths = rng.randint(
+                      int(nominal_osl * ratio) if nominal_osl > 1 else 1,
+                      nominal_osl + 1,
+                      size=count,
+                  )
+                  offsets = rng.randint(0, tokenizer.vocab_size, size=count)
+                  return zip(input_lengths, output_lengths, offsets, strict=True)
+
+              def write_phase(output, phase, count):
+                  for index, (input_length, output_length, offset) in enumerate(
+                      sampled_requests(count)
+                  ):
+                      input_length = int(input_length)
+                      token_ids = [
+                          (int(offset) + index + position) % tokenizer.vocab_size
+                          for position in range(int(input_length * 1.5))
+                      ]
+                      source_text = tokenizer.decode(
+                          token_ids,
+                          skip_special_tokens=False,
+                      )
+                      prompt_ids = tokenizer.encode(
+                          source_text,
+                          add_special_tokens=False,
+                      )[:input_length]
+                      prompt_text = tokenizer.decode(
+                          prompt_ids,
+                          skip_special_tokens=False,
+                      )
+                      prompt = tokenizer.apply_chat_template(
+                          [{"role": "user", "content": prompt_text}],
+                          add_generation_prompt=True,
+                          tokenize=False,
+                      )
+                      output.write(
+                          json.dumps(
+                              {
+                                  "session_id": f"{phase}-{index:06d}",
+                                  "text": prompt,
+                                  "output_length": int(output_length),
+                              },
+                              ensure_ascii=False,
+                              separators=(",", ":"),
+                          )
+                          + "\n"
+                      )
+
+              with open(output_path, "w", encoding="utf-8") as output:
+                  write_phase(output, "warmup", warmup_count)
+                  write_phase(output, "profile", measured_count)
+
+              lower_isl = (
+                  int(content_isl * ratio) if content_isl > 1 else 1
+              ) + chat_template_length
+              lower_osl = int(nominal_osl * ratio) if nominal_osl > 1 else 1
+              print(
+                  "bounded-uniform trace: "
+                  f"seed={seed} warmup={warmup_count} measured={measured_count} "
+                  f"ISL=[{lower_isl},{nominal_isl}] "
+                  f"OSL=[{lower_osl},{nominal_osl}] "
+                  f"chat_overhead={chat_template_length}"
+              )
+              PY
               }
+{% endraw %}{% endif %}{% raw %}
 
               run_step() {
                 local N="$1"
@@ -1000,7 +1172,12 @@ spec:
                   echo "[$(date -u +%H:%M:%S)] Cleaning previous step artifacts: $OUT"
                   rm -rf "$OUT"
                 fi
-                mkdir -p "$OUT/logs/aiperf"
+                mkdir -p "$OUT/logs/aiperf"{% endraw %}{% if _bounded_synthetic %}{% raw %}
+                BOUNDED_TRACE="/tmp/llmb-${RUN_ID}-$N-bounded-uniform.jsonl"
+                rm -f "$BOUNDED_TRACE"
+                echo "[$(date -u +%H:%M:%S)] Generating exact seed-$SYN_SEED bounded-uniform requests..."
+                generate_bounded_uniform_trace "$N" "$BOUNDED_TRACE"
+{% endraw %}{% endif %}{% raw %}
 
                 # config.yaml stub parsed by extract_metrics.sh; format mirrors
                 # the slurm `benchmark:` block so the same parser works.
@@ -1041,7 +1218,10 @@ spec:
 {% endraw %}{% if not _synthetic %}{% raw %}                  --custom-dataset-type "$DATASET_TYPE" \
                   --input-file "$DATASET_PATH" \
 {% endraw %}{% if _depth is not none %}{% raw %}                  --no-fixed-schedule \
-{% endraw %}{% endif %}{% else %}{% raw %}                  --isl "$SYN_ISL" \
+{% endraw %}{% endif %}{% elif _bounded_synthetic %}{% raw %}                  --custom-dataset-type single_turn \
+                  --input-file "$BOUNDED_TRACE" \
+                  --random-seed "$SYN_SEED" \
+{% endraw %}{% else %}{% raw %}                  --isl "$SYN_ISL" \
                   --osl "$SYN_OSL" \
 {% endraw %}{% if bench.synthetic.get('isl_stddev', 0) %}{% raw %}                  --isl-stddev "$SYN_ISL_STDDEV" \
 {% endraw %}{% endif %}{% if bench.synthetic.get('osl_stddev', 0) %}{% raw %}                  --osl-stddev "$SYN_OSL_STDDEV" \
@@ -1108,7 +1288,9 @@ spec:
                 fi
                 aiperf "$@"
                 AIPERF_RC=$?
-                set -e
+                set -e{% endraw %}{% if _bounded_synthetic %}{% raw %}
+                rm -f "$BOUNDED_TRACE"
+{% endraw %}{% endif %}{% raw %}
 
                 # Stop the scrape loop. `kill` returns non-zero if the loop
                 # already exited (it shouldn't); `|| true` swallows that.
@@ -1198,18 +1380,10 @@ spec:
                   grep -Eq '^vllm:num_requests_running(\{|[[:space:]])' "$METRICS_SURFACE" || MISSING="$MISSING num_requests_running"
                   grep -Eq '^vllm:num_requests_waiting(\{|[[:space:]])' "$METRICS_SURFACE" || MISSING="$MISSING num_requests_waiting"
                   if [ -n "$MISSING" ]; then
-{% endraw %}{% if envelope.framework == 'dynamo' and envelope.engine == 'vllm' %}{% raw %}                    # Dynamo front-end fronting a vLLM engine: the raw vllm:* Prometheus surface is
-                    # intentionally re-exported under dynamo_frontend_*/kvbm_* names, so these metric groups
-                    # are EXPECTED to be absent. Perf (TTFT/TPOT/throughput/max-conc@SLA) is measured by the
-                    # aiperf CLIENT and is independent of /metrics, so DEGRADE to a warning instead of
-                    # hard-failing the sweep. Only the KV-diagnostic columns are affected. The FATAL is
-                    # preserved for real vLLM cells (framework != dynamo), where a missing vllm:* surface is a genuine defect.
-                    echo "WARN: Dynamo/vLLM stack — raw vLLM /metrics group(s) absent:$MISSING" >&2
-                    echo "  Continuing: perf comes from the aiperf client; KV-diagnostic columns will be empty or Dynamo-derived." >&2
-{% endraw %}{% else %}{% raw %}                    echo "FATAL: vLLM /metrics surface is missing expected metric group(s):$MISSING" >&2
+                    echo "FATAL: vLLM /metrics surface is missing expected metric group(s):$MISSING" >&2
                     echo "Inspect $METRICS_SURFACE and update scripts/aggregate_metrics.py before launching the sweep." >&2
                     exit 64
-{% endraw %}{% endif %}{% raw %}                  fi
+                  fi
                 fi
               else
                 echo "FATAL: unable to capture initial server /metrics surface before sweep" >&2

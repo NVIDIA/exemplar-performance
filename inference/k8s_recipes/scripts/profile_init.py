@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -612,7 +594,7 @@ def format_profile(
         "# Per-model override, when one model's weights live elsewhere (slug = envelope.model upper-cased,",
         "# non-alphanumerics -> '_'):   MODEL_CACHE_PVC_NEMOTRON_ULTRA_NVFP4=\"nemotron-ultra-nvfp4-cache\"",
         f'MODEL_CACHE_RWX_CLASS="{cache_rwx_class}"',  # ReadWriteMany class (FSx/EFS/Filestore) — disagg/multi-worker
-        f'MODEL_CACHE_RWO_CLASS="{cache_rwo_class}"',  # ReadWriteOnce class (EBS/PD) — single-node (e.g. KVBM)
+        f'MODEL_CACHE_RWO_CLASS="{cache_rwo_class}"',  # ReadWriteOnce class (EBS/PD) — single-node
         f'MODEL_CACHE_PVC="{model_cache_pvc}"',  # REQUIRED — the claim every model uses unless overridden
         "# Per-model override, when one model's weights live on a different claim (key = envelope.model,",
         "# upper-cased, non-alphanumerics -> '_'). `llmb-k8s install <cluster> --adopt-cache` writes these.",
@@ -765,7 +747,7 @@ def print_summary(
     if cache_rwx_class or cache_rwo_class or not model_cache_pvc:
         # Per-recipe cache: init records the storage-class candidates; install provisions per recipe.
         print(f"  Cache RWX SC {cache_rwx_class or '(cluster default)'}   (shared FS; disagg/multi-worker)")
-        print(f"  Cache RWO SC {cache_rwo_class or '(cluster default)'}   (block; single-node, e.g. KVBM)")
+        print(f"  Cache RWO SC {cache_rwo_class or '(cluster default)'}   (block; single-node)")
     else:
         print(f"  Model PVC    {model_cache_pvc}   (back-compat single cache)")
     print(f"  Artifacts SC {artifacts_sc or '(none)'}")
@@ -978,7 +960,7 @@ def run_init(
     ]
     default_sc = rwo_candidates[0] if rwo_candidates else (storage_classes[0] if storage_classes else "")
     cache_rwo_class = _prompt_from_list(
-        "Model-cache RWO class (block volume; single-node recipes, e.g. KVBM)",
+        "Model-cache RWO class (block volume; single-node recipes)",
         rwo_candidates or storage_classes,
         default_sc,
     )

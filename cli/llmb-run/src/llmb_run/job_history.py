@@ -1,21 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 """Persistent llmb-run job history backed by SQLite."""
 
@@ -37,8 +21,12 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from llmb_run.config_manager import ClusterConfig
+from llmb_run.config_manager import ClusterConfig, ExecutionTarget
+from llmb_run.nvcre_cluster import internal_job_names
+from llmb_run.nvcre_registry import workloadrun_name_for
 from llmb_run.pretrain_log_parser import (
+    MAX_ITERATION,
+    MIN_ITERATION,
     PretrainLogParseStatus,
     parse_latest_pretrain_job_log,
     parser_name_for_framework,
@@ -49,7 +37,11 @@ from llmb_run.tasks import WorkloadTask
 
 logger = logging.getLogger('llmb_run.job_history')
 
-DB_SCHEMA_VERSION = 2
+# MLPerf recipes average a late iteration window to skip warmup (see their READMEs).
+MLPERF_ITERATION_WINDOW = (485, 494)
+MLPERF_ITERATION_WINDOW_OVERRIDES = {"pretrain_llama3.1_mlperf": (985, 994)}
+
+DB_SCHEMA_VERSION = 3
 HISTORY_DIR_NAME = ".llmb"
 HISTORY_DB_NAME = "jobs.sqlite3"
 # sacct accounting can lag behind sbatch by several seconds; don't mark a job
@@ -86,6 +78,8 @@ class JobRecord:
     submit_time: str | None = None
     env_overrides_json: str | None = None
     model_overrides_json: str | None = None
+    namespace: str | None = None
+    workloadrun_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +143,16 @@ def record_job_submission(
         if launcher_type == 'sbatch':
             log_dir = None
 
+        namespace = None
+        workloadrun_name = None
+        # Every task of a Kubernetes cluster goes through nvcre, whatever its metadata launcher_type.
+        if config.execution_target == ExecutionTarget.KUBERNETES:
+            k8s = config.extras.get('kubernetes', {})
+            namespace = k8s.get('namespace')
+            # The WorkloadRun this submission registered, found by its own job directory
+            # (the registry also holds every other submission's entry).
+            workloadrun_name = workloadrun_name_for(log_dir)
+
         record = JobRecord(
             job_id=job_id,
             launcher_type=launcher_type,
@@ -161,9 +165,11 @@ def record_job_submission(
             proxy=task.proxy,
             log_dir=log_dir,
             llmb_config_path=llmb_config_path,
-            submit_time=_now_iso(),
+            submit_time=slurm_job.submit_time or _now_iso(),
             env_overrides_json=_json_dumps(task.env_overrides),
             model_overrides_json=_json_dumps(task.model_overrides),
+            namespace=namespace,
+            workloadrun_name=workloadrun_name,
         )
 
         upsert_static_job(config, record)
@@ -195,9 +201,11 @@ def upsert_static_job(config: ClusterConfig, record: JobRecord) -> None:
                 created_at,
                 updated_at,
                 env_overrides_json,
-                model_overrides_json
+                model_overrides_json,
+                namespace,
+                workloadrun_name
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(job_id) DO UPDATE SET
                 launcher_type = excluded.launcher_type,
                 workload_key = excluded.workload_key,
@@ -211,7 +219,9 @@ def upsert_static_job(config: ClusterConfig, record: JobRecord) -> None:
                 llmb_config_path = excluded.llmb_config_path,
                 updated_at = excluded.updated_at,
                 env_overrides_json = excluded.env_overrides_json,
-                model_overrides_json = excluded.model_overrides_json
+                model_overrides_json = excluded.model_overrides_json,
+                namespace = excluded.namespace,
+                workloadrun_name = excluded.workloadrun_name
             """,
             (
                 record.job_id,
@@ -230,6 +240,8 @@ def upsert_static_job(config: ClusterConfig, record: JobRecord) -> None:
                 now,
                 record.env_overrides_json,
                 record.model_overrides_json,
+                record.namespace,
+                record.workloadrun_name,
             ),
         )
         conn.commit()
@@ -258,23 +270,364 @@ def get_job(config: ClusterConfig, job_id: int) -> sqlite3.Row | None:
 
 
 def refresh_non_terminal_jobs(config: ClusterConfig) -> tuple[int, str | None]:
-    """Refresh sacct status for all non-terminal jobs.
+    """Refresh status for all non-terminal jobs.
 
-    Returns (refreshed_count, error_message). error_message is None on success;
-    a short string when sacct itself failed (timeout, missing binary, etc.).
+    nvcre jobs are refreshed via nvcrectl; Slurm jobs via sacct.
+    Returns (refreshed_count, error_message).
     """
     with _open_history_db(config) as conn:
-        rows = list(conn.execute("SELECT job_id, slurm_state FROM jobs ORDER BY job_id"))
-    job_ids = [int(row["job_id"]) for row in rows if not is_terminal_state(row["slurm_state"])]
+        rows = list(
+            conn.execute(
+                "SELECT job_id, slurm_state, launcher_type, workloadrun_name, namespace, log_dir, submit_time "
+                "FROM jobs ORDER BY job_id"
+            )
+        )
 
-    refreshed, error = _refresh_slurm_statuses(config, job_ids)
+    nvcre_rows = [r for r in rows if r["workloadrun_name"] and not is_terminal_state(r["slurm_state"])]
+
+    # nvcre jobs carry synthetic numeric ids that sacct has never heard of; sending them
+    # there would eventually mark live WorkloadRuns PURGED. A Kubernetes install records only
+    # nvcre jobs, so it has nothing to ask Slurm about.
+    nvcre_ids = {int(r["job_id"]) for r in nvcre_rows}
+    slurm_ids = (
+        []
+        if config.execution_target == ExecutionTarget.KUBERNETES
+        else [
+            int(r["job_id"])
+            for r in rows
+            if not is_terminal_state(r["slurm_state"]) and int(r["job_id"]) not in nvcre_ids
+        ]
+    )
+
+    xcal_refreshed = _refresh_nvcre_statuses(config, nvcre_rows)
+    slurm_refreshed, error = _refresh_slurm_statuses(config, slurm_ids)
     if error is None:
         _update_terminal_job_results(config)
-    return refreshed, error
+    return xcal_refreshed + slurm_refreshed, error
+
+
+def _nvcre_post_run_on_completion(config: ClusterConfig, row: sqlite3.Row, slurm_state: str) -> None:
+    """Pull all pod logs at terminal state; cancel the WorkloadRun on success
+    and extract the failure configmap on failure.
+
+    Called by _refresh_nvcre_statuses when a job first reaches COMPLETED or FAILED.
+    Never raises — logs warnings on any failure so jobs list is never broken.
+    """
+    import subprocess as _sp
+
+    log_dir = row["log_dir"]
+    workloadrun_name = row["workloadrun_name"]
+    if not log_dir or not workloadrun_name:
+        return
+
+    k8s = config.extras.get('kubernetes') or {}
+    namespace = row["namespace"] or k8s.get('namespace', 'default')
+    nvcrectl = k8s.get('nvcrectl_bin', 'nvcrectl')
+
+    try:
+        if slurm_state == 'COMPLETED':
+            # Pull all pod logs first. Cancelling the WorkloadRun deletes its
+            # pods — the only remaining copy of the logs — so cancel only
+            # after a successful pull; a failed one keeps the pods alive.
+            if _nvcre_pull_all_logs(namespace, workloadrun_name, log_dir):
+                # Cancel the WorkloadRun to release cluster resources
+                r = _sp.run(
+                    [nvcrectl, 'workloadrun', 'cancel', workloadrun_name, '-n', namespace],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                if r.returncode == 0:
+                    logger.info("Cancelled WorkloadRun '%s'", workloadrun_name)
+                else:
+                    logger.warning(
+                        "nvcre post-run: cancel failed for '%s': %s",
+                        workloadrun_name,
+                        r.stderr.strip(),
+                    )
+            else:
+                logger.warning(
+                    "nvcre post-run: log pull failed for '%s'; keeping the WorkloadRun "
+                    "so its logs stay recoverable from the pods",
+                    workloadrun_name,
+                )
+        elif slurm_state == 'FAILED':
+            # Extract the failure configmap first — it is cheap, and a slow or
+            # failed pod-log pull must not cost us nvcre's own failure record.
+            _nvcre_extract_failure_configmap(namespace, workloadrun_name, log_dir)
+            _nvcre_pull_all_logs(namespace, workloadrun_name, log_dir)
+    except Exception as e:
+        logger.warning("nvcre post-run cleanup error for job %s: %s", row["job_id"], e)
+
+
+def nvcre_rank0_pod(namespace: str, workloadrun_name: str) -> str | None:
+    """Name of the WorkloadRun's rank-0 pod, or None if it cannot be resolved.
+
+    The pod is found through its JobSet label — the same scoping as the
+    terminal log pull — so a namespace-wide lookup can never return
+    another job's pod.
+    """
+    import subprocess as _sp
+
+    nvcre_job = _nvcre_internal_job_name(namespace, workloadrun_name) or workloadrun_name
+    label = f"jobset.sigs.k8s.io/jobset-name={nvcre_job}-workload,batch.kubernetes.io/job-completion-index=0"
+    try:
+        r = _sp.run(
+            ['kubectl', 'get', 'pods', '-l', label, '-n', namespace, '-o', 'jsonpath={.items[0].metadata.name}'],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except _sp.TimeoutExpired:
+        # A stalled cluster must not turn `jobs log` into a traceback.
+        logger.warning("nvcre: finding the rank-0 pod of '%s' timed out", workloadrun_name)
+        return None
+    except Exception as e:
+        logger.debug("nvcre: could not find the rank-0 pod of '%s': %s", workloadrun_name, e)
+        return None
+    return r.stdout.strip() or None
+
+
+def nvcre_pod_log_candidates(log_dir: str | pathlib.Path) -> list[pathlib.Path]:
+    """Local pod-log files pulled at terminal state, rank-0 pod first.
+
+    Pods are named ``<jobset>-node-<job>-<pod>-...``, so ``*-0-*.log``
+    matches every pod of node 0. The rank-0 pod (job-completion-index=0)
+    is node 0's first pod, which sorts ahead of its siblings — so
+    candidates[0] is the rank-0 log, but only by sorting, not by the glob.
+    """
+    pod_logs_dir = pathlib.Path(log_dir) / 'pod_logs'
+    if not pod_logs_dir.is_dir():
+        return []
+    candidates = sorted(pod_logs_dir.glob('*-0-*.log'))
+    if not candidates:
+        candidates = sorted(pod_logs_dir.glob('*.log'))
+    return candidates
+
+
+def _nvcre_pull_all_logs(namespace: str, workloadrun_name: str, local_dir: str) -> bool:
+    """Pull logs from all pods into local_dir/pod_logs/ and tar them.
+
+    Returns True when a tar archive was written (at least one pod's log
+    was fetched), False when nothing could be pulled."""
+    import subprocess as _sp
+    import tarfile as _tarfile
+    from pathlib import Path as _Path
+
+    # Pods are found through the JobSet label of each nvcre job of this WorkloadRun (the primary
+    # group and any overflow group). If the jobs cannot be resolved, try the WorkloadRun's own name.
+    pods = []
+    for nvcre_job in internal_job_names(namespace, workloadrun_name) or [workloadrun_name]:
+        try:
+            r = _sp.run(
+                [
+                    'kubectl',
+                    'get',
+                    'pods',
+                    '-l',
+                    f'jobset.sigs.k8s.io/jobset-name={nvcre_job}-workload',
+                    '-n',
+                    namespace,
+                    '-o',
+                    'jsonpath={range .items[*]}{.metadata.name}{"\\n"}{end}',
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except _sp.TimeoutExpired:
+            logger.warning("nvcre post-run: listing pods of '%s' timed out", nvcre_job)
+            continue
+        pods += [p.strip() for p in r.stdout.splitlines() if p.strip()]
+
+    # No fallback to other pods in the namespace: they belong to other jobs.
+    logs_dir = _Path(local_dir) / 'pod_logs'
+
+    if not pods:
+        logger.warning("nvcre post-run: no pods found for '%s'", workloadrun_name)
+        return False
+
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    fetched = 0
+    for pod in pods:
+        # Full logs (no --tail) can take a while; one slow pod must not
+        # abort the pull for the others.
+        try:
+            r = _sp.run(
+                ['kubectl', 'logs', pod, '-n', namespace],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except _sp.TimeoutExpired:
+            logger.warning("nvcre post-run: log pull for pod '%s' timed out; skipping that pod", pod)
+            continue
+        if r.returncode == 0:
+            (logs_dir / f'{pod}.log').write_text(r.stdout)
+            fetched += 1
+        else:
+            logger.warning(
+                "nvcre post-run: failed to fetch logs for pod '%s': %s",
+                pod,
+                r.stderr.strip(),
+            )
+
+    if fetched == 0:
+        logger.warning("nvcre post-run: no pod logs retrieved for '%s'", workloadrun_name)
+        return False
+
+    tar_path = _Path(local_dir) / 'pod_logs.tar.gz'
+    with _tarfile.open(tar_path, 'w:gz') as tar:
+        tar.add(logs_dir, arcname='pod_logs')
+    logger.info("Pulled logs from %d/%d pods -> %s", fetched, len(pods), logs_dir)
+    return True
+
+
+def _nvcre_internal_job_name(namespace: str, workloadrun_name: str) -> str | None:
+    """The nvcre job (primary group) behind a WorkloadRun, or None if it cannot be resolved."""
+    names = internal_job_names(namespace, workloadrun_name)
+    return names[0] if names else None
+
+
+def _nvcre_extract_failure_configmap(namespace: str, workloadrun_name: str, local_dir: str | None) -> None:
+    """Extract 'Failed Nodes Ref' configmap from a failed WorkloadRun."""
+    import json as _json
+    import subprocess as _sp
+    from pathlib import Path as _Path
+
+    # Reached synchronously from `jobs list` / `jobs show`, so a stalled cluster must not hang them.
+    try:
+        r = _sp.run(
+            ['kubectl', 'describe', 'workloadrun', workloadrun_name, '-n', namespace],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except _sp.TimeoutExpired:
+        logger.warning("nvcre: 'kubectl describe workloadrun %s' timed out", workloadrun_name)
+        return
+    if r.returncode != 0:
+        logger.warning(
+            "nvcre: could not describe workloadrun '%s': %s",
+            workloadrun_name,
+            r.stderr.strip(),
+        )
+        return
+
+    cm_name = None
+    lines = r.stdout.splitlines()
+    for i, line in enumerate(lines):
+        if 'Failed Nodes Ref' not in line:
+            continue
+        after_colon = line.split(':', 1)[-1].strip()
+        if after_colon:
+            cm_name = after_colon
+            break
+        for sub in lines[i + 1 : i + 6]:
+            stripped = sub.strip()
+            if stripped.lower().startswith('name:'):
+                cm_name = stripped.split(':', 1)[-1].strip()
+                break
+        break
+
+    if not cm_name:
+        logger.debug("nvcre: no 'Failed Nodes Ref' configmap found for '%s'", workloadrun_name)
+        return
+
+    try:
+        r = _sp.run(
+            ['kubectl', 'get', 'configmap', cm_name, '-n', namespace, '-o', 'json'],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except _sp.TimeoutExpired:
+        logger.warning("nvcre: 'kubectl get configmap %s' timed out", cm_name)
+        return
+    if r.returncode != 0 or not local_dir:
+        return
+    try:
+        data = _json.loads(r.stdout).get('data', {})
+        fail_log = _Path(local_dir) / 'fail.log'
+        with open(fail_log, 'w') as f:
+            for k, v in data.items():
+                f.write(f"=== {k} ===\n{v}\n\n")
+        logger.info("nvcre: failure configmap written to %s", fail_log)
+    except Exception as e:
+        logger.warning("nvcre: could not write failure configmap: %s", e)
+
+
+def _refresh_nvcre_statuses(config: ClusterConfig, rows: list) -> int:
+    """Refresh status for nvcre WorkloadRun jobs via nvcrectl."""
+    import shutil
+    import subprocess as _sp
+
+    k8s = config.extras.get('kubernetes') or {}
+    nvcrectl = k8s.get('nvcrectl_bin', 'nvcrectl')
+    if shutil.which(nvcrectl) is None:
+        return 0
+
+    refreshed = 0
+    for row in rows:
+        name = row["workloadrun_name"]
+        ns = row["namespace"] or k8s.get('namespace', 'default')
+        try:
+            r = _sp.run([nvcrectl, 'workloadrun', 'status', name, '-n', ns], capture_output=True, text=True, timeout=30)
+        except _sp.TimeoutExpired:
+            # An unreachable cluster must not hang `jobs list` / `jobs show`.
+            logger.warning("nvcre: 'nvcrectl workloadrun status %s' timed out; keeping the last known state", name)
+            continue
+        if r.returncode != 0:
+            continue
+        phase = r.stdout.strip()  # e.g. "Succeeded", "Failed", "InProgress"
+        # Map nvcre phases to Slurm-style state strings for the existing display
+        phase_to_state = {
+            'Succeeded': 'COMPLETED',
+            'Failed': 'FAILED',
+            'InProgress': 'RUNNING',
+            'Pending': 'PENDING',
+        }
+        slurm_state = phase_to_state.get(phase, phase.upper())
+        prev_state = row["slurm_state"]
+        # nvcre/nvcrectl only reports phase, not duration. Approximate elapsed
+        # as wall-clock time since submit_time (sacct's Elapsed equivalent isn't
+        # available here). Only meaningful once the job has actually started;
+        # PENDING jobs are left blank rather than showing queue wait time.
+        elapsed = ""
+        if slurm_state in ("RUNNING", "COMPLETED", "FAILED"):
+            elapsed = _elapsed_since(row["submit_time"])
+        with _open_history_db(config) as conn:
+            conn.execute(
+                "UPDATE jobs SET slurm_state = ?, elapsed = ?, last_status_refresh = ?, updated_at = ? "
+                "WHERE job_id = ?",
+                (slurm_state, elapsed, _now_iso(), _now_iso(), int(row["job_id"])),
+            )
+            conn.commit()
+        # Trigger post-run cleanup only when first transitioning to a terminal state
+        if slurm_state in ('COMPLETED', 'FAILED') and not is_terminal_state(prev_state):
+            _nvcre_post_run_on_completion(config, row, slurm_state)
+            _update_terminal_job_results(config, job_ids=[int(row["job_id"])])
+        refreshed += 1
+    return refreshed
 
 
 def refresh_requested_jobs(config: ClusterConfig, job_ids: list[int]) -> tuple[int, str | None]:
     """Force-refresh the requested jobs and update terminal results."""
+    if config.execution_target == ExecutionTarget.KUBERNETES:
+        # Same reason as refresh_non_terminal_jobs: these ids are not Slurm jobs.
+        wanted = set(job_ids)
+        with _open_history_db(config) as conn:
+            rows = [
+                r
+                for r in conn.execute(
+                    "SELECT job_id, slurm_state, launcher_type, workloadrun_name, namespace, log_dir, submit_time "
+                    "FROM jobs ORDER BY job_id"
+                )
+                if int(r["job_id"]) in wanted and r["workloadrun_name"]
+            ]
+        refreshed = _refresh_nvcre_statuses(config, rows)
+        _update_terminal_job_results(config, job_ids=job_ids, reparse_existing=True)
+        return refreshed, None
     refreshed, error = _refresh_slurm_statuses(config, job_ids)
     if error is None:
         _update_terminal_job_results(config, job_ids=job_ids, reparse_existing=True)
@@ -459,14 +812,21 @@ def format_jobs_table(rows: list[sqlite3.Row], workloads: dict[str, Any]) -> str
     # failed RL rows with the right throughput metric.
     show_tokens_col = any(_is_rl_workload(workloads, row["workload_key"]) for row in rows)
 
+    show_k8s_cols = any(row["workloadrun_name"] for row in rows)
+
     table = Table(box=box.SIMPLE_HEAD, header_style="bold", show_edge=False, pad_edge=False)
     table.add_column("Workload", overflow="fold")
     table.add_column("DType")
     table.add_column("Scale", justify="right")
-    table.add_column("Job ID", justify="right")
+    # Synthetic nvcre ids are 16 digits and must never be squeezed to an
+    # ellipsis by the other columns — a truncated id cannot be looked up.
+    table.add_column("Job ID", justify="right", no_wrap=True)
+    if show_k8s_cols:
+        table.add_column("Name")
+        table.add_column("Namespace")
     table.add_column("Profile")
     table.add_column("Submit Time")
-    table.add_column("Slurm Status")
+    table.add_column("Status")
     table.add_column("Elapsed")
     table.add_column("s/iter", justify="right")
     table.add_column("TFLOPS/GPU", justify="right")
@@ -484,6 +844,11 @@ def format_jobs_table(rows: list[sqlite3.Row], workloads: dict[str, Any]) -> str
             row["dtype"] or "",
             str(row["scale"]) if row["scale"] is not None else "",
             str(row["job_id"]),
+        ]
+        if show_k8s_cols:
+            cells.append(row["workloadrun_name"] or "")
+            cells.append(row["namespace"] or "")
+        cells += [
             _yes_no(row["profile_enabled"]),
             _format_timestamp(row["submit_time"]),
             styled_state,
@@ -517,6 +882,7 @@ def format_job_details(row: sqlite3.Row, workloads: dict[str, Any]) -> str:
     else:
         throughput_details = [("TFLOPS/GPU", _format_float(row["tflops_per_gpu"]))]
 
+    _cols = {c[1] for c in row.description} if hasattr(row, 'description') else set(row.keys())
     details = [
         ("Job ID", str(row["job_id"])),
         ("Launcher", row["launcher_type"]),
@@ -526,6 +892,11 @@ def format_job_details(row: sqlite3.Row, workloads: dict[str, Any]) -> str:
         ("Scale", str(row["scale"]) if row["scale"] is not None else ""),
         ("Profile", _yes_no(row["profile_enabled"])),
         ("Proxy", _yes_no(row["proxy"])),
+        *(
+            [("WorkloadRun", row["workloadrun_name"]), ("Namespace", row["namespace"])]
+            if "workloadrun_name" in _cols and row["workloadrun_name"]
+            else []
+        ),
         ("Status", row["slurm_state"]),
         ("Elapsed", row["elapsed"]),
         ("Perf Parse", _display_perf_parse_status(row["perf_parse_status"])),
@@ -596,9 +967,14 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
         """)
     # Schema migrations — idempotent, ordered by version.
     # v1 → v2: add tokens_per_sec_per_gpu column (RL workload throughput metric).
+    # v2 → v3: add namespace and workloadrun_name columns (nvcre/Kubernetes jobs).
     existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
     if "tokens_per_sec_per_gpu" not in existing_columns:
         conn.execute("ALTER TABLE jobs ADD COLUMN tokens_per_sec_per_gpu REAL")
+    if "namespace" not in existing_columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN namespace TEXT")
+    if "workloadrun_name" not in existing_columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN workloadrun_name TEXT")
 
     conn.execute(
         """
@@ -762,11 +1138,37 @@ def _parse_pretrain_job_performance(row: sqlite3.Row) -> _PerfResult | None:
     if parser_name_for_framework(framework) is None:
         return None
 
+    workload_key = row["workload_key"] or ""
+    if "mlperf" in workload_key:
+        min_iteration, max_iteration = MLPERF_ITERATION_WINDOW_OVERRIDES.get(workload_key, MLPERF_ITERATION_WINDOW)
+    else:
+        min_iteration, max_iteration = MIN_ITERATION, MAX_ITERATION
     try:
-        result = parse_latest_pretrain_job_log(row["log_dir"], int(row["job_id"]), framework)
+        result = parse_latest_pretrain_job_log(
+            row["log_dir"],
+            int(row["job_id"]),
+            framework,
+            min_iteration=min_iteration,
+            max_iteration=max_iteration,
+        )
     except OSError as e:
         logger.debug(f"Unable to parse pretrain perf log for job {row['job_id']}: {e}")
         return None
+
+    # nvcre jobs write their logs to pod_logs/*.log; fall back to the local
+    # rank-0 pod log if the standard log discovery found nothing.
+    if result.status.value in ("no_log", "no_data") and row["log_dir"]:
+        candidates = nvcre_pod_log_candidates(row["log_dir"])
+        if candidates:
+            try:
+                from llmb_run.pretrain_log_parser import parse_pretrain_log
+
+                # Same steady-state window as Slurm (iterations 35-44): a run
+                # that never got there reports incomplete rather than a
+                # warmup-inclusive number.
+                result = parse_pretrain_log(candidates[0], framework)
+            except OSError as e:
+                logger.debug(f"Unable to parse nvcre pod log for job {row['job_id']}: {e}")
 
     metrics = result.metrics
     return _PerfResult(
@@ -828,6 +1230,32 @@ def _format_timestamp(value: str | None) -> str:
 
 def _format_float(value: float | None) -> str:
     return "" if value is None else f"{value:.2f}"
+
+
+def _elapsed_since(submit_time: str | None) -> str:
+    """Wall-clock elapsed time since submit_time, formatted like sacct's Elapsed field."""
+    if not submit_time:
+        return ""
+    try:
+        start = datetime.datetime.fromisoformat(submit_time)
+    except ValueError:
+        return ""
+    if start.tzinfo is None:
+        # nvcre submit_time (job_launcher.py) is stamped with naive
+        # datetime.now() — local time, not UTC. Compare against local "now" so
+        # this doesn't go negative (and get clamped to 0) in timezones ahead
+        # of UTC.
+        now = datetime.datetime.now()
+    else:
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+    seconds = max(int((now - start).total_seconds()), 0)
+    days, remainder = divmod(seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if days:
+        return f"{days}-{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 def _format_perf_metric(row: sqlite3.Row, field: str) -> str:

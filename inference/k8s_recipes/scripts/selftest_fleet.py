@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -748,7 +730,7 @@ def write_profiles(root: Path) -> Path:
     # SAME physical cluster (KUBE_CONTEXT=ctxG) as golf, but a DIFFERENT namespace → must collapse to ONE
     # section (not a duplicate) with golf, and NOT re-list golf's cross-ns runs a second time. The dedup key is
     # the physical cluster (context), never (context, namespace).
-    prof("golf-kvbm", "ctxG", "ns-kvbm")
+    prof("golf-secondary", "ctxG", "ns-secondary")
     # PHYSICAL-CLUSTER dedup: two profiles → the SAME cluster via DIFFERENT representations. `hotel` pins a
     # teleport KUBE_CONTEXT (proxy prefix + cluster token); `hotel-glm5` sets KUBE_CLUSTER to the bare token.
     # cluster_key must resolve both to "example-gpu-cluster" → one row, [2 profiles]. `hotel` (sorted first) wins.
@@ -1103,9 +1085,9 @@ def _unit_stages():
             alpha,
         )
         check(
-            "ledger (e2e): the models SHARING that claim read ~ UNVERIFIED, and the claim's size prints once",
+            "ledger (e2e): the models sharing that claim read ~ UNVERIFIED, and the claim's size prints once",
             "~ nemotron-ultra-nvfp4" in alpha
-            and "~ qwen3-0-6b" in alpha
+            and "~ nemotron-3-ultra-nvfp4" in alpha
             and alpha.count("1200Gi") == 1
             and alpha.count("shared") == 2
             and "1 attested · 0 verified (no in-volume check) · 2 UNVERIFIED · 0 missing" in alpha,
@@ -1182,7 +1164,7 @@ def _unit_stages():
         )
 
         # ── FIX #2 + ROOT CAUSE 1/2 + DEDUP + NS-GROUPING: golf is IDLE-in-its-configured-ns but has an INSTALL
-        #    + a CROSS-NS LOADING run → shown in FULL. golf-kvbm (SAME context ctxG, different ns) must COLLAPSE
+        #    + a CROSS-NS LOADING run → shown in FULL. golf-secondary (SAME context ctxG, different ns) must COLLAPSE
         #    into golf's ONE section (dedup by context), and each namespace gets its OWN sub-block.
         golf = _cblock(plain, "golf")
         check(
@@ -1190,10 +1172,10 @@ def _unit_stages():
             bool(golf) and not any(l.strip().startswith("· golf") for l in plain.splitlines()),
             golf or plain,
         )
-        # DEDUP: two profiles (golf + golf-kvbm) on the SAME context → exactly ONE section (no `golf-kvbm` header).
+        # DEDUP: two profiles (golf + golf-secondary) on the SAME context → exactly ONE section.
         check(
-            "stages: DEDUP — golf-kvbm (same KUBE_CONTEXT, diff ns) collapses into golf → ONE section, noted",
-            not _cblock(plain, "golf-kvbm")
+            "stages: DEDUP — golf-secondary (same KUBE_CONTEXT, diff ns) collapses into golf → ONE section, noted",
+            not _cblock(plain, "golf-secondary")
             and plain.count("━━ CLUSTER golf ") == 1
             and "2 profiles map to this cluster" in golf,
             plain,
@@ -3404,12 +3386,15 @@ def _unit_collapse_safety():
         f"P_ATTENTION={fr.P_ATTENTION} ladder_min={min(fr._VP_LADDER)}",
     )
 
+    def _listed(text):  # installed-cell rows of any scenario
+        return text.count("✓ llm-perf/") + text.count("✓ agentic/")
+
     # ── (1) THE FOLD. 30 near-identical `✓ <110-char path>  ready` rows were 30 of the namespace's 45 lines
     #        and carried one bit of information between them. They fold into a line that STATES the verdict.
     full = _render()
     check(
         "fold: a 30-cell healthy inventory renders ONE folded line, not 30 rows",
-        "✓ all 30 ready — nothing needs attention" in full and full.count("✓ llm-perf/") == 0,
+        "✓ all 30 ready — nothing needs attention" in full and _listed(full) == 0,
         full,
     )
     check(
@@ -3426,14 +3411,14 @@ def _unit_collapse_safety():
     det = _render(detail=True)
     check(
         "fold: --detail lists every cell (nothing is unreachable, only un-defaulted)",
-        det.count("✓ llm-perf/") == 30 and "all 30 ready" not in det,
-        str(det.count("✓ llm-perf/")),
+        _listed(det) == 30 and "all 30 ready" not in det,
+        str(_listed(det)),
     )
     # a SHORT list is its own summary — folding `✓ parkrun` into `all 1 ready` would be strictly worse
     small = _render(n_cells=3)
     check(
         "fold: a list shorter than the fold threshold stays listed (there the names ARE the summary)",
-        small.count("✓ llm-perf/") == 3 and "nothing needs attention" not in small,
+        _listed(small) == 3 and "nothing needs attention" not in small,
         small,
     )
     mixed = _render(failed=2)
@@ -3553,8 +3538,8 @@ def _unit_collapse_safety():
 
 # ── STARTING vs UNSCHEDULED ──────────────────────────────────────────────────────────────────────────────
 # THE REPORTED PANE. Two rows, in COMPLETELY different conditions, rendered as one word:
-#       ├─ ● PENDING  qwen3-…-kvbm-pareto-…-m3m0   8 GPUs   10m25s / ~31m exp (33%)  8·16
-#       ├─   └ svc    qwen3-…-kvbm-pareto-server   8 GPUs   1/1  11m44s
+#       ├─ ● PENDING  example-pareto-…-m3m0   8 GPUs   10m25s / ~31m exp (33%)  8·16
+#       ├─   └ svc    example-pareto-server   8 GPUs   1/1  11m44s
 #       └─ ● LOADING  glm5-agg-8k1k-…-server       8 GPUs   0/1  10m21s
 # The operator: "what does pending mean? Are the models loading? pending is vague so it's not clear if
 # something is possibly wrong or this is indeed just loading the model." He was right to ask: the glm5
@@ -3754,14 +3739,14 @@ def _unit_schedule_states():
 
     # ── (5) END TO END on the reported shape: a dead bench, its healthy 1/1 server, and a real loader ──
     srv = deploy(
-        "qwen3-kvbm-pareto-server",
-        app="qwen3-kvbm-pareto-server",
+        "example-pareto-server",
+        app="example-pareto-server",
         ready=1,
-        cell="qwen3-kvbm",
+        cell="example",
     )
     srvp = pod(
-        "qwen3-kvbm-pareto-server-a",
-        app="qwen3-kvbm-pareto-server",
+        "example-pareto-server-a",
+        app="example-pareto-server",
         gpus=8,
         start=T_OLD,
     )
@@ -3774,16 +3759,16 @@ def _unit_schedule_states():
     loadp = pod("glm5-agg-8k1k-server-a", app="glm5-agg-8k1k-server", gpus=8, start=T_OLD)
     loadp["status"]["conditions"] = [{"type": "Ready", "status": "False"}]  # 0/1 → genuinely loading
     bench = job(
-        "qwen3-kvbm-bench-m3m0",
-        recipe="qwen3-kvbm",
-        cell="qwen3-kvbm",
+        "example-bench-m3m0",
+        recipe="example",
+        cell="example",
         active=1,
         run_id="m3m0",
         expected_env=1860,
         start=T_OLD,
     )
-    bp = _p("qwen3-kvbm-bench-m3m0-1", created=T_OLD, sched=False)
-    bp["metadata"]["labels"]["job-name"] = "qwen3-kvbm-bench-m3m0"
+    bp = _p("example-bench-m3m0-1", created=T_OLD, sched=False)
+    bp["metadata"]["labels"]["job-name"] = "example-bench-m3m0"
     e = fr.build_cluster(
         "example-gpu-cluster",
         "ctxA",

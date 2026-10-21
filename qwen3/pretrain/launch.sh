@@ -1,28 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
-if [ ${BASH_VERSION:0:1} -lt 4 ] || [ ${BASH_VERSION:0:1} -eq 4 ] && [ ${BASH_VERSION:2:1} -lt 2 ]; then
-    printf "Unsupported %s version: %s\n" "${BASH}" "${BASH_VERSION}" >&2
-    echo "Requires Bash 4.2 or greater." >&2
+if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 2))); then
+    printf 'Requires Bash 4.2 or greater (running: %s).\n' "${BASH_VERSION:-not Bash}" >&2
     exit 1
 fi
 
@@ -60,7 +41,11 @@ export GPU_TYPE=${GPU_TYPE:?GPU_TYPE is a required variable.}
 export GPU_TYPE=${GPU_TYPE,,}
 export JOB_TOTAL_GPUS=${JOB_TOTAL_GPUS:?JOB_TOTAL_GPUS is a required variable.}
 
-FW_VERSION=26.06.01
+if [[ $GPU_TYPE == "h100" ]]; then
+    FW_VERSION=26.06.01
+else
+    FW_VERSION=26.08.01
+fi
 
 export IMAGE=${RUN_CONF_IMAGE:-$LLMB_INSTALL/images/nvidia+nemo+$FW_VERSION.sqsh}
 if [ "$MODEL_SIZE" = "235b" ]; then
@@ -84,6 +69,8 @@ ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING:-false}
 ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING,,}
 
 # Handle additional SLURM parameters from environment variable
+CLUSTER_TYPE=${CLUSTER_TYPE:-slurm}
+
 ADDITIONAL_SLURM_PARAMS=${ADDITIONAL_SLURM_PARAMS:-""}
 
 # Add additional SLURM parameters if provided
@@ -155,8 +142,12 @@ if [[ $PROFILE_ENABLED == "true" ]]; then
     CONFIG_OVERRIDES+=" --profiling_start_step=$PROFILE_START_STEP "
     CONFIG_OVERRIDES+=" --profiling_stop_step=$PROFILE_STOP_STEP "
     CONFIG_OVERRIDES+=" --nsys_trace=cuda,nvtx "
-    CONFIG_OVERRIDES+=" --nsys_extra_args=--nvtx-domain-include=NCCL "
-    CONFIG_OVERRIDES+=" --profiling_ranks=$(seq -s, 0 $((JOB_TOTAL_GPUS - 1))) "
+    if [[ $GPU_TYPE == "h100" ]]; then
+        CONFIG_OVERRIDES+=" --nsys_extra_args=--nvtx-domain-include=NCCL "
+    else
+        CONFIG_OVERRIDES+=" --nsys_extra_args=--nvtx-domain-include=NCCL,--discard-environment=true  "
+    fi
+    CONFIG_OVERRIDES+=" --profiling_ranks=$(seq -s, 0 $((JOB_TOTAL_GPUS - 1)) | sed 's/,$//') "
     if [[ $GPU_METRICS_ENABLED == true ]]; then
         CONFIG_OVERRIDES+=" --profiling_gpu_metrics "
     fi
@@ -195,6 +186,25 @@ if [[ $DTYPE == "bf16" ]] && [[ $MODEL_SIZE == "235b" ]] && [[ $GPU_TYPE != "h10
     export NCCL_IB_QPS_PER_CONNECTION=${NCCL_IB_QPS_PER_CONNECTION:-4}
 fi
 
+EXECUTOR_ARGS=()
+if [[ $CLUSTER_TYPE == "kubernetes" ]]; then
+    EXECUTOR_ARGS=(--nvcre_namespace "${NVCRE_NAMESPACE:?NVCRE_NAMESPACE required for kubernetes}")
+    [[ -n ${NVCRE_IMAGE_PULL_SECRET:-} ]] && EXECUTOR_ARGS+=(--nvcre_image_pull_secret "$NVCRE_IMAGE_PULL_SECRET")
+    [[ -n ${NVCRE_WORKDIR_PVC:-} ]] && EXECUTOR_ARGS+=(--nvcre_workdir_pvc "$NVCRE_WORKDIR_PVC")
+    [[ -n ${NVCRE_NODE_SELECTOR_JSON:-} ]] && EXECUTOR_ARGS+=(--nvcre_node_selector_json "$NVCRE_NODE_SELECTOR_JSON")
+    EXECUTOR_ARGS+=(--nvcre_timeout_per_job "${NVCRE_TIMEOUT_PER_JOB:-12h}")
+    [[ -n ${NVCRE_GANG_SCHEDULER_NAME:-} ]] && EXECUTOR_ARGS+=(--nvcre_gang_scheduler_name "$NVCRE_GANG_SCHEDULER_NAME")
+    # Run this checkout's Megatron-Bridge commit in the pods instead of the image's copy.
+    EXECUTOR_ARGS+=(--nvcre_use_mbridge_commit)
+    [[ -n ${NVCRE_HF_TOKEN_SECRET_NAME:-} ]] && EXECUTOR_ARGS+=(--nvcre_hf_token_secret_name "$NVCRE_HF_TOKEN_SECRET_NAME" --nvcre_hf_token_secret_key "${NVCRE_HF_TOKEN_SECRET_KEY:-token}")
+elif [[ $CLUSTER_TYPE == "slurm" ]]; then
+    read -ra SLURM_ARG_WORDS <<< "$SLURM_ARGS"
+    EXECUTOR_ARGS=(--account "$SBATCH_ACCOUNT" --partition "$SBATCH_PARTITION" --time_limit "$TIME_LIMIT" ${SLURM_ARG_WORDS[@]+"${SLURM_ARG_WORDS[@]}"})
+else
+    echo "Unsupported CLUSTER_TYPE=${CLUSTER_TYPE}. Aborting"
+    exit 1
+fi
+
 #run command
 pushd $LLMB_WORKLOAD/Megatron-Bridge
 
@@ -208,13 +218,10 @@ python3 scripts/performance/setup_experiment.py \
     --num_gpus $JOB_TOTAL_GPUS \
     --gpus_per_node $GPUS_PER_NODE \
     ${CONFIG_OVERRIDES} \
-    --account $SBATCH_ACCOUNT \
-    --partition $SBATCH_PARTITION \
     --log_dir $NEMORUN_HOME \
-    --time_limit $TIME_LIMIT \
     --max_steps $MAX_STEPS \
     --packager none \
-    $SLURM_ARGS \
+    "${EXECUTOR_ARGS[@]}" \
     ${LLMB_MBRIDGE_EXTRA_ARGS:-}
 
 popd

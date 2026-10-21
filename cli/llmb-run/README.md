@@ -192,14 +192,14 @@ Normal dtype and scale validation still applies, so llmb-run only generates supp
 **Examples:**
 
 ```bash
-# Run one Llama 3.1 model size plus the single-model-size Nemotron-H workload
-llmb-run submit -w pretrain_llama3.1_70b,pretrain_nemotron-h --dtype fp8 --scale 128
+# Run one Llama 3.1 model size plus the single-model-size DeepSeek V3 workload
+llmb-run submit -w pretrain_llama3.1_70b,pretrain_deepseek-v3 --dtype fp8 --scale 128
 
-# Run all installed Llama 3.1 model sizes plus Nemotron-H
-llmb-run submit -w pretrain_llama3.1,pretrain_nemotron-h --dtype fp8 --min-scale
+# Run all installed Llama 3.1 model sizes plus DeepSeek V3
+llmb-run submit -w pretrain_llama3.1,pretrain_deepseek-v3 --dtype fp8 --min-scale
 
 # Run target-list selection with scale discovery up to 512 GPUs
-llmb-run submit -w pretrain_llama3.1_70b,pretrain_nemotron-h --dtype fp8 --max-scale 512
+llmb-run submit -w pretrain_llama3.1_70b,pretrain_deepseek-v3 --dtype fp8 --max-scale 512
 ```
 
 #### 3. File-Based Submission (Batch)
@@ -445,7 +445,7 @@ llmb-run archive --output /shared/results/my-cluster-results.tar.zst
 
 #### What's Included
 
-The archive collects experiment data from `$LLMB_INSTALL/workloads/*/experiments/`, including logs and `llmb-config_*.yaml` metadata files. Profiling data, including Nsight reports and PyTorch profiler traces, is excluded to keep the archive compact — profiles are typically only needed for debugging and can be shared separately if requested.
+The archive collects experiment data from `$LLMB_INSTALL/workloads/*/experiments/`, including logs and `llmb-config_*.yaml` metadata files. Profiling data (including Nsight reports and PyTorch profiler traces) and JSONL files (such as NeMo-RL per-step rollout dumps) are excluded to keep the archive compact — profiles are typically only needed for debugging and can be shared separately if requested.
 
 ### Job Configuration Files
 

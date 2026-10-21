@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 
 """GPU configuration prompts for LLMB installer."""
@@ -25,6 +7,8 @@
 from typing import Any, Dict, Optional
 
 from llmb_install.cluster import gpu, slurm
+from llmb_install.cluster.nvlink import describe_failure, detect_nvl_topology, uses_block_topology
+from llmb_install.constants import NVL_DOMAINS_BY_GPU
 from llmb_install.ui.interface import UIInterface
 
 
@@ -149,3 +133,58 @@ def prompt_node_architecture(
 
     ui.log(f"Selected node architecture: {architecture}")
     return architecture
+
+
+def prompt_nvl_domain(
+    ui: UIInterface,
+    gpu_type: str,
+    default: Optional[int] = None,
+    query_slurm: bool = True,
+) -> tuple[int, Optional[list[int]]]:
+    """Select or detect the NVLink domain size for a GPU cluster.
+
+    Args:
+        query_slurm: Detect the domain from the Slurm block topology. Pass False for
+            Kubernetes installs, where there is no Slurm to query.
+    """
+    if not uses_block_topology(gpu_type):
+        return NVL_DOMAINS_BY_GPU[gpu_type][0], None
+
+    if not query_slurm:
+        domain = min(NVL_DOMAINS_BY_GPU[gpu_type])
+        ui.print_section("NVLink Domain")
+        ui.log(f"Kubernetes install: no Slurm topology to query; using NVL{domain}.")
+        return domain, None
+
+    ui.print_section("NVLink Domain")
+    detection = detect_nvl_topology(gpu_type)
+    block_sizes = detection.block_sizes
+    detected = detection.nvl_domain
+    domains = NVL_DOMAINS_BY_GPU[gpu_type]
+    if detection.reason == 'detected' and detected in domains:
+        ui.log(f"✓ Auto-detected NVLink domain: NVL{detected}")
+        return detected, block_sizes
+
+    ui.log(describe_failure(detection))
+    if detection.reason == 'detected':
+        choices = [
+            {'name': f'NVL{detected} (detected)', 'value': detected},
+            *({'name': f'NVL{domain}', 'value': domain} for domain in domains),
+        ]
+        choice_values = [choice['value'] for choice in choices]
+        selected_default = default if default in choice_values else detected
+        choice = ui.prompt_select(
+            "Select the NVLink domain size of your GPU nodes:", choices=choices, default=selected_default
+        )
+        if choice is None:
+            ui.log("\nInstallation cancelled.")
+            raise SystemExit(1)
+        return choice, detection.block_sizes
+
+    expected = min(domains)
+    ui.log(f"Only a single-rack NVL{expected} cluster performs correctly without Slurm block topology.")
+    if ui.prompt_confirm(f"Continue as NVL{expected}?", default=False):
+        return expected, None
+    else:
+        ui.log("\nInstallation cancelled.")
+        raise SystemExit(1)

@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+general:
+  workload: nemotron3_ultra_sglang_dynamo
+  display_name: Nemotron 3 Ultra SGLang Dynamo
+  workload_type: inference
+  framework: sglang-dynamo
+  model: Nemotron-3-Ultra
+
+# LLMB owns the serving image. The explicit name is the stable alias written to
+# the workload-private srtslurm.yaml by llmb-run at submission time.
+container:
+  images:
+    - url: 'nvcr.io#nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1'
+      name: 'sglang-runtime-1.4.0-inkling-dev.1'
+
+downloads:
+  huggingface:
+    repos:
+      - repo_id: 'nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4'
+        repo_type: model
+        revision: '183968f87ae4cedce3039313cac1fd43d112c578'
+        target: workload
+        name: 'nemotron3-ultra-nvfp4'
+
+# Pin an immutable release commit. SRT-Slurm is an orchestration dependency;
+# recipes and artifact provisioning remain owned by LLMB.
+repositories:
+  srt_slurm:
+    url: 'https://github.com/NVIDIA/srt-slurm.git'
+    commit: 'c180328b98c3793ca84a1e24a030f90545eb7d5d'
+
+setup:
+  venv_req: true
+  dependencies:
+    pip:
+      - package: srtctl
+        repo_key: srt_slurm
+        editable: true
+  tasks:
+    - name: setup_srtslurm
+      cmd: './setup_srtslurm.sh'
+      job_type: local
+
+run:
+  launcher_type: srt_slurm
+  srt_slurm:
+    recipe: recipes/gb300/10k_16k/nemotron3-ultra-gb300-nvfp4-10k16k-1p1d.yaml
+    recipe_env: RUN_CONF_NEMOTRON3_ULTRA_SGLANG_RECIPE
+    selector: override_validated
+  gpu_configs:
+    gb300:
+      model_configs:
+        - model_size: '550b'
+          dtypes: ['nvfp4']
+          # LLMB scale is the physical GPU count requested by the selected
+          # recipe: (prefill + decode workers) x 4 GPUs, one node per worker.
+          scales: [8, 16, 32, 40, 48]
+          exact_scales: true

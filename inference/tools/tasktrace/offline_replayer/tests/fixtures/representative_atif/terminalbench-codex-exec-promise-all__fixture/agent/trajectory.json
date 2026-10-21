@@ -1,0 +1,33 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "session_id": "terminalbench-codex-exec-promise-all-fixture",
+  "agent": {
+    "name": "codex",
+    "version": "fixture",
+    "model_name": "fixture",
+    "extra": {
+      "originator": "codex_exec",
+      "cwd": "/app"
+    }
+  },
+  "fixture_provenance": {
+    "dataset": "Terminal-Bench 2.0",
+    "curation": "Hermetic representative derived from a captured Codex Code Mode ATIF trajectory. Commands were replaced with inert markers; the abstract exec envelope, literal Promise.all members, indexed result presentation, and observation shape were retained. The fixture contains no task data or credentials."
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-08-12T18:00:00.000Z",
+      "tool_calls": [{
+        "tool_call_id": "codex-exec-promise-all",
+        "function_name": "exec",
+        "arguments": {
+          "input": "const results = await Promise.all([tools.exec_command({cmd: \"printf left > left.txt\"}), tools.exec_command({cmd: \"printf right > right.txt\"})]);\nfor (let i = 0; i < results.length; i++) { text(`---RESULT ${i + 1}---\\n${JSON.stringify(results[i])}`); }"
+        }
+      }],
+      "observation": {
+        "content": "---RESULT 1---\n\n---RESULT 2---\n\n"
+      }
+    }
+  ]
+}

@@ -1,0 +1,391 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# GB300 Dynamo + SGLang disaggregated workers.
+# Supports both single-node and distributed workers.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d-prefill
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    llmb.nvidia.com/role: prefill
+    llmb.nvidia.com/served-model: nemotron-3-ultra
+spec:
+  replicas: 8
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d-prefill } }
+  template:
+    metadata:
+      labels:
+        app: nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d-prefill
+        role: prefill
+        llmb.nvidia.com/recipe: nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d
+    spec:
+      automountServiceAccountToken: false
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      dnsConfig: { options: [{ name: ndots, value: "2" }] }
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 120
+      schedulerName: ${SCHEDULER_NAME}
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      nodeSelector:
+        nvidia.com/gpu.product: ${GPU_PRODUCT}
+        feature.node.kubernetes.io/rdma.available: "true"
+        feature.node.kubernetes.io/rdma.capable: "true"
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+      # The model-preparation DaemonSet owns population of this revision-specific host cache.
+      # Serving is fail-closed: it cannot start until the exact revision and all shards verify.
+      initContainers:
+        - name: verify-node-model-cache
+          image: nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9
+          imagePullPolicy: IfNotPresent
+          securityContext: { runAsUser: 0 }
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              expected='nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4@183968f87ae4cedce3039313cac1fd43d112c578'
+              actual=$(cat /node-hf-cache/.llmb-cache-ready 2>/dev/null || true)
+              test "$actual" = "$expected" || {
+                echo "FATAL: node cache is not ready for $expected (marker='$actual')" >&2
+                exit 65
+              }
+              SNAPSHOT=$(python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id='nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4', revision='183968f87ae4cedce3039313cac1fd43d112c578', cache_dir='/node-hf-cache/hub', local_files_only=True))")
+              test -s "$SNAPSHOT/config.json"
+              shards=$(find -L "$SNAPSHOT" -maxdepth 1 -name '*.safetensors' -type f | wc -l)
+              test "$shards" -eq 113 || { echo "FATAL: expected 113 checkpoint shards, found $shards" >&2; exit 66; }
+              echo "NODE_CACHE_VERIFIED node=$NODE_NAME revision=183968f87ae4cedce3039313cac1fd43d112c578 shards=$shards"
+          env:
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+          resources:
+            requests: { cpu: "1", memory: 2Gi }
+            limits: { cpu: "4", memory: 8Gi }
+          volumeMounts:
+            - { mountPath: /node-hf-cache, name: versioned-node-model-cache, readOnly: true }
+      containers:
+        - name: sglang
+          image: nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            capabilities: { add: ["IPC_LOCK", "SYS_RESOURCE"] }
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              ulimit -n 1048576 || true
+              ulimit -l unlimited || true
+              SNAPSHOT=$(python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id='nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4', revision='183968f87ae4cedce3039313cac1fd43d112c578', cache_dir='/data/hf-cache/hub', local_files_only=True))")
+              export SNAPSHOT
+              test -s "$SNAPSHOT/config.json" || { echo "FATAL: pinned model snapshot missing at $SNAPSHOT" >&2; exit 64; }
+              echo "MODEL_RUNTIME_BEGIN epoch=$(date +%s) node=$NODE_NAME pod=$POD_NAME snapshot=$SNAPSHOT"
+              exec python3 -m dynamo.sglang \
+                --model-path $SNAPSHOT \
+                --served-model-name nemotron-3-ultra \
+                --host 0.0.0.0 \
+                --port 18081 \
+                --disaggregation-mode prefill \
+                --disaggregation-bootstrap-port 18082 \
+                --disaggregation-transfer-backend nixl \
+                --context-length 65536 \
+                --tensor-parallel-size 4 \
+                --data-parallel-size 1 \
+                --expert-parallel-size 4 \
+                --trust-remote-code \
+                --kv-cache-dtype fp8_e4m3 \
+                --moe-runner-backend flashinfer_trtllm \
+                --fp8-gemm-backend triton \
+                --mamba-scheduler-strategy no_buffer \
+                --disable-radix-cache \
+                --disable-piecewise-cuda-graph \
+                --disable-custom-all-reduce \
+                --reasoning-parser nemotron_3 \
+                --tool-call-parser qwen3_coder \
+                --stream-interval 20 \
+                --model-loader-extra-config '{"enable_multithread_load": true}' \
+                --weight-loader-prefetch-checkpoints \
+                --attention-backend trtllm_mha \
+                --chunked-prefill-size 32768 \
+                --max-prefill-tokens 16384 \
+                --mem-fraction-static 0.5 \
+                --enable-dp-attention \
+                --enable-dp-lm-head \
+                --load-balance-method total_tokens \
+                --max-running-requests 32 \
+                --cuda-graph-max-bs-decode 32
+          ports:
+            - { containerPort: 18080, name: system, protocol: TCP }
+            - { containerPort: 18081, name: worker, protocol: TCP }
+            - { containerPort: 18082, name: bootstrap, protocol: TCP }
+          startupProbe:
+            httpGet: { path: /live, port: system }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2160
+          livenessProbe:
+            httpGet: { path: /live, port: system }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 8
+          readinessProbe:
+            httpGet: { path: /live, port: system }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          env:
+            - { name: ETCD_ENDPOINTS, value: "http://nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d-etcd:2379" }
+            - { name: NATS_SERVER, value: "nats://nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d-nats:4222" }
+            - { name: DYN_SYSTEM_PORT, value: "18080" }
+            - { name: DYN_LOG, value: "info" }
+            - { name: HF_HOME, value: "/data/hf-cache" }
+            - { name: HF_HUB_OFFLINE, value: "1" }
+            - { name: TRANSFORMERS_OFFLINE, value: "1" }
+            # UCX transport and device identity come from the cluster profile.
+            - { name: UCX_TLS, value: "${RDMA_UCX_TLS}" }
+            - { name: UCX_NET_DEVICES, value: "${RDMA_UCX_NET_DEVICES}" }
+            - { name: UCX_IB_GPU_DIRECT_RDMA, value: "${RDMA_UCX_IB_GPU_DIRECT_RDMA}" }
+            - { name: UCX_IB_ADDR_TYPE, value: "${RDMA_UCX_IB_ADDR_TYPE}" }
+            - { name: UCX_MAX_RNDV_RAILS, value: "${RDMA_UCX_MAX_RNDV_RAILS}" }
+            # Do not force zero-copy rendezvous: clusters without nvidia_peermem cannot register
+            # CUDA memory on an RDMA MD. UCX auto-selects a supported staged path.
+            - { name: UCX_RC_TIMEOUT, value: "18s" }
+            - { name: "SGLANG_DISABLE_DEEP_GEMM", value: "1" }
+            - { name: "NVIDIA_TF32_OVERRIDE", value: "1" }
+            - { name: "SAFETENSORS_FAST_GPU", value: "1" }
+            - { name: "PYTHONUNBUFFERED", value: "1" }
+            - { name: "DYN_SKIP_SGLANG_LOG_FORMATTING", value: "1" }
+            - { name: "SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE", value: "100000" }
+            - { name: "SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT", value: "100000" }
+            - { name: "SGLANG_DISAGGREGATION_WAITING_TIMEOUT", value: "100000" }
+            - { name: "DYN_REQUEST_PLANE", value: "nats" }
+            - { name: "UCX_RNDV_SCHEME", value: "get_zcopy" }
+            - name: POD_UID
+              valueFrom: { fieldRef: { fieldPath: metadata.uid } }
+            - name: POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+          resources:
+            requests:
+              cpu: "64"
+              memory: 768Gi
+              ephemeral-storage: 20Gi
+              nvidia.com/gpu: "4"
+            limits:
+              cpu: "139"
+              memory: 900Gi
+              ephemeral-storage: 100Gi
+              nvidia.com/gpu: "4"
+          volumeMounts:
+            - { mountPath: /data/hf-cache, name: versioned-node-model-cache, readOnly: true }
+            - { mountPath: /dev/shm, name: dshm }
+            - { mountPath: /dev/infiniband, name: dev-infiniband }
+            - { mountPath: /sys/class/infiniband, name: sys-class-infiniband, readOnly: true }
+      volumes:
+        - name: versioned-node-model-cache
+          hostPath: { path: "/mnt/k8s-disks/0/llmb-model-cache/nemotron-ultra-nvfp4/183968f87ae4cedce3039313cac1fd43d112c578", type: Directory }
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 100Gi }
+        - name: dev-infiniband
+          hostPath: { path: /dev/infiniband, type: Directory }
+        - name: sys-class-infiniband
+          hostPath: { path: /sys/class/infiniband, type: Directory }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d-decode
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    llmb.nvidia.com/role: decode
+    llmb.nvidia.com/served-model: nemotron-3-ultra
+spec:
+  replicas: 2
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d-decode } }
+  template:
+    metadata:
+      labels:
+        app: nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d-decode
+        role: decode
+        llmb.nvidia.com/recipe: nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d
+    spec:
+      automountServiceAccountToken: false
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      dnsConfig: { options: [{ name: ndots, value: "2" }] }
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 120
+      schedulerName: ${SCHEDULER_NAME}
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      nodeSelector:
+        nvidia.com/gpu.product: ${GPU_PRODUCT}
+        feature.node.kubernetes.io/rdma.available: "true"
+        feature.node.kubernetes.io/rdma.capable: "true"
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+      # The model-preparation DaemonSet owns population of this revision-specific host cache.
+      # Serving is fail-closed: it cannot start until the exact revision and all shards verify.
+      initContainers:
+        - name: verify-node-model-cache
+          image: nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9
+          imagePullPolicy: IfNotPresent
+          securityContext: { runAsUser: 0 }
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              expected='nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4@183968f87ae4cedce3039313cac1fd43d112c578'
+              actual=$(cat /node-hf-cache/.llmb-cache-ready 2>/dev/null || true)
+              test "$actual" = "$expected" || {
+                echo "FATAL: node cache is not ready for $expected (marker='$actual')" >&2
+                exit 65
+              }
+              SNAPSHOT=$(python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id='nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4', revision='183968f87ae4cedce3039313cac1fd43d112c578', cache_dir='/node-hf-cache/hub', local_files_only=True))")
+              test -s "$SNAPSHOT/config.json"
+              shards=$(find -L "$SNAPSHOT" -maxdepth 1 -name '*.safetensors' -type f | wc -l)
+              test "$shards" -eq 113 || { echo "FATAL: expected 113 checkpoint shards, found $shards" >&2; exit 66; }
+              echo "NODE_CACHE_VERIFIED node=$NODE_NAME revision=183968f87ae4cedce3039313cac1fd43d112c578 shards=$shards"
+          env:
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+          resources:
+            requests: { cpu: "1", memory: 2Gi }
+            limits: { cpu: "4", memory: 8Gi }
+          volumeMounts:
+            - { mountPath: /node-hf-cache, name: versioned-node-model-cache, readOnly: true }
+      containers:
+        - name: sglang
+          image: nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            capabilities: { add: ["IPC_LOCK", "SYS_RESOURCE"] }
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              ulimit -n 1048576 || true
+              ulimit -l unlimited || true
+              SNAPSHOT=$(python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id='nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4', revision='183968f87ae4cedce3039313cac1fd43d112c578', cache_dir='/data/hf-cache/hub', local_files_only=True))")
+              export SNAPSHOT
+              test -s "$SNAPSHOT/config.json" || { echo "FATAL: pinned model snapshot missing at $SNAPSHOT" >&2; exit 64; }
+              echo "MODEL_RUNTIME_BEGIN epoch=$(date +%s) node=$NODE_NAME pod=$POD_NAME snapshot=$SNAPSHOT"
+              exec python3 -m dynamo.sglang \
+                --model-path $SNAPSHOT \
+                --served-model-name nemotron-3-ultra \
+                --host 0.0.0.0 \
+                --port 18081 \
+                --disaggregation-mode decode \
+                --disaggregation-transfer-backend nixl \
+                --context-length 65536 \
+                --tensor-parallel-size 4 \
+                --data-parallel-size 1 \
+                --expert-parallel-size 4 \
+                --trust-remote-code \
+                --skip-tokenizer-init \
+                --kv-cache-dtype fp8_e4m3 \
+                --moe-runner-backend flashinfer_trtllm \
+                --fp8-gemm-backend triton \
+                --mamba-scheduler-strategy no_buffer \
+                --disable-radix-cache \
+                --disable-piecewise-cuda-graph \
+                --disable-custom-all-reduce \
+                --reasoning-parser nemotron_3 \
+                --tool-call-parser qwen3_coder \
+                --stream-interval 30 \
+                --model-loader-extra-config '{"enable_multithread_load": true}' \
+                --weight-loader-prefetch-checkpoints \
+                --attention-backend trtllm_mha \
+                --mem-fraction-static 0.4 \
+                --max-running-requests 64 \
+                --cuda-graph-max-bs-decode 64
+          ports:
+            - { containerPort: 18080, name: system, protocol: TCP }
+            - { containerPort: 18081, name: worker, protocol: TCP }
+          startupProbe:
+            httpGet: { path: /live, port: system }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2160
+          livenessProbe:
+            httpGet: { path: /live, port: system }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 8
+          readinessProbe:
+            httpGet: { path: /live, port: system }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          env:
+            - { name: ETCD_ENDPOINTS, value: "http://nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d-etcd:2379" }
+            - { name: NATS_SERVER, value: "nats://nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d-nats:4222" }
+            - { name: DYN_SYSTEM_PORT, value: "18080" }
+            - { name: DYN_LOG, value: "info" }
+            - { name: HF_HOME, value: "/data/hf-cache" }
+            - { name: HF_HUB_OFFLINE, value: "1" }
+            - { name: TRANSFORMERS_OFFLINE, value: "1" }
+            # UCX transport and device identity come from the cluster profile.
+            - { name: UCX_TLS, value: "${RDMA_UCX_TLS}" }
+            - { name: UCX_NET_DEVICES, value: "${RDMA_UCX_NET_DEVICES}" }
+            - { name: UCX_IB_GPU_DIRECT_RDMA, value: "${RDMA_UCX_IB_GPU_DIRECT_RDMA}" }
+            - { name: UCX_IB_ADDR_TYPE, value: "${RDMA_UCX_IB_ADDR_TYPE}" }
+            - { name: UCX_MAX_RNDV_RAILS, value: "${RDMA_UCX_MAX_RNDV_RAILS}" }
+            # Do not force zero-copy rendezvous: clusters without nvidia_peermem cannot register
+            # CUDA memory on an RDMA MD. UCX auto-selects a supported staged path.
+            - { name: UCX_RC_TIMEOUT, value: "18s" }
+            - { name: "SGLANG_DISABLE_DEEP_GEMM", value: "1" }
+            - { name: "NVIDIA_TF32_OVERRIDE", value: "1" }
+            - { name: "SAFETENSORS_FAST_GPU", value: "1" }
+            - { name: "PYTHONUNBUFFERED", value: "1" }
+            - { name: "DYN_SKIP_SGLANG_LOG_FORMATTING", value: "1" }
+            - { name: "SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE", value: "100000" }
+            - { name: "SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT", value: "100000" }
+            - { name: "SGLANG_DISAGGREGATION_WAITING_TIMEOUT", value: "100000" }
+            - { name: "DYN_REQUEST_PLANE", value: "nats" }
+            - { name: "UCX_RNDV_SCHEME", value: "get_zcopy" }
+            - name: POD_UID
+              valueFrom: { fieldRef: { fieldPath: metadata.uid } }
+            - name: POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+          resources:
+            requests:
+              cpu: "64"
+              memory: 768Gi
+              ephemeral-storage: 20Gi
+              nvidia.com/gpu: "4"
+            limits:
+              cpu: "139"
+              memory: 900Gi
+              ephemeral-storage: 100Gi
+              nvidia.com/gpu: "4"
+          volumeMounts:
+            - { mountPath: /data/hf-cache, name: versioned-node-model-cache, readOnly: true }
+            - { mountPath: /dev/shm, name: dshm }
+            - { mountPath: /dev/infiniband, name: dev-infiniband }
+            - { mountPath: /sys/class/infiniband, name: sys-class-infiniband, readOnly: true }
+      volumes:
+        - name: versioned-node-model-cache
+          hostPath: { path: "/mnt/k8s-disks/0/llmb-model-cache/nemotron-ultra-nvfp4/183968f87ae4cedce3039313cac1fd43d112c578", type: Directory }
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 100Gi }
+        - name: dev-infiniband
+          hostPath: { path: /dev/infiniband, type: Directory }
+        - name: sys-class-infiniband
+          hostPath: { path: /sys/class/infiniband, type: Directory }

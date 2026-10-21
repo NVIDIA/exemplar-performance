@@ -4,21 +4,23 @@ This recipe contains information and scripts to produce performance results for 
 
 ## GB300
 
-| GPT OSS Model Size |  GPUs  | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |  DP  | VP  | MBS |   GBS    | GA  |  CG   |
-| ------------------ | :----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :--: | :-: | :-: | :------: | :-: | :---: |
-| 120b               | 64-512 |   BF16   |  4096  |   36   | False |  1  |  1  |  1  | 64  |  1  | GPUs | NA  |  4  | GPUs\*20 |  5  | False |
+| GPT OSS Model Size |                 GPUs                  | Datatype  | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |  DP  | VP  | MBS |   GBS    | GA  |  CG  |
+| ------------------ | :-----------------------------------: | :-------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :--: | :-: | :-: | :------: | :-: | :--: |
+| 120b               |           64, 128, 256, 512           |   BF16    |  4096  |   36   | False |  1  |  1  |  1  | 64  |  1  | GPUs | NA  |  4  | GPUs\*20 |  5  | True |
+| 120b               |           64, 128, 256, 512           |    FP8    |  4096  |   36   | False |  1  |  1  |  1  | 16  |  1  | GPUs | NA  |  4  | GPUs\*20 |  5  | True |
+| 120b               | 72, 144, 216, 288, 360, 432, 504, 576 | BF16, FP8 |  4096  |   36   | False |  1  |  1  |  1  |  8  |  1  | GPUs | NA  |  5  | GPUs\*20 |  4  | True |
 
 ## GB200
 
-| GPT OSS Model Size |  GPUs  | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |  DP  | VP  | MBS |   GBS    | GA  |  CG   |
-| ------------------ | :----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :--: | :-: | :-: | :------: | :-: | :---: |
-| 120b               | 64-512 |   BF16   |  4096  |   36   | False |  1  |  1  |  1  | 64  |  1  | GPUs | NA  |  4  | GPUs\*20 |  5  | False |
+| GPT OSS Model Size |  GPUs  | Datatype  | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |  DP  | VP  | MBS |   GBS    | GA  |           CG           |
+| ------------------ | :----: | :-------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :--: | :-: | :-: | :------: | :-: | :--------------------: |
+| 120b               | 64-512 | BF16, FP8 |  4096  |   36   | False |  1  |  1  |  1  | 64  |  1  | GPUs | NA  |  4  | GPUs\*20 |  5  | BF16: False, FP8: True |
 
 ## B300
 
-| GPT OSS Model Size |  GPUs  | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |  DP  | VP  | MBS |   GBS    | GA  |  CG   |
-| ------------------ | :----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :--: | :-: | :-: | :------: | :-: | :---: |
-| 120b               | 64-512 |   BF16   |  4096  |   36   | False |  1  |  1  |  1  |  8  |  1  | GPUs | NA  |  4  | GPUs\*20 |  5  | False |
+| GPT OSS Model Size |  GPUs  | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |  DP  | VP  | MBS |   GBS    | GA  |  CG  |
+| ------------------ | :----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :--: | :-: | :-: | :------: | :-: | :--: |
+| 120b               | 64-512 |   BF16   |  4096  |   36   | False |  1  |  1  |  1  |  8  |  1  | GPUs | NA  |  4  | GPUs\*20 |  5  | True |
 
 ## B200
 
@@ -96,13 +98,13 @@ Requires Python 3.12.x, or conda.
 
 ## Slurm
 
-We reference a number of Slurm commands and parameters in this document. A brief summary is included below. It's important to note these are a guide and might not be applicable to all environments. Please consult with your system administrator for the parameters that are specific to your system.
+This document references several Slurm commands and parameters. A brief summary is included below. Note that these are guidelines and might not apply to all environments. Consult your system administrator for the parameters specific to your system.
 
 **Common parameters:**
 
 - `SBATCH_PARTITION` or `-p` - Partition (or queue) to use.
-- `SBATCH_ACCOUNT` or `-A` - Slurm account to associate with your job, different from your user. Meant for accounting purposes.
-- `SBATCH_GPUS_PER_NODE` or `--gres=gpu:<num gpus>` - If your cluster is configured with GRES this should be set to all GPUs in a node. Ignore if not configured.
+- `SBATCH_ACCOUNT` or `-A` - Slurm account to associate with your job, different from your user. Used for accounting purposes.
+- `SBATCH_GPUS_PER_NODE` or `--gres=gpu:<num gpus>` - If your cluster is configured with GRES, this should be set to all GPUs in a node. Ignore if not configured.
   - Encountering errors such as 'GPUs not found' or 'Cannot submit to this partition without GPU resources' means this setting is required.
 
 These parameters can be set either by exporting the environment variable or using the corresponding `sbatch` flag.
@@ -192,6 +194,9 @@ JOB_TOTAL_GPUS=<number> GPU_TYPE=<type> [DTYPE=<precision>] [ADDITIONAL_SLURM_PA
 
 **Optional:**
 
+- `DTYPE`: Precision format (default: `bf16`)
+  - `bf16` - BFloat16 precision
+  - `fp8` - FP8 precision, GB300/GB200 only; uses the MX scaling recipe
 - `ADDITIONAL_SLURM_PARAMS`: Extra `sbatch` flags (e.g. `--nodelist`, `--reservation`), semicolon-separated
   - Example: `"nodelist=node001,node002;reservation=my_reservation;exclusive"`
 
@@ -234,9 +239,9 @@ Profiling is supported with Nsight Systems or PyTorch Profiler.
 
 ## Run Nsight Profiling
 
-To enable profiling with Nsight Systems set variable `ENABLE_PROFILE=true` or use the `-p` flag when submitting your job. The job will run for a total of 50 steps where steps 45-50 will be profiled.
+To enable profiling with Nsight Systems, set `ENABLE_PROFILE=true` or use the `-p` flag when submitting your job. The job will run for a total of 50 steps where steps 45-50 will be profiled.
 
-In order to view the resulting profiles, ensure you have the latest version of Nsight Systems installed. For more information visit: [Nsight Systems](https://docs.nvidia.com/nsight-systems/)
+To view the resulting profiles, ensure you have the latest version of Nsight Systems installed. For more information, visit [Nsight Systems](https://docs.nvidia.com/nsight-systems/).
 
 ### Default Profiling Settings:
 
@@ -272,14 +277,14 @@ ENABLE_GPU_METRICS=true llmb-run submit -w pretrain_gpt_oss --scale 64 -p
 
 ### Viewing results
 
-In order to view the profile traces (\*.nsys-rep files) interactively:
+To view the profile traces (\*.nsys-rep files) interactively:
 
 - Install the latest [Nsight Systems client](https://developer.nvidia.com/nsight-systems/get-started) on your preferred system
-- Copy the generated .nsys-rep files to a folder on your preferred system. E.g., /home/nsight-traces/
-- Open Nsight Systems client, then click "File | Open" and select one or more .nsys-rep files from /home/nsight-systems folder. For more details, see [Reading Your Report in GUI guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#opening-an-existing-report).
+- Copy the generated .nsys-rep files to a folder on your preferred system, for example `/home/nsight-traces/`.
+- Open Nsight Systems client, then click "File | Open" and select one or more .nsys-rep files from that folder. For more details, see [Reading Your Report in GUI guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#opening-an-existing-report).
 - Once loaded you can analyze the workload behavior to learn about any performance bottlenecks associated with the job run.
 
-Since most of the benchmarking jobs run on multiple GPUs, there will be multiple .nsys-rep files generated for each run. [Multi-Report Analysis Guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#multi-report-analysis) will be very helpful to automate the analysis and get to results quicker by using Nsight recipes.
+Because most benchmarking jobs run on multiple GPUs, each run generates multiple .nsys-rep files. The [Multi-Report Analysis Guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#multi-report-analysis) can help automate the analysis and get to results more quickly using Nsight recipes.
 
 **See** these [tutorials](https://developer.nvidia.com/nsight-systems/get-started#tutorials) to get a quick start if you are new to Nsight profiling.
 

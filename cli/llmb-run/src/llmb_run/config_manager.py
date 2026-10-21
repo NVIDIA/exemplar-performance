@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 """Configuration management for llmb-run."""
 
@@ -25,6 +7,7 @@ import logging
 import os
 import pathlib
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Dict
 
 import yaml
@@ -38,6 +21,13 @@ _LEGACY_SCHEMA_VERSION = 1
 _CURRENT_SCHEMA_VERSION = 2
 _FLAT_CLUSTER_KEYS = {'gpu_type', 'llmb_install', 'llmb_repo', 'cluster_name'}
 _REQUIRED_CLUSTER_KEYS = ('gpu_type', 'llmb_install', 'llmb_repo')
+
+
+class ExecutionTarget(StrEnum):
+    """Where a workload can be executed (mirrors cluster_config.yaml's ``execution_target``)."""
+
+    SLURM = 'slurm'
+    KUBERNETES = 'kubernetes'
 
 
 @dataclass(frozen=True)
@@ -111,6 +101,9 @@ class ClusterConfig:
     workloads: WorkloadsConfig
     environment: Dict[str, Any]
     cwd: pathlib.Path
+    nvl_domain: int | None = None
+    nvl_block_sizes: list[int] | None = None
+    execution_target: ExecutionTarget = ExecutionTarget.SLURM
     extras: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -147,13 +140,48 @@ class ClusterConfig:
             'llmb_install',
             'llmb_repo',
             'cluster_name',
+            'execution_target',
             'install',
             'slurm',
             'workloads',
             'environment',
             'cwd',
+            'nvl_domain',
+            'nvl_block_sizes',
         }
         extras = {key: value for key, value in normalized_config.items() if key not in known_top_level_keys}
+
+        nvl_domain = normalized_config.get('nvl_domain')
+        if nvl_domain is not None and (
+            not isinstance(nvl_domain, int) or isinstance(nvl_domain, bool) or nvl_domain <= 0
+        ):
+            raise ValueError("Invalid cluster configuration: 'nvl_domain' must be a positive integer when provided.")
+        nvl_block_sizes = normalized_config.get('nvl_block_sizes')
+        if nvl_block_sizes is not None and (
+            not isinstance(nvl_block_sizes, list)
+            or any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in nvl_block_sizes)
+        ):
+            raise ValueError(
+                "Invalid cluster configuration: 'nvl_block_sizes' must be a list of positive integers when provided."
+            )
+
+        # An explicit execution_target decides; there is no block-presence fallback.
+        raw_execution_target = normalized_config.get('execution_target')
+        if raw_execution_target is None:
+            raw_execution_target = ExecutionTarget.SLURM
+        try:
+            execution_target = ExecutionTarget(raw_execution_target)
+        except ValueError as e:
+            raise ValueError(
+                f"Invalid cluster configuration: unknown execution_target '{raw_execution_target}'. "
+                "Expected 'slurm' or 'kubernetes'."
+            ) from e
+        if 'kubernetes' in normalized_config and execution_target != ExecutionTarget.KUBERNETES:
+            raise ValueError(
+                "Invalid cluster configuration: a 'kubernetes' block is present but "
+                f"execution_target is '{execution_target}'. Remove the block or set "
+                "execution_target: kubernetes."
+            )
 
         return cls(
             schema_version=normalized_config[_SCHEMA_VERSION_KEY],
@@ -161,11 +189,14 @@ class ClusterConfig:
             llmb_install=normalized_config['llmb_install'],
             llmb_repo=normalized_config['llmb_repo'],
             cluster_name=normalized_config.get('cluster_name'),
+            execution_target=execution_target,
             install=install,
             slurm=slurm,
             workloads=workloads,
             environment=dict(environment),
             cwd=cwd,
+            nvl_domain=nvl_domain,
+            nvl_block_sizes=list(nvl_block_sizes) if nvl_block_sizes is not None else None,
             extras=extras,
         )
 
@@ -394,8 +425,14 @@ def _get_new_target_blocks(
 def resolve_slurm_targets(config: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
     slurm_config = config.get('slurm', {})
     if not slurm_config:
+        if config.get('execution_target') == ExecutionTarget.KUBERNETES:
+            # Kubernetes/WorkloadRun cluster — no Slurm config needed. Return empty
+            # targets so SLURM-oriented fields resolve to '' instead of failing config
+            # load; non-SLURM launchers (nvcre) never touch them.
+            return {'gpu': {}, 'cpu': {}}
         raise ValueError(
-            "Missing required 'slurm' section in cluster configuration. llmb-run currently requires Slurm settings."
+            "Missing required 'slurm' section in cluster configuration. "
+            "Slurm clusters need Slurm settings; for Kubernetes set execution_target: kubernetes."
         )
     if not isinstance(slurm_config, dict):
         raise ValueError("Invalid Slurm configuration: 'slurm' section must be a dictionary.")
@@ -471,4 +508,24 @@ def get_cluster_config() -> ClusterConfig:
     # Add current working directory for output logs
     config['cwd'] = pathlib.Path.cwd()
     # Resolve and validate Slurm targets once during load, then expose typed config object.
-    return ClusterConfig.from_dict(config)
+    cluster_config = ClusterConfig.from_dict(config)
+    _export_kubeconfig(cluster_config)
+    return cluster_config
+
+
+def _export_kubeconfig(config: ClusterConfig) -> None:
+    """Make kubectl/nvcrectl use the kubeconfig the install was validated against.
+
+    Every runtime kubectl/nvcrectl call (launch, status polling, logs, cancel, and the
+    launch.sh subprocess that submits the WorkloadRun) inherits this process's environment,
+    so exporting KUBECONFIG once here covers all of them. Without it they use the ambient
+    default context, which can be a different cluster.
+    """
+    kubeconfig = (
+        (config.extras.get('kubernetes') or {}).get('kubeconfig')
+        if config.execution_target == ExecutionTarget.KUBERNETES
+        else None
+    )
+    if kubeconfig:
+        os.environ['KUBECONFIG'] = os.path.expanduser(str(kubeconfig))
+        logger.debug(f"Using kubeconfig from cluster config: {os.environ['KUBECONFIG']}")

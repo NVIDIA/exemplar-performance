@@ -1,0 +1,154 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+envelope:
+  name: nemotron-ultra-gb300-sglang-dynamo14-50k2k-8p2d
+  model: nemotron-ultra-nvfp4
+  gpu_type: GB300
+  arch: arm64
+  engine: sglang
+  serving_mode: disaggregated
+  framework: dynamo
+  scenario: llm-perf
+  distribution: synthetic
+  mode: synthetic
+  launcher: aiperf
+  goal: pareto
+  status: wip
+  results_link: ./RESULTS.md
+  provenance:
+    schema_version: k8s.llm-perf.v1
+    official: false
+    source_image_tag: nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.4.0-inkling-dev.1
+    image_digest: sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9
+    image_ref: nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9
+  exemplar:
+    metric: pareto_geomean
+    unit: geomean(tps/gpu*tps/user)
+    reference: null
+    tolerance_pct: 5
+    comparison: point-by-point geomean g(p)=sqrt(Output-TPS/GPU * Output-TPS/user) per rung; scalar = geomean over rungs
+  requires:
+    gpu: { count: 40 }
+    rdma: true
+    infra: [etcd, nats]
+    tolerations: [ nvidia.com/gpu ]
+
+serving:
+  stack: sglang-disagg-gb300
+  model_repo: nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4
+  model_revision: 183968f87ae4cedce3039313cac1fd43d112c578
+  served_model: nemotron-3-ultra
+  # Weights are served read-only from the node-local copy prepared by
+  # serving/sglang-disagg-gb300/node-cache/nemotron-ultra-nvfp4-183968f8.yaml.
+  model_cache_staging:
+    mode: node-local-versioned-hostpath
+    host_path: /mnt/k8s-disks/0/llmb-model-cache/nemotron-ultra-nvfp4/183968f87ae4cedce3039313cac1fd43d112c578
+    expected_shards: 113
+  telemetry_container: sglang
+  startup_timeout_s: 21600
+  tp: 4
+  frontend_replicas: 1
+  context_length: 65536
+  # Nemotron-3 Ultra hybrid Mamba-2 + MoE + attention, 550B/55B-active, 512 experts, NVFP4 weights.
+  # DeepGemm off (NVFP4 checkpoint is not ue8m0-scaled); TF32 + fast safetensors load.
+  disagg:
+    transfer_backend: nixl
+    prefill:
+      replicas: 8
+      nodes_per_worker: 1
+      tp: 4
+      dp: 1
+      ep: 4
+      env:
+        - { name: SGLANG_DISABLE_DEEP_GEMM, value: "1" }
+        - { name: NVIDIA_TF32_OVERRIDE, value: "1" }
+        - { name: SAFETENSORS_FAST_GPU, value: "1" }
+        - { name: PYTHONUNBUFFERED, value: "1" }
+        - { name: DYN_SKIP_SGLANG_LOG_FORMATTING, value: "1" }
+        - { name: SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE, value: "100000" }
+        - { name: SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT, value: "100000" }
+        - { name: SGLANG_DISAGGREGATION_WAITING_TIMEOUT, value: "100000" }
+        - { name: DYN_REQUEST_PLANE, value: "nats" }
+        - { name: UCX_RNDV_SCHEME, value: "get_zcopy" }
+      extra_args:
+        - "--trust-remote-code"
+        - "--kv-cache-dtype fp8_e4m3"
+        - "--moe-runner-backend flashinfer_trtllm"
+        - "--fp8-gemm-backend triton"
+        - "--mamba-scheduler-strategy no_buffer"
+        - "--disable-radix-cache"
+        - "--disable-piecewise-cuda-graph"
+        - "--disable-custom-all-reduce"
+        - "--reasoning-parser nemotron_3"
+        - "--tool-call-parser qwen3_coder"
+        - "--stream-interval 20"
+        - "--model-loader-extra-config '{\"enable_multithread_load\": true}'"
+        - "--weight-loader-prefetch-checkpoints"
+        - "--attention-backend trtllm_mha"
+        - "--chunked-prefill-size 32768"
+        - "--max-prefill-tokens 16384"
+        - "--mem-fraction-static 0.5"
+        - "--enable-dp-attention"
+        - "--enable-dp-lm-head"
+        - "--load-balance-method total_tokens"
+        - "--max-running-requests 32"
+        - "--cuda-graph-max-bs-decode 32"
+    decode:
+      replicas: 2
+      nodes_per_worker: 1
+      tp: 4
+      dp: 1
+      ep: 4
+      env:
+        - { name: SGLANG_DISABLE_DEEP_GEMM, value: "1" }
+        - { name: NVIDIA_TF32_OVERRIDE, value: "1" }
+        - { name: SAFETENSORS_FAST_GPU, value: "1" }
+        - { name: PYTHONUNBUFFERED, value: "1" }
+        - { name: DYN_SKIP_SGLANG_LOG_FORMATTING, value: "1" }
+        - { name: SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE, value: "100000" }
+        - { name: SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT, value: "100000" }
+        - { name: SGLANG_DISAGGREGATION_WAITING_TIMEOUT, value: "100000" }
+        - { name: DYN_REQUEST_PLANE, value: "nats" }
+        - { name: UCX_RNDV_SCHEME, value: "get_zcopy" }
+      extra_args:
+        - "--trust-remote-code"
+        - "--skip-tokenizer-init"
+        - "--kv-cache-dtype fp8_e4m3"
+        - "--moe-runner-backend flashinfer_trtllm"
+        - "--fp8-gemm-backend triton"
+        - "--mamba-scheduler-strategy no_buffer"
+        - "--disable-radix-cache"
+        - "--disable-piecewise-cuda-graph"
+        - "--disable-custom-all-reduce"
+        - "--reasoning-parser nemotron_3"
+        - "--tool-call-parser qwen3_coder"
+        - "--stream-interval 30"
+        - "--model-loader-extra-config '{\"enable_multithread_load\": true}'"
+        - "--weight-loader-prefetch-checkpoints"
+        - "--attention-backend trtllm_mha"
+        - "--mem-fraction-static 0.4"
+        - "--max-running-requests 64"
+        - "--cuda-graph-max-bs-decode 64"
+
+bench:
+  synthetic:
+    isl: 50000
+    isl_stddev: 0
+    osl: 2048
+    osl_stddev: 0
+    num_entries: 2560
+    request_count_multiplier: 2
+    warmup_request_multiplier: 2
+    seed: 42
+    nominal_isl: 50000
+    nominal_osl: 2048
+  sweep_concurrency: [1, 4, 8, 16, 32]
+  sweep_mode: fixed
+  # ignore_eos so the model does not stop before the full output length
+  extra_inputs: "ignore_eos:true"
+  endpoint_type: completions
+  connection_reuse: sticky-user-sessions
+  request_timeout_s: 3600
+  bench_pod_port_tuning: initcontainer
+  gpu_telemetry: true

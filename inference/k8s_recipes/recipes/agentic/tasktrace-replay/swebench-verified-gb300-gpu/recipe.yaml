@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# TaskTrace replay on Kubernetes, the twin of inference/slurm_recipes/agentic/tasktrace-replay-gpu/swebench-verified:
+# serves Nemotron 3 Ultra NVFP4 with vLLM on one GB300 node and replays the shipped GPU trajectory against it in the
+# agent loop's recorded order, its tool calls in the task image and its LLM calls against the server.
+envelope:
+  name: tasktrace-replay-swebench-verified-gb300-gpu
+  model: nemotron-3-ultra-nvfp4
+  gpu_type: gb300
+  arch: arm64
+  engine: vllm
+  serving_mode: aggregated
+  scenario: agentic
+  distribution: swebench-verified
+  mode: tasktrace-replay
+  launcher: tasktrace
+  goal: replay-fidelity
+  status: wip
+  results_link: ./RESULTS.md
+  provenance:
+    schema_version: k8s.agentic.v1
+    image_ref: nvcr.io/nvidia/ai-dynamo/vllm-runtime@sha256:9fefbd10b63c52030326e22ed0eb9d87082fee53709fe327b5b2773e267792bc
+    image_digest: sha256:9fefbd10b63c52030326e22ed0eb9d87082fee53709fe327b5b2773e267792bc
+  exemplar:
+    metric: replay_tool_busy_sec
+    unit: s
+    reference: null
+    tolerance_pct: 5
+    comparison: longest per-container replay tool time over every rung, measured without a reference; every replay must pass the TaskTrace check (fidelity PASS, every recorded LLM call replayed, clean exits); scored by analysis/agentic/aggregate_metrics.py + scripts/run_result.py
+  requires:
+    gpu: { count: 4 }
+    tolerations: [nvidia.com/gpu, kubernetes.io/arch]
+    storage: [MODEL_CACHE_PVC]      # the model weights, and tasktrace/ (staged trajectory and tools)
+    secrets: [IMAGE_PULL_SECRET]
+
+# The Slurm *-gpu recipes' server (common/serving/nemotron-3-ultra-nvfp4.env): aggregated vLLM, TP4 on one GB300
+# node. The image is envelope.provenance.image_ref.
+serving:
+  stack: vllm-agg
+  tp: 4
+  served_model: nemotron-3-ultra-nvfp4
+  api_protocol: openai-compatible
+  model_repo: nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4
+  model_revision: 183968f87ae4cedce3039313cac1fd43d112c578
+  max_model_len: 262144
+  gpu_mem_util: 0.90
+  startup_timeout_s: 1800 # as the Slurm serving config: cold load of the checkpoint from the shared model cache
+  # No probes beyond startup, as on Slurm: vLLM exits on a real crash.
+  liveness_enabled: false
+  readiness_enabled: false
+  offload: false
+  # The replay keeps CPUs 0-3 (tasktrace.replay.cpus); the server takes the rest of the node, as on Slurm.
+  cpuset: "4-139"
+  env:
+    - { name: HF_HUB_OFFLINE, value: "1" }
+    - { name: TRANSFORMERS_OFFLINE, value: "1" }
+    - { name: VLLM_ATTENTION_BACKEND, value: FLASHINFER }
+  extra_args:
+    - --disable-custom-all-reduce
+    - --enable-expert-parallel
+    - --kv-cache-dtype fp8
+    - --mamba-ssm-cache-dtype float16
+    - --enable-chunked-prefill
+    - --enable-prefix-caching
+    - --enable-prompt-tokens-details
+    - --tool-call-parser qwen3_coder
+    - --reasoning-parser nemotron_v3
+    - --enable-auto-tool-choice
+    - "--override-generation-config '{\"temperature\": 1.0, \"top_p\": 0.95}'"
+
+tasktrace:
+  trace:
+    selector: nemotron-3-ultra-vllm_miniswe_django-11490
+    path: inference/trajectories/nemotron-3-ultra-vllm/mini-swe-agent/swebench-verified/django__django-11490
+    sha256: 4a02b6545905e5b319f872212b7082ae46be74b9e0e7718edca3cfce16d621e2
+  image:
+    ref: ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78
+    digest: sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78
+    arch: aarch64
+    workdir: /testbed
+  replay:
+    pacing: unpaced      # the shipped GPU trajectory has no recorded timings: both sides keep the recorded loop order
+    cpus: 4
+  resources:
+    cpu: 8
+    memory: 64Gi
+    wall_limit_sec: 3600 # Slurm --time=01:00:00
+  sweep:
+    rungs: [1]

@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 """Command-line interface for LLMB installer.
 
@@ -25,6 +7,7 @@ This module handles CLI argument parsing and provides the entry point for the in
 """
 
 import argparse
+import subprocess
 import traceback
 
 from llmb_install.constants import EXIT_CANCELLED
@@ -165,8 +148,17 @@ def main() -> None:
         print("\n\nInstallation cancelled by user.")
         raise SystemExit(EXIT_CANCELLED) from None
     except Exception as e:
+        verbose = getattr(args, 'verbose', False)
         print(f"\nError: {type(e).__name__}: {e}")
-        if getattr(args, 'verbose', False):
+        if not verbose:
+            # The verbose traceback already includes the notes.
+            for note in getattr(e, '__notes__', ()):
+                print(note)
+        if isinstance(e, subprocess.CalledProcessError):
+            for output in (e.stdout, e.stderr):
+                if output:
+                    print(output.strip())
+        if verbose:
             traceback.print_exc()
         else:
             print("Run with --verbose for the full traceback.")

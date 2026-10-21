@@ -1,0 +1,133 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: "kimi_k26_nvfp4_trtllm_dynamo_isl32k_osl4k_low_latency_1x4x16x32x64"
+
+identity:
+  model:
+    repo: "nvidia/Kimi-K2.6-NVFP4"
+    revision: "2fd3a800dedd098b8327eb49e93ebc75f85da19f"
+  container:
+    image: "nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:1.1.0-dev.2"
+
+# Low-curve profile tuned from proven Kimi2.5 TRTLLM+Dynamo GB200 setup.
+# Target concurrencies: 1, 4, 16, 32, 64
+model:
+  path: "kimi26-nvfp4"
+  container: "trtllm-runtime-1.1.0-dev.2"
+  precision: "fp4"
+
+resources:
+  gpu_type: "gb200"
+
+  # Prefill: 1 worker x TP4 = 4 GPUs = 1 node
+  prefill_nodes: 1
+  prefill_workers: 1
+  gpus_per_prefill: 4
+
+  # Decode: 5 workers x TP4 = 20 GPUs = 5 nodes
+  decode_workers: 5
+  decode_nodes: 5
+  gpus_per_decode: 4
+
+  gpus_per_node: 4
+
+backend:
+  type: trtllm
+
+  prefill_environment:
+    ENROOT_ALLOW_DEV: "yes"
+    NCCL_GRAPH_MIXING_SUPPORT: "0"
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+    TLLM_LOG_LEVEL: "INFO"
+    TRTLLM_ENABLE_PDL: "1"
+    TRTLLM_SERVER_DISABLE_GC: "1"
+    TRTLLM_WORKER_DISABLE_GC: "1"
+
+  decode_environment:
+    ENROOT_ALLOW_DEV: "yes"
+    NCCL_GRAPH_MIXING_SUPPORT: "0"
+    TLLM_AUTOTUNER_LOG_LEVEL_DEBUG_TO_INFO: "1"
+    TLLM_LOG_LEVEL: "INFO"
+    TRTLLM_ENABLE_PDL: "1"
+    TRTLLM_SERVER_DISABLE_GC: "1"
+    TRTLLM_WORKER_DISABLE_GC: "1"
+
+  trtllm_config:
+    prefill:
+      tensor_parallel_size: 4
+      moe_expert_parallel_size: 4
+      pipeline_parallel_size: 1
+      enable_attention_dp: false
+      disable_overlap_scheduler: true
+      trust_remote_code: true
+      max_batch_size: 1
+      max_num_tokens: 32768
+      max_seq_len: 32808
+      print_iter_log: true
+      cuda_graph_config: null
+      moe_config:
+        backend: TRTLLM
+      kv_cache_config:
+        dtype: fp8
+        enable_block_reuse: false
+        free_gpu_memory_fraction: 0.4
+      cache_transceiver_config:
+        backend: UCX
+        max_tokens_in_buffer: 32768
+
+    decode:
+      tensor_parallel_size: 4
+      moe_expert_parallel_size: 4
+      pipeline_parallel_size: 1
+      enable_attention_dp: false
+      enable_lm_head_tp_in_adp: false
+      trust_remote_code: true
+      max_batch_size: 16
+      max_num_tokens: 16
+      max_seq_len: 36904
+      print_iter_log: true
+      stream_interval: 100
+      num_postprocess_workers: 4
+      cuda_graph_config:
+        enable_padding: true
+        batch_sizes:
+          - 1
+          - 2
+          - 4
+          - 8
+          - 16
+      moe_config:
+        backend: TRTLLM
+        use_low_precision_moe_combine: true
+      kv_cache_config:
+        dtype: fp8
+        enable_block_reuse: false
+        free_gpu_memory_fraction: 0.9
+      cache_transceiver_config:
+        backend: UCX
+        max_tokens_in_buffer: 65536
+      nvfp4_gemm_config:
+        allowed_backends:
+          - cutlass
+          - cublaslt
+          - cutedsl
+          - cuda_core
+
+benchmark:
+  type: "sa-bench"
+  isl: 32768
+  osl: 4096
+  concurrencies: "1x4x16x32x64"
+  req_rate: "inf"
+
+frontend:
+  type: "dynamo"
+  enable_multiple_frontends: false
+
+health_check:
+  max_attempts: 360
+  interval_seconds: 10
+
+dynamo:
+  install: false

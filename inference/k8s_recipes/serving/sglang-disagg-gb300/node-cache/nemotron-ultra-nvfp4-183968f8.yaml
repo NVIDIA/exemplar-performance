@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nemotron-ultra-nvfp4-183968f8-node-cache
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-model-cache
+    llmb.nvidia.com/model: nemotron-ultra-nvfp4
+    llmb.nvidia.com/model-revision: 183968f87ae4cedce3039313cac1fd43d112c578
+spec:
+  selector:
+    matchLabels:
+      app: nemotron-ultra-nvfp4-183968f8-node-cache
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 100% }
+  template:
+    metadata:
+      labels:
+        app: nemotron-ultra-nvfp4-183968f8-node-cache
+        app.kubernetes.io/managed-by: llmb-model-cache
+        llmb.nvidia.com/model: nemotron-ultra-nvfp4
+        llmb.nvidia.com/model-revision: 183968f87ae4cedce3039313cac1fd43d112c578
+    spec:
+      automountServiceAccountToken: false
+      schedulerName: ${SCHEDULER_NAME}
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      nodeSelector:
+        nvidia.com/gpu.product: ${GPU_PRODUCT}
+        kubernetes.io/arch: arm64
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: prepare-and-verify
+          image: nvcr.io/nvidia/ai-dynamo/sglang-runtime@sha256:9669f112b901105e629d5b1289770c8b4fe7881add1743ef8534a0b0c4dfb7b9
+          imagePullPolicy: IfNotPresent
+          securityContext: { runAsUser: 0 }
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              expected='nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4@183968f87ae4cedce3039313cac1fd43d112c578'
+              marker=/node-hf-cache/.llmb-cache-ready
+              if [[ "$(cat "$marker" 2>/dev/null || true)" != "$expected" ]]; then
+                started=$(date +%s)
+                echo "NODE_CACHE_PREPARE_BEGIN epoch=$started node=$NODE_NAME expected=$expected"
+                mkdir -p /node-hf-cache
+                cp -a /fsx-hf-cache/. /node-hf-cache/
+                sync
+                SNAPSHOT=$(python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id='nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4', revision='183968f87ae4cedce3039313cac1fd43d112c578', cache_dir='/node-hf-cache/hub', local_files_only=True))")
+                test -s "$SNAPSHOT/config.json"
+                shards=$(find -L "$SNAPSHOT" -maxdepth 1 -name '*.safetensors' -type f | wc -l)
+                test "$shards" -eq 113 || { echo "FATAL: expected 113 checkpoint shards, found $shards" >&2; exit 66; }
+                printf '%s\n' "$expected" > "$marker.tmp"
+                mv "$marker.tmp" "$marker"
+                finished=$(date +%s)
+                echo "NODE_CACHE_PREPARE_COMPLETE epoch=$finished elapsed_seconds=$((finished-started)) node=$NODE_NAME shards=$shards"
+              else
+                echo "NODE_CACHE_REUSE node=$NODE_NAME expected=$expected"
+              fi
+              while true; do sleep 3600; done
+          env:
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+          readinessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -lc
+                - test "$(cat /node-hf-cache/.llmb-cache-ready 2>/dev/null)" = 'nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4@183968f87ae4cedce3039313cac1fd43d112c578'
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests: { cpu: "8", memory: 16Gi }
+            limits: { cpu: "64", memory: 128Gi }
+          volumeMounts:
+            - { name: model-cache, mountPath: /fsx-hf-cache, readOnly: true, subPath: ${MODEL_CACHE_SUBPATH} }
+            - { name: versioned-node-model-cache, mountPath: /node-hf-cache }
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim: { claimName: ${MODEL_CACHE_PVC} }
+        - name: versioned-node-model-cache
+          hostPath:
+            path: /mnt/k8s-disks/0/llmb-model-cache/nemotron-ultra-nvfp4/183968f87ae4cedce3039313cac1fd43d112c578
+            type: DirectoryOrCreate

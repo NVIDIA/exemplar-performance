@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+general:
+  workload: tasktrace_replay_gpu
+  workload_type: inference   # skipped by llmb-run's post-processing; the recipe writes its own summary.json
+  framework: tasktrace
+  display_name: tasktrace-replay-gpu-swebench-verified
+
+container:
+  images:
+    by_gpu:
+      gb300:
+        - 'ghcr.io#epoch-research/swe-bench.eval.arm64.django__django-11490:sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78'
+        - 'nvcr.io#nvidia/ai-dynamo/vllm-runtime:sha256:9fefbd10b63c52030326e22ed0eb9d87082fee53709fe327b5b2773e267792bc'
+      gb200:
+        - 'ghcr.io#epoch-research/swe-bench.eval.arm64.django__django-11490:sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78'
+        - 'nvcr.io#nvidia/ai-dynamo/vllm-runtime:sha256:9fefbd10b63c52030326e22ed0eb9d87082fee53709fe327b5b2773e267792bc'
+
+downloads:
+  huggingface:
+    repos:
+      - repo_id: nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4
+        repo_type: model
+        revision: 183968f87ae4cedce3039313cac1fd43d112c578
+        target: shared
+        name: NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4
+        when:
+          gpu: [gb300, gb200]
+
+setup:
+  venv_req: false
+  tasks:
+    - name: install_tasktrace_replay
+      cmd: '../../common/install_tasktrace_replay.sh'
+      job_type: local
+
+run:
+  launcher_type: 'configured_sbatch'
+  launch_script: 'launch.sh'
+  requires_gpus: true
+  gpu_configs:
+    gb300:
+      model_configs:
+        - model_size: 'nemotron-3-ultra-vllm_miniswe_django-11490'
+          dtypes: ['nvfp4']
+          scales: [4]
+          exact_scales: true
+    gb200:
+      model_configs:
+        - model_size: 'nemotron-3-ultra-vllm_miniswe_django-11490'
+          dtypes: ['nvfp4']
+          scales: [4]
+          exact_scales: true

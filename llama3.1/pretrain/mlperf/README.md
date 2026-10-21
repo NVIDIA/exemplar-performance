@@ -10,17 +10,17 @@ The supported configurations are fixed MLPerf-oriented presets.
 
 ## GB300
 
-| Precision | GPUs | Variant | SeqLen | Layers |  TP |  PP |  CP |  DP | VP  | MBS | GBS |  GA |
-| :-------- | ---: | :-----: | -----: | -----: | --: | --: | --: | --: | :-- | --: | --: | --: |
-| NVFP4     |    8 |   v1    |   8192 |     32 |   1 |   1 |   1 |   8 | N/A |   2 |  16 |   1 |
-| NVFP4     |   72 |   v2    |   8192 |     32 |   1 |   1 |   1 |  72 | N/A |   1 |  72 |   1 |
+| Precision | GPUs | SeqLen | Layers |  TP |  PP |  CP |  DP | VP  | MBS | GBS |  GA |
+| :-------- | ---: | -----: | -----: | --: | --: | --: | --: | :-- | --: | --: | --: |
+| NVFP4     |    8 |   8192 |     32 |   1 |   1 |   1 |   8 | N/A |   2 |  16 |   1 |
+| NVFP4     |   72 |   8192 |     32 |   1 |   1 |   1 |  72 | N/A |   1 |  72 |   1 |
 
 ## GB200
 
-| Precision | GPUs | Variant | SeqLen | Layers |  TP |  PP |  CP |  DP | VP  | MBS | GBS |  GA |
-| :-------- | ---: | :-----: | -----: | -----: | --: | --: | --: | --: | :-- | --: | --: | --: |
-| NVFP4     |    8 |   v1    |   8192 |     32 |   1 |   1 |   1 |   8 | N/A |   2 |  16 |   1 |
-| NVFP4     |   72 |   v2    |   8192 |     32 |   1 |   1 |   1 |  72 | N/A |   1 |  72 |   1 |
+| Precision | GPUs | SeqLen | Layers |  TP |  PP |  CP |  DP | VP  | MBS | GBS |  GA |
+| :-------- | ---: | -----: | -----: | --: | --: | --: | --: | :-- | --: | --: | --: |
+| NVFP4     |    8 |   8192 |     32 |   1 |   1 |   1 |   8 | N/A |   2 |  16 |   1 |
+| NVFP4     |   72 |   8192 |     32 |   1 |   1 |   1 |  72 | N/A |   1 |  72 |   1 |
 
 # Performance Measurement and Analysis
 
@@ -29,7 +29,7 @@ Performance is reported as:
 - `s/iter` — wall-clock seconds per training step
 - `TFLOPS/GPU` — sustained FLOPS achieved per GPU
 
-Each benchmark runs 50 steps by default. Iterations 35–44 are averaged to skip warmup effects such as input prefetch, activation allocation, and JIT compilation.
+Each benchmark runs 1000 steps by default. Iterations 985–994 are averaged to skip warmup effects such as input prefetch, activation allocation, and JIT compilation.
 
 ## Viewing results with `llmb-run jobs`
 
@@ -101,7 +101,7 @@ Use the installer described in the [main README](../../../README.md) to prepare 
 The recipe uses these directories and variables:
 
 - `LLMB_INSTALL` — top-level directory for images, repositories, virtual environments, workloads, and results
-- `LLMB_WORKLOAD` — `${LLMB_INSTALL}/workloads/pretrain_llama31_mlperf`
+- `LLMB_WORKLOAD` — `${LLMB_INSTALL}/workloads/pretrain_llama3.1_mlperf`
 - `${LLMB_WORKLOAD}/experiments` — benchmark logs, profiles, and checkpoints
 
 # Prepare Dataset
@@ -110,7 +110,7 @@ No separate dataset preparation step is required by this benchmark recipe.
 
 # Run Training
 
-The launcher runs 50 training steps by default and writes logs and results under `${LLMB_WORKLOAD}/experiments`.
+The launcher runs 1000 training steps by default and writes logs and results under `${LLMB_WORKLOAD}/experiments`.
 
 ## Using `llmb-run` (Recommended)
 
@@ -170,7 +170,7 @@ Activate the environment created by the installer before running the script.
 
 - `DTYPE` — precision; defaults to `nvfp4`
   - Use `nvfp4` for 8- and 72-GPU runs
-- `MAX_STEPS` — training steps; defaults to `50`
+- `MAX_STEPS` — training steps; defaults to `1000`
 - `TIME_LIMIT` — Slurm time limit; defaults to `00:30:00`
 - `ADDITIONAL_SLURM_PARAMS` — additional Slurm settings passed to the launcher
 - `RUN_CONF_MOUNTS` — extra comma-separated container mounts
@@ -207,12 +207,12 @@ Use `-p` with `llmb-run`:
 llmb-run submit -w pretrain_llama3.1_mlperf -s 8b --dtype nvfp4 --scale 72 -p
 ```
 
-For direct launches, set `ENABLE_PROFILE=true`. By default, steps 45–50 are profiled on all ranks.
+For direct launches, set `ENABLE_PROFILE=true`. By default, steps 995–1000 are profiled on all ranks.
 
 Optional profiling settings:
 
-- `PROFILE_START_STEP` — first profiled step; defaults to `45`
-- `PROFILE_STOP_STEP` — final profiled step; defaults to `50`
+- `PROFILE_START_STEP` — first profiled step; defaults to `995`
+- `PROFILE_STOP_STEP` — final profiled step; defaults to `1000`
 - `ENABLE_GPU_METRICS` — collect GPU metrics; defaults to `false`
 
 ```bash

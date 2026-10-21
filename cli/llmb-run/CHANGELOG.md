@@ -5,6 +5,94 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.24.0] - 2026-10-19
+
+### Added
+
+- Added Kubernetes (nvcre) execution target.
+
+## [1.23.2] - 2026-10-19
+
+### Fixed
+
+- `llmb-run jobs` reports MLPerf workloads over the iteration window their READMEs document (485–494, or 985–994 for Llama 3.1) instead of the generic 35–44 window.
+
+## [1.23.1] - 2026-10-14
+
+### Changed
+
+- `llmb-run archive` excludes `*.jsonl` files, such as NeMo-RL per-step rollout dumps that made up most of the archive size for RL workloads.
+
+## [1.23.0] - 2026-10-09
+
+### Added
+
+- Submit LLMB-owned Slurm inference recipes through pinned SRT-Slurm installations and track their native job identifiers, logs, and artifacts.
+
+## [1.22.1] - 2026-10-02
+
+### Added
+
+- Add the nsys install directory entry for `nvidia/nemo:26.08.01`.
+
+## [1.22.0] - 2026-10-02
+
+### Added
+
+- Launchers export `LLMB_REPO` (the `llmb_repo` path from `cluster_config.yaml`), `LLMB_RECIPE_ROOT` (the recipe's directory within `LLMB_REPO`, where its `metadata.yaml` and launch script live), and `LLMB_WORKLOAD` (`$LLMB_INSTALL/workloads/<workload_key>`) to every job.
+
+## [1.21.1] - 2026-09-29
+
+### Added
+
+- NSys/CUPTI mount-table entries for internal `rubin-devel-nightly` bring-up containers.
+
+## [1.21.0] - 2026-09-28
+
+### Added
+
+- Vera Rubin (`vr`) GPU type (4 GPUs per node).
+- Launchers export `NVL_DOMAIN` (NVLink domain size in GPUs, from `cluster_config.yaml` `nvl_domain`, else a per-GPU default) and `MBRIDGE_GPU_TYPE` (Megatron-Bridge chip name, e.g. `vr` -> `vr200`; otherwise equal to `GPU_TYPE`) alongside `GPU_TYPE`.
+
+### Changed
+
+- `configured_sbatch` `--segment` auto-detection uses the smallest recorded Slurm block size (`nvl_block_sizes`), else the NVLink domain in nodes, instead of hardcoding 18 nodes for GB200/GB300.
+
+## [1.20.0] - 2026-09-22
+
+### Added
+
+- `cluster_info` includes `nvl_domain` and `nvl_block_sizes` from `cluster_config.yaml` (`null` when not recorded).
+
+## [1.19.0] - 2026-09-17
+
+### Added
+
+- `configured_sbatch` workloads can declare `run.requires_gpus: false` in their metadata. `llmb-run` then submits them to the `slurm.cpu` partition from `cluster_config.yaml`, without a GPU request, and to the GPU partition when no `slurm.cpu` is configured; a `--env SBATCH_PARTITION=...` override still wins.
+
+## [1.18.0] - 2026-09-14
+
+### Added
+
+- Add internal `--pp-process` and `--pp-upload` controls for selecting post-processing or upload-only submissions.
+- Add `--upload-env` to select the upload environment.
+- Allow the scheduler to request post-processing while preserving `LLMB_SKIP_PP` as an unconditional kill switch.
+
+## [1.17.0] - 2026-08-20
+
+### Added
+
+- Submit-time login to the `vault_ssa` upload backend with short-lived per-job credentials; submission fails fast when the login is skipped and proceeds without an upload job when the backend is unreachable.
+- Queue an uploader job that runs the uploader container on the compute node.
+- Optional `upload.vault` settings for upload location, compression, post-processing, and result routing.
+
+## [1.16.3] - 2026-08-19
+
+### Changed
+
+- Bump minimum Python version to 3.11; Python 3.10 reaches end-of-life in October 2026.
+- Add Python 3.14 to the test matrix.
+
 ## [1.16.2] - 2026-08-11
 
 ### Added

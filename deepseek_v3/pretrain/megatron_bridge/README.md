@@ -6,13 +6,13 @@ This recipe contains information and scripts to produce performance results for 
 
 | Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  | GA  |
 | --------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
-| NVFP4     | 128  |  4096  |   61   |  1  |  4  |  1  | 32  | 32  |  4  |  2  | 2048 | 32  |
-| FP8       | 128  |  4096  |   61   |  1  |  4  |  1  | 32  | 32  |  4  |  1  | 2048 | 64  |
+| NVFP4     | 128  |  4096  |   61   |  1  |  4  |  1  | 32  | 32  |  4  |  1  | 1024 | 32  |
+| FP8       | 128  |  4096  |   61   |  1  |  4  |  1  | 32  | 32  |  4  |  1  | 1024 | 32  |
 | BF16      | 128  |  4096  |   61   |  1  |  4  |  1  | 32  | 32  |  4  |  1  | 2048 | 64  |
-| NVFP4     | 256  |  4096  |   61   |  1  |  2  |  1  | 32  | 128 |  8  |  2  | 4096 | 16  |
+| NVFP4     | 256  |  4096  |   61   |  1  |  2  |  1  | 32  | 128 |  8  |  1  | 4096 | 32  |
 | FP8       | 256  |  4096  |   61   |  1  |  2  |  1  | 32  | 128 |  8  |  1  | 4096 | 32  |
 | BF16      | 256  |  4096  |   61   |  1  |  4  |  1  | 64  | 64  |  4  |  1  | 4096 | 64  |
-| NVFP4     | 512  |  4096  |   61   |  1  |  2  |  1  | 32  | 256 |  8  |  2  | 8192 | 16  |
+| NVFP4     | 512  |  4096  |   61   |  1  |  2  |  1  | 32  | 256 |  8  |  1  | 8192 | 32  |
 | FP8       | 512  |  4096  |   61   |  1  |  2  |  1  | 32  | 256 |  8  |  1  | 8192 | 32  |
 | BF16      | 512  |  4096  |   61   |  1  |  4  |  1  | 64  | 128 |  4  |  1  | 8192 | 64  |
 
@@ -41,9 +41,11 @@ This recipe contains information and scripts to produce performance results for 
 | --------- | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: | :-: |
 | FP8       | 128  |  4096  |   61   |  1  |  8  |  1  |  8  | 16  |  2  |  1  | 2048 | 128 |
 | FP8       | 256  |  4096  |   61   |  1  |  8  |  1  |  8  | 32  |  2  |  1  | 4096 | 128 |
-| BF16      | 256  |  4096  |   61   |  1  |  8  |  1  |  8  | 32  |     |  1  | 4096 | 128 |
+| BF16      | 256  |  4096  |   61   |  1  |  8  |  1  |  8  | 32  | N/A |  1  | 4096 | 128 |
+| NVFP4     | 256  |  4096  |   61   |  1  |  8  |  1  |  8  | 32  |  2  |  1  | 4096 | 128 |
 | FP8       | 512  |  4096  |   61   |  1  |  8  |  1  |  8  | 64  |  2  |  1  | 8192 | 128 |
-| BF16      | 512  |  4096  |   61   |  1  |  8  |  1  |  8  | 64  |     |  1  | 8192 | 128 |
+| BF16      | 512  |  4096  |   61   |  1  |  8  |  1  |  8  | 64  | N/A |  1  | 8192 | 128 |
+| NVFP4     | 512  |  4096  |   61   |  1  |  8  |  1  |  8  | 64  |  2  |  1  | 8192 | 128 |
 
 ## H100
 
@@ -120,13 +122,13 @@ No special access is required to run this benchmark.
 
 ## Slurm
 
-We reference a number of Slurm commands and parameters in this document. A brief summary is included below. It's important to note these are a guide and might not be applicable to all environments. Please consult with your system administrator for the parameters that are specific to your system.
+This document references several Slurm commands and parameters. A brief summary is included below. Note that these are guidelines and might not apply to all environments. Consult your system administrator for the parameters specific to your system.
 
 **Common parameters:**
 
 - `SBATCH_PARTITION` or `-p` - Partition (or queue) to use.
-- `SBATCH_ACCOUNT` or `-A` - Slurm account to associate with your job, different from your user. Meant for accounting purposes.
-- `SBATCH_GPUS_PER_NODE` or `--gres=gpu:<num gpus>` - If your cluster is configured with GRES this should be set to all GPUs in a node. Ignore if not configured.
+- `SBATCH_ACCOUNT` or `-A` - Slurm account to associate with your job, different from your user. Used for accounting purposes.
+- `SBATCH_GPUS_PER_NODE` or `--gres=gpu:<num gpus>` - If your cluster is configured with GRES, this should be set to all GPUs in a node. Ignore if not configured.
   - Encountering errors such as 'GPUs not found' or 'Cannot submit to this partition without GPU resources' means this setting is required.
 
 These parameters can be set either by exporting the environment variable or using the corresponding `sbatch` flag.
@@ -277,7 +279,7 @@ Profiling is supported with Nsight Systems or PyTorch Profiler.
 
 To enable profiling with Nsight Systems, use the `-p` flag with `llmb-run` or set `ENABLE_PROFILE=true` when submitting your job. The job will run for a total of 50 steps where steps 45-50 will be profiled.
 
-In order to view the resulting profiles, ensure you have the latest version of Nsight Systems installed. For more information visit: [Nsight Systems](https://docs.nvidia.com/nsight-systems/)
+To view the resulting profiles, ensure you have the latest version of Nsight Systems installed. For more information, visit [Nsight Systems](https://docs.nvidia.com/nsight-systems/).
 
 ### Profiling job details:
 
@@ -313,14 +315,14 @@ ENABLE_GPU_METRICS=true llmb-run submit -w pretrain_deepseek-v3 --dtype bf16 --s
 
 ### Viewing results
 
-In order to view the profile traces (\*.nsys-rep files) interactively:
+To view the profile traces (\*.nsys-rep files) interactively:
 
 - Install the latest [Nsight Systems client](https://developer.nvidia.com/nsight-systems/get-started) on your preferred system
-- Copy the generated .nsys-rep files to a folder on your preferred system. E.g., /home/nsight-traces/
-- Open Nsight Systems client, then click "File | Open" and select one or more .nsys-rep files from /home/nsight-systems folder. For more details, see [Reading Your Report in GUI guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#opening-an-existing-report).
+- Copy the generated .nsys-rep files to a folder on your preferred system, for example `/home/nsight-traces/`.
+- Open Nsight Systems client, then click "File | Open" and select one or more .nsys-rep files from that folder. For more details, see [Reading Your Report in GUI guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#opening-an-existing-report).
 - Once loaded you can analyze the workload behavior to learn about any performance bottlenecks associated with the model or the job run.
 
-Since most of the benchmarking jobs run on multiple GPUs, there will be multiple .nsys-rep files generated for each run. [Multi-Report Analysis Guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#multi-report-analysis) will be very helpful to automate the analysis and get to results quicker by using Nsight recipes.
+Because most benchmarking jobs run on multiple GPUs, each run generates multiple .nsys-rep files. The [Multi-Report Analysis Guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#multi-report-analysis) can help automate the analysis and get to results more quickly using Nsight recipes.
 
 **See** these [tutorials](https://developer.nvidia.com/nsight-systems/get-started#tutorials) to get a quick start if you are new to Nsight profiling.
 
@@ -352,6 +354,7 @@ Supported configurations:
 - **GB200:** 4, 8, 16, 32, 64, and 72×N GPUs
 - **B300:** 8, 16, 32, and 64 GPUs
 - **B200:** 8, 16, 32, and 64 GPUs
+- **H100 (fp8 proxy):** 8, 16, 32, 64, 128, 256, and 512 GPUs
 
 **Example:**
 

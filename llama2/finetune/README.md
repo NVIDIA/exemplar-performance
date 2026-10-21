@@ -33,7 +33,7 @@ Performance is reported as:
 - `s/iter` — wall-clock seconds per training step
 - `TFLOPS/GPU` — sustained FLOPS achieved per GPU
 
-Each benchmark runs 50 steps; iterations 35–44 are averaged to skip warmup (input prefetch, activation allocation, JIT compilation).
+Each benchmark runs 500 steps; iterations 485–494 are averaged to skip warmup (input prefetch, activation allocation, JIT compilation).
 
 ## Viewing results with `llmb-run jobs`
 
@@ -55,7 +55,7 @@ Example `llmb-run jobs` output (illustrative values):
 ```text
   Workload              DType  Scale   Job ID  Profile  Submit Time       Slurm Status  Elapsed   s/iter  TFLOPS/GPU
   llama2-mlperf         fp8        8  1234567  No       2026-04-17 13:42  COMPLETED     00:12:34    4.21     1234.56
-  llama2-mlperf         nvfp4     72  1234589  No       2026-04-17 14:05  RUNNING       00:03:11
+  llama2-mlperf         fp8       72  1234589  No       2026-04-17 14:05  RUNNING       00:03:11
 ```
 
 Blank `s/iter` or `TFLOPS/GPU` means the job has not finished yet, or the log did not contain enough completed iterations. See the [llmb-run README](../../cli/llmb-run/README.md#jobs-command) for the full command reference.
@@ -94,13 +94,13 @@ Access to Llama 2 70B must be requested through [meta-llama/Llama-2-70b-hf](http
 
 ## Slurm
 
-We reference a number of Slurm commands and parameters in this document. A brief summary is included below. It's important to note these are a guide and might not be applicable to all environments. Please consult with your system administrator for the parameters that are specific to your system.
+This document references several Slurm commands and parameters. A brief summary is included below. Note that these are guidelines and might not apply to all environments. Consult your system administrator for the parameters specific to your system.
 
 **Common parameters:**
 
 - `SBATCH_PARTITION` or `-p` - Partition (or queue) to use.
-- `SBATCH_ACCOUNT` or `-A` - Slurm account to associate with your job, different from your user. Meant for accounting purposes.
-- `SBATCH_GPUS_PER_NODE` or `--gres=gpu:<num gpus>` - If your cluster is configured with GRES this should be set to all GPUs in a node. Ignore if not configured.
+- `SBATCH_ACCOUNT` or `-A` - Slurm account to associate with your job, different from your user. Used for accounting purposes.
+- `SBATCH_GPUS_PER_NODE` or `--gres=gpu:<num gpus>` - If your cluster is configured with GRES, this should be set to all GPUs in a node. Ignore if not configured.
   - Encountering errors such as 'GPUs not found' or 'Cannot submit to this partition without GPU resources' means this setting is required.
 
 These parameters can be set either by exporting the environment variable or using the corresponding `sbatch` flag.
@@ -131,7 +131,7 @@ This workload uses MLPerf mock training data by default (`MLPERF_DATA=mock`). No
 
 # Run Finetuning
 
-Once the environment has been prepared, it is time to train a model. The finetuning runs for the first 50 steps and then stops. Log files and results are stored under the `${LLMB_WORKLOAD}/experiments/` folder (see Output Locations for details).
+Once the environment has been prepared, it is time to train a model. The finetuning runs for the first 500 steps and then stops. Log files and results are stored under the `${LLMB_WORKLOAD}/experiments/` folder (see Output Locations for details).
 
 ## Using llmb-run (Recommended)
 
@@ -144,8 +144,8 @@ cd $LLMB_INSTALL
 # Run a benchmark with llmb-run (FP8, 8 GPUs)
 llmb-run submit -w finetune_llama2_mlperf --dtype fp8 --scale 8
 
-# Run a benchmark with llmb-run (NVFP4, 72 GPUs on GB300)
-llmb-run submit -w finetune_llama2_mlperf --dtype nvfp4 --scale 72
+# Run a benchmark with llmb-run (FP8, 72 GPUs)
+llmb-run submit -w finetune_llama2_mlperf --dtype fp8 --scale 72
 ```
 
 ### Additional SLURM Parameters
@@ -204,11 +204,10 @@ JOB_TOTAL_GPUS=<number> GPU_TYPE=<type> [DTYPE=<precision>] [ADDITIONAL_SLURM_PA
 
 **Optional:**
 
-- `DTYPE`: Precision format (default: `fp8`)
-  - `fp8` - FP8 precision
-  - `nvfp4` - NVFP4 precision
+- `DTYPE`: Precision format (default: `fp8`). Supported: `fp8`.
+  - Note: `launch.sh` also contains an experimental `nvfp4` code path. It is not exposed through `llmb-run` (the workload metadata lists only FP8) and is not validated for this release; it is reachable only by invoking `launch.sh` directly with `DTYPE=nvfp4`.
 - `MLPERF_DATA`: Dataset mode (default: `mock`)
-- `MAX_STEPS`: Number of training steps (default: `50`)
+- `MAX_STEPS`: Number of training steps (default: `500`)
 - `ADDITIONAL_SLURM_PARAMS`: Extra `sbatch` flags (e.g. `--nodelist`, `--reservation`), semicolon-separated
   - Example: `"nodelist=node001,node002;reservation=my_reservation;exclusive"`
 - Parallelism and batch overrides: `TP`, `PP`, `CP`, `VP`, `EP`, `ET`, `MBS`, `GBS`
@@ -242,14 +241,14 @@ Profiling is supported with Nsight Systems or PyTorch Profiler.
 
 ## Run Nsight Profiling
 
-To enable profiling with Nsight Systems, use the `-p` flag with `llmb-run` or set `ENABLE_PROFILE=true` when submitting your job. The job will run for a total of 50 steps where steps 45-50 will be profiled.
+To enable profiling with Nsight Systems, use the `-p` flag with `llmb-run` or set `ENABLE_PROFILE=true` when submitting your job. The job will run for a total of 500 steps where steps 495-500 will be profiled.
 
-In order to view the resulting profiles, ensure you have the latest version of Nsight Systems installed. For more information visit: [Nsight Systems](https://docs.nvidia.com/nsight-systems/)
+To view the resulting profiles, ensure you have the latest version of Nsight Systems installed. For more information, visit [Nsight Systems](https://docs.nvidia.com/nsight-systems/).
 
 ### Profiling job details:
 
 - **MPI Ranks:** all
-- **Job Steps:** 45-50
+- **Job Steps:** 495-500
 - **Output Location:** Profiling output saved alongside finetuning results (see Output Locations)
 - **Filename format:** `profile_${SLURM_JOB_ID}_nodeId_rankId.nsys-rep`
 
@@ -263,9 +262,9 @@ llmb-run submit -w finetune_llama2_mlperf --dtype fp8 --scale 8 -p
 
 - Specify job steps to profile:
   - `PROFILE_START_STEP`: start profiling on this job step.
-  * Default: 45
+  * Default: 495
   - `PROFILE_STOP_STEP`: stop profiling on this job step.
-  * Default: 50
+  * Default: 500
 - Enable GPU metrics collection:
   - `ENABLE_GPU_METRICS`: Enable GPU metrics collection during Nsight profiling (default: false)
   * When set to `true` along with `ENABLE_PROFILE=true`, captures detailed GPU performance metrics
@@ -280,14 +279,14 @@ ENABLE_GPU_METRICS=true llmb-run submit -w finetune_llama2_mlperf --dtype fp8 --
 
 ### Viewing results
 
-In order to view the profile traces (\*.nsys-rep files) interactively:
+To view the profile traces (\*.nsys-rep files) interactively:
 
 - Install the latest [Nsight Systems client](https://developer.nvidia.com/nsight-systems/get-started) on your preferred system
-- Copy the generated .nsys-rep files to a folder on your preferred system. E.g., /home/nsight-traces/
-- Open Nsight Systems client, then click "File | Open" and select one or more .nsys-rep files from /home/nsight-systems folder. For more details, see [Reading Your Report in GUI guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#opening-an-existing-report).
+- Copy the generated .nsys-rep files to a folder on your preferred system, for example `/home/nsight-traces/`.
+- Open Nsight Systems client, then click "File | Open" and select one or more .nsys-rep files from that folder. For more details, see [Reading Your Report in GUI guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#opening-an-existing-report).
 - Once loaded you can analyze the workload behavior to learn about any performance bottlenecks associated with the model or the job run.
 
-Since most of the benchmarking jobs run on multiple GPUs, there will be multiple .nsys-rep files generated for each run. [Multi-Report Analysis Guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#multi-report-analysis) will be very helpful to automate the analysis and get to results quicker by using Nsight recipes.
+Because most benchmarking jobs run on multiple GPUs, each run generates multiple .nsys-rep files. The [Multi-Report Analysis Guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#multi-report-analysis) can help automate the analysis and get to results more quickly using Nsight recipes.
 
 **See** these [tutorials](https://developer.nvidia.com/nsight-systems/get-started#tutorials) to get a quick start if you are new to Nsight profiling.
 

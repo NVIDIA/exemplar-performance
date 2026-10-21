@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 $schema: "https://json-schema.org/draft/2020-12/schema"
 title: Recipe envelope (shared across all scenarios)
@@ -60,18 +42,25 @@ $defs:
         description: >
           CPU arch of the GPU/SERVING node (where the model server runs) -> selects the server image variant.
       engine:
-        enum: [vllm, sglang, trtllm]
+        enum: [vllm, sglang, trtllm, none]
+        description: >
+          Inference engine of the model server. `none` = the recipe runs no model server (agentic
+          TaskTrace cells: replay is tool-side only; capture talks to an EXTERNAL endpoint).
       serving_mode:
-        enum: [aggregated, disaggregated]
+        enum: [aggregated, disaggregated, none]
+        description: "`none` pairs with engine=none (no in-cluster serving stack)."
       framework:
         enum: [none, dynamo]
         default: none
         description: Serving framework wrapping the engine (used by disaggregated).
       scenario:
-        enum: [llm-perf]
+        enum: [llm-perf, agentic]
         description: >
           The benchmark class = the top-level recipes/<scenario>/ fork AND the schema/analysis selector.
           llm-perf measures serving (TPS/GPU, TTFT, TPOT, KV, how well the server serves tokens).
+          agentic measures the tool-side (CPU) half of an agentic coding run: TaskTrace replays a recorded
+          trajectory inside the original task container (no model, no GPU) and, in capture+replay, first
+          records a fresh trajectory against an external endpoint. Mirrors inference/slurm_recipes/agentic/.
       distribution:
         type: string
         description: >
@@ -84,10 +73,13 @@ $defs:
           (mooncake-trace | custom-trace | synthetic). aiperf always replays, so "replay" is not a
           mode here. This is a distinguishing MATRIX axis, so it stays in the envelope.
       launcher:
-        enum: [aiperf]
-        description: The load/replay driver. Its binary/image lives in the launcher's own repo; the recipe references it.
+        enum: [aiperf, tasktrace]
+        description: >
+          The load/replay driver. aiperf: its binary/image lives in the launcher's own repo; the recipe
+          references it. tasktrace: the vendored inference/tools/tasktrace (+ tasktrace-capture) tools, built
+          at install time and staged onto the cache PVC.
       goal:
-        enum: [max-concurrency-sla, pareto]
+        enum: [max-concurrency-sla, pareto, replay-fidelity]
         description: >
           The benchmark GOAL — what this recipe is trying to determine — as a named bundle of {workload +
           sweep strategy + exemplar method}. It refines a scenario so one launcher can drive different
@@ -100,6 +92,10 @@ $defs:
               point-by-point ≤tol per rung). Axes:
                 · llm-perf → Output-TPS/GPU vs Output-TPS/user  (exemplar.metric=pareto_geomean)
               Requires a fixed sweep (bench.sweep_concurrency).
+            - "replay-fidelity" (agentic): ONE TaskTrace replay (optionally preceded by a live capture) whose
+              verdict is the shared tasktrace_recipe.py summary check — every recorded action reproduces its
+              recorded outcome and every step exits cleanly. Replay tool time is measured, not graded
+              (exemplar.metric=replay_tool_busy_sec, reference null). No sweep.
           FUTURE goals plug in the same way. Part of recipe_hash: the goal fixes the measurement/exemplar
           METHOD (otherwise unhashed, since exemplar is excluded), so different goals => different fingerprints.
       status:
@@ -218,7 +214,7 @@ $defs:
                 pattern: "^[0-9]+(\\.[0-9]+)?(Ei|Pi|Ti|Gi|Mi|Ki|E|P|T|G|M|K)?$"
                 description: >
                   PVC storage request for THIS recipe's model weights (+ any staged datasets/traces),
-                  e.g. "20Gi" (a small KVBM offload cache) or "1200Gi" (GLM-5 FP8 weights). The recipe
+                  e.g. "20Gi" (a small model) or "1200Gi" (GLM-5 FP8 weights). The recipe
                   declares it because the recipe knows the model. Absent → install falls back to the
                   profile's MODEL_CACHE_SIZE, then a conservative default.
               access_mode:
@@ -227,7 +223,7 @@ $defs:
                   The claim's access mode, which SELECTS the cluster-profile storage-class candidate install
                   uses: rwx → a ReadWriteMany shared filesystem (FSx/EFS/Filestore) many pods mount
                   concurrently (disaggregated / multi-worker serving) → MODEL_CACHE_RWX_CLASS; rwo → a
-                  ReadWriteOnce block volume (EBS/PD) bound to a single node (e.g. a KVBM colocated cache) →
+                  ReadWriteOnce block volume (EBS/PD) bound to a single node (e.g. an aggregated server cache) →
                   MODEL_CACHE_RWO_CLASS. Absent → derived from the resolved storage class (fsx ⇒ rwx else rwo),
                   preserving today's behavior.
               # `name` is DELIBERATELY ABSENT and, with additionalProperties:false above, REJECTED.

@@ -2,6 +2,11 @@
 
 This recipe provides a method and script to produce performance results for the NCCL benchmarks. The SLURM sbatch script launches a collection of benchmarking jobs to evaluate an Infiniband network.
 
+## Platform support
+
+- **Slurm:** use the `llmb-run` instructions below to run the automated tests.
+- **Kubernetes:** No Kubernetes support is provided yet.
+
 ## System Requirements
 
 - SLURM workload manager
@@ -17,18 +22,20 @@ Performance for NCCL is measured by bandwidth and latency. **Open the `.txt` fil
 
 Which files to open:
 
-```text
-# AllReduce results (open this .txt file)
-$LLMB_WORKLOAD/experiments/microbenchmark_nccl/
-  microbenchmark_nccl_<variant>_<user>_<SLURM_JOBID>/
-    LOG_<DATE>-<JOBID>_sweep_N<NUM_NODES>/
-      1_1_LOG_all_reduce_env1_args1_job<JOBID>_iter1.txt
+Filenames use the test names from `config/testset.toml`. Each collective has a `_legacy` result; AllReduce, AllGather, and ReduceScatter also have `_symmetric`; AllGather and Alltoall also have `_ce`.
 
-# AllGather results (open this .txt file)
+```text
+# AllReduce (legacy) results (open this .txt file)
 $LLMB_WORKLOAD/experiments/microbenchmark_nccl/
   microbenchmark_nccl_<variant>_<user>_<SLURM_JOBID>/
     LOG_<DATE>-<JOBID>_sweep_N<NUM_NODES>/
-      1_2_LOG_all_gather_env1_args1_job<JOBID>_iter1.txt
+      1_1_LOG_all_reduce_legacy_env1_args1_job<JOBID>_iter1.txt
+
+# AllGather (legacy) results (open this .txt file)
+$LLMB_WORKLOAD/experiments/microbenchmark_nccl/
+  microbenchmark_nccl_<variant>_<user>_<SLURM_JOBID>/
+    LOG_<DATE>-<JOBID>_sweep_N<NUM_NODES>/
+      1_2_LOG_all_gather_legacy_env1_args1_job<JOBID>_iter1.txt
 ```
 
 <details>
@@ -96,15 +103,18 @@ $LLMB_WORKLOAD/experiments/
 └── microbenchmark_nccl/
     └── microbenchmark_nccl_<variant>_<user>_<SLURM_JOBID>/
         └── LOG_<DATE>-<JOBID>_sweep_N<NUM_NODES>/
-            ├── 1_1_LOG_all_reduce_env1_args1_job<JOBID>_iter1.txt        ← Open these .txt files
-            ├── 1_2_LOG_all_gather_env1_args1_job<JOBID>_iter1.txt        ← 
-            ├── 1_3_LOG_reduce_scatter_env1_args1_job<JOBID>_iter1.txt    ← 
-            ├── 1_4_LOG_alltoall_env1_args1_job<JOBID>_iter1.txt          ← 
-            ├── 1_5_LOG_alltoall_env2_args1_job<JOBID>_iter1.txt          ← 
-            ├── 1_6_LOG_sendrecv_env1_args1_job<JOBID>_iter1.txt          ← 
-            ├── 1_7_LOG_sendrecv_env2_args1_job<JOBID>_iter1.txt          ← 
-            ├── 1_1_LOG_all_reduce_env1_args1_job<JOBID>/                 (ignore - debug logs)
-            ├── 1_1_LOG_all_reduce_env1_args1_job<JOBID>_iter1/           (ignore - per-rank logs)
+            ├── 1_1_LOG_all_reduce_legacy_env1_args1_job<JOBID>_iter1.txt        ← Open these .txt files
+            ├── 1_2_LOG_all_gather_legacy_env1_args1_job<JOBID>_iter1.txt        ←
+            ├── 1_3_LOG_reduce_scatter_legacy_env1_args1_job<JOBID>_iter1.txt    ←
+            ├── 1_4_LOG_alltoall_legacy_env1_args1_job<JOBID>_iter1.txt          ←
+            ├── 1_5_LOG_sendrecv_legacy_env1_args1_job<JOBID>_iter1.txt          ←
+            ├── 1_6_LOG_all_reduce_symmetric_env1_args1_job<JOBID>_iter1.txt     ←
+            ├── 1_7_LOG_all_gather_symmetric_env1_args1_job<JOBID>_iter1.txt     ←
+            ├── 1_8_LOG_reduce_scatter_symmetric_env1_args1_job<JOBID>_iter1.txt ←
+            ├── 1_9_LOG_all_gather_ce_env1_args1_job<JOBID>_iter1.txt            ←
+            ├── 1_10_LOG_alltoall_ce_env1_args1_job<JOBID>_iter1.txt             ←
+            ├── 1_1_LOG_all_reduce_legacy_env1_args1_job<JOBID>/                 (ignore - debug logs)
+            ├── 1_1_LOG_all_reduce_legacy_env1_args1_job<JOBID>_iter1/           (ignore - per-rank logs)
             ├── *.yml files                                                (ignore - metadata)
             └── ... (similar folders/files for other tests)
 ```
@@ -138,4 +148,19 @@ llmb-run submit -w microbenchmark_nccl --scale <NUM_GPUS>
 # Examples
 llmb-run submit -w microbenchmark_nccl --scale 4
 llmb-run submit -w microbenchmark_nccl --scale 16
+```
+
+## Disable UCC on older GPU drivers
+
+MPI-linked NCCL tests (`*_perf_mpi`) initialize OpenMPI, which can load UCC's CUDA sysinfo plugin (`libucc_sysinfo_cuda.so`). On NVIDIA drivers older than v550 the run fails with:
+
+```text
+symbol lookup error: .../ucc/lib/ucc/libucc_sysinfo_cuda.so: undefined symbol: nvmlDeviceGetGpuFabricInfoV
+```
+
+H100 jobs disable UCC by default (`UCX_TLS=^ucc`, `OMPI_MCA_coll=^ucc`, `OMPI_MCA_coll_ucc_enable=0`). On other GPUs, set `LLMB_DISABLE_UCC=1`:
+
+```bash
+cd $LLMB_INSTALL
+llmb-run submit -w microbenchmark_nccl --scale <NUM_GPUS> --env LLMB_DISABLE_UCC=1
 ```

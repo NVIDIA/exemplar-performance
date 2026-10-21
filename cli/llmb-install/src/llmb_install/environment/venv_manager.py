@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 
 """Virtual environment management utilities for LLMB installer."""
@@ -30,6 +12,34 @@ from llmb_install.constants import MIN_PYTHON_VERSION
 from llmb_install.environment.detector import (
     get_clean_environment_for_subprocess,
 )
+
+UV_PYTHON_PREFERENCE_VARS = ('UV_MANAGED_PYTHON', 'UV_NO_MANAGED_PYTHON', 'UV_PYTHON_PREFERENCE')
+
+
+def setup_uv_python_preference() -> None:
+    """Default uv to managed python unless the user set one of uv's own preference variables.
+
+    Conflicting preference settings are an error.
+    Applied to os.environ so venv creation, setup tasks and uvx all inherit the same preference.
+    """
+    if os.environ.get('LLMB_DISABLE_MANAGED_PYTHON', '').lower() in ('1', 'true', 'yes'):
+        print("WARNING: LLMB_DISABLE_MANAGED_PYTHON is deprecated; set UV_NO_MANAGED_PYTHON=1 instead.")
+        for var in UV_PYTHON_PREFERENCE_VARS:
+            os.environ.pop(var, None)
+        os.environ['UV_NO_MANAGED_PYTHON'] = '1'
+
+    set_preference_vars = [f"{var}={os.environ[var]}" for var in UV_PYTHON_PREFERENCE_VARS if os.environ.get(var)]
+    if len(set_preference_vars) > 1:
+        raise ValueError(
+            "Conflicting uv python preference variables set: "
+            f"{', '.join(set_preference_vars)}. "
+            "Set only one (in your shell or the playfile environment_vars)."
+        )
+
+    if not any(os.environ.get(var) for var in UV_PYTHON_PREFERENCE_VARS):
+        os.environ['UV_MANAGED_PYTHON'] = '1'
+    elif os.environ.get('UV_NO_MANAGED_PYTHON') or os.environ.get('UV_PYTHON_PREFERENCE') in ('system', 'only-system'):
+        print("WARNING: uv python preference set in environment; managed python not enforced")
 
 
 def create_virtual_environment(venv_path: str, venv_type: str) -> None:
@@ -48,13 +58,9 @@ def create_virtual_environment(venv_path: str, venv_type: str) -> None:
     if venv_type == 'venv':
         # Use system python3 instead of current environment's python
         env = get_clean_environment_for_subprocess()
-        try:
-            subprocess.run(
-                ['python3', '-m', 'venv', '--clear', venv_path], env=env, check=True, capture_output=True, text=True
-            )
-        except subprocess.CalledProcessError as e:
-            print(f"Error creating venv environment: {e}\n{e.stderr}")
-            raise
+        subprocess.run(
+            ['python3', '-m', 'venv', '--clear', venv_path], env=env, check=True, capture_output=True, text=True
+        )
 
     elif venv_type == 'conda':
         # If the conda env path already exists, remove it to prevent errors
@@ -62,17 +68,13 @@ def create_virtual_environment(venv_path: str, venv_type: str) -> None:
             print(f"  Removing existing conda environment at {venv_path}")
             shutil.rmtree(venv_path)
 
-        try:
-            # Create conda environment with minimum required Python version
-            subprocess.run(
-                ['conda', 'create', '-p', venv_path, f'python={MIN_PYTHON_VERSION}', '--yes'],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError as e:
-            print(f"Error creating conda environment: {e}\n{e.stderr}")
-            raise
+        # Create conda environment with minimum required Python version
+        subprocess.run(
+            ['conda', 'create', '-p', venv_path, f'python={MIN_PYTHON_VERSION}', '--yes'],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
     elif venv_type == 'uv':
         # If the venv path already exists, remove it to prevent errors
@@ -80,50 +82,27 @@ def create_virtual_environment(venv_path: str, venv_type: str) -> None:
         if os.path.exists(venv_path):
             shutil.rmtree(venv_path)
 
-        uv_cmd = [
-            'uv',
-            'venv',
-            '--clear',
-            '--python',
-            MIN_PYTHON_VERSION,
-        ]
-
-        # Force managed python unless explicitly disabled
-        # This ensures consistent python versions across different systems
-        if os.environ.get('LLMB_DISABLE_MANAGED_PYTHON', '').lower() not in ('1', 'true', 'yes'):
-            uv_cmd.append('--managed-python')
-
-        uv_cmd.append(venv_path)
-
-        try:
-            subprocess.run(
-                uv_cmd,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError as e:
-            print(f"Error creating uv environment: {e}\n{e.stderr}")
-            raise
+        subprocess.run(
+            ['uv', 'venv', '--clear', '--python', MIN_PYTHON_VERSION, venv_path],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
         # uv does not install pip in new venvs. Installing it manually handles legacy scripts where 'pip install' is used.
         uv_venv = get_venv_environment(venv_path, 'uv')
-        try:
-            subprocess.run(
-                [
-                    'uv',
-                    'pip',
-                    'install',
-                    'pip',
-                ],
-                env=uv_venv,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError as e:
-            print(f"Error installing pip in uv environment: {e}\n{e.stderr}")
-            raise
+        subprocess.run(
+            [
+                'uv',
+                'pip',
+                'install',
+                'pip',
+            ],
+            env=uv_venv,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
     else:
         raise ValueError(f"Unsupported environment type: {venv_type}")
 

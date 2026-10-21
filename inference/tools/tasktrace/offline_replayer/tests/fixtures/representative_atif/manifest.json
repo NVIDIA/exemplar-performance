@@ -1,0 +1,100 @@
+{
+  "schema_version": "representative-atif-fixtures.v1",
+  "fixtures": [
+    {
+      "path": "deepswe-mini-swe__fixture/agent/trajectory.json",
+      "dataset": "DeepSWE",
+      "source_example": "DeepSWE mini-swe-agent trajectory (curated from a representative run)",
+      "source_sha256": null,
+      "traits": [
+        "mini-swe-agent-1.1 provenance",
+        "bash command alias",
+        "structured result JSON",
+        "recorded command failure",
+        "action was not executed",
+        "combined stdout and stderr"
+      ],
+      "curation": "Commands were replaced with hermetic equivalents; ATIF schema, tool names, result shape, and outcome classes match observed source data."
+    },
+    {
+      "path": "swebenchpro-codex__fixture/agent/trajectory.json",
+      "dataset": "SWE-bench Pro",
+      "source_example": "SWE-bench Pro Codex trajectory (curated from a representative run)",
+      "source_sha256": null,
+      "traits": [
+        "Codex ATIF-v1.5",
+        "exec_command",
+        "interactive write_stdin session",
+        "apply_patch",
+        "metadata action",
+        "separate replay stdout and stderr"
+      ],
+      "curation": "Commands and patch content were minimized; tool sequencing and observation forms match observed source data."
+    },
+    {
+      "path": "terminalbench-codex-exec__fixture/agent/trajectory.json",
+      "dataset": "Terminal-Bench 2.0",
+      "source_example": "Terminal-Bench 2.0 capture adaptix-name-mapping-aliases__G6gPeiT/agent/trajectory.json",
+      "source_sha256": "5dd2ae57844a626fc4dc4dc33cbad20b2885061b72e237f9276452622905e8f6",
+      "traits": [
+        "Codex Code Mode abstract exec envelope",
+        "literal nested exec_command",
+        "const template-literal patch passed to apply_patch",
+        "state-dependent final command"
+      ],
+      "curation": "Commands and patch content were replaced with hermetic equivalents; the captured ATIF schema family, codex_exec provenance, pragma, nested tool forms, sequencing, and observation forms were retained. The fixture contains no task data or credentials."
+    },
+    {
+      "path": "claude-code__fixture/agent/trajectory.json",
+      "dataset": "Terminal-Bench 2.0",
+      "source_example": "Harbor benchmark capture: mailman__4cmrbWo/agent/trajectory.json",
+      "source_sha256": "3de9fa28c1cde79363150e3a901f21951fedb8e35d493a8bea1c17e9c886cbcb",
+      "traits": [
+        "Claude Code ATIF-v1.7",
+        "Bash, Write, Edit, and Read native tool names",
+        "grouped observation results linked by source_call_id",
+        "Bash to Write to Bash state dependency",
+        "Read offset and limit",
+        "Edit to Bash state dependency"
+      ],
+      "curation": "Commands and file content were replaced with hermetic equivalents; ATIF schema, raw argument fields, tool names, grouped observation form, result metadata shape, and source-call links match observed source data. The fixture contains no task data, credentials, or private paths."
+    },
+    {
+      "path": "swebenchpro-malformed-call__fixture/agent/trajectory.json",
+      "dataset": "SWE-bench Pro",
+      "source_example": "SWE-bench Pro trajectory with malformed call (curated from a representative run)",
+      "source_sha256": null,
+      "traits": [
+        "source-recorded function argument parse failure",
+        "no command execution",
+        "trajectory continuation"
+      ],
+      "curation": "The malformed argument object was shortened while preserving the missing cmd failure mode."
+    },
+    {
+      "path": "generic-bare-bash__fixture/agent/trajectory.json",
+      "dataset": "negative contract",
+      "source_example": null,
+      "source_sha256": null,
+      "traits": [
+        "generic ATIF",
+        "unprovenanced bash tool rejection"
+      ],
+      "curation": "Synthetic guard fixture."
+    },
+    {
+      "path": "terminalbench-codex-exec-promise-all__fixture/agent/trajectory.json",
+      "dataset": "Terminal-Bench 2.0",
+      "source_example": "Terminal-Bench 2.0 Codex Code Mode Promise.all capture",
+      "source_sha256": null,
+      "traits": [
+        "Codex Code Mode abstract exec envelope",
+        "two literal supported Promise.all members",
+        "shared parallel_group_id extraction metadata",
+        "indexed result presentation",
+        "explicit sequential replay of recorded parallel group"
+      ],
+      "curation": "Synthetic hermetic fixture. Commands retain their recorded parallel-group identity and replay sequentially, with that scheduling difference recorded in the report."
+    }
+  ]
+}

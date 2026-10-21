@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 
 # long-context inference benchmark. Qwen3 with sglang on gb200
 # Front-door: llmb-install + llmb-run. Backend executor: srt-slurm.

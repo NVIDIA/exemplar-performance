@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -83,7 +65,7 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-SCHEMA_VERSION = "6"
+SCHEMA_VERSION = "7"
 
 # ---------------------------------------------------------------------------
 # Schema. Declared up front so the CSV column order is stable and the dashboard
@@ -213,6 +195,9 @@ SCHEMA: list[tuple[str, str]] = [
     ("run_started_at", ""),
     ("run_completed_at", ""),
     ("run_wall_seconds", ""),
+    # GB300 results record whether MNNVL used its requested IMEX fabric or a safe fallback.
+    ("fabric_nvlink_multicast_imex", ""),
+    ("fabric_mnnvl_mode", ""),
 ]
 COLUMNS = [c for c, _ in SCHEMA]
 
@@ -762,6 +747,9 @@ def extract_run_meta(run_dir: Path) -> dict:
         out["server_runtime"] = data["server_runtime"]
     if data.get("gpu_count"):
         out["gpu_count"] = data["gpu_count"]  # recipe's true GPU count → TPS/GPU denominator when DCGM is absent
+    for key in ("fabric_nvlink_multicast_imex", "fabric_mnnvl_mode"):
+        if key in data:
+            out[key] = data[key]
     return out
 
 

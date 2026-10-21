@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 CUDA_HOME = "/usr/local/cuda"
 MPI_HOME = "/usr/local/mpi"
 HPCX_HOME = "/opt/hpcx/"
@@ -11,3 +14,18 @@ pyxis = [
 ]
 NVCOMMS_PERF_TOOLS_BINARY_SUFFIX="_mpi"
 NVCOMMS_PERF_TOOLS_WORKSPACE="$LLMB_INSTALL/workloads/microbenchmark_nccl/experiments/"
+
+# Skip UCC by default on H100, or when LLMB_DISABLE_UCC is true
+prologue_commands = '''
+_llmb_ucc_flag="${LLMB_DISABLE_UCC:-${DISABLE_UCC:-}}"
+_llmb_ucc_flag="${_llmb_ucc_flag,,}"
+_llmb_sys="${SYS_INFO_NAME:-}"
+_llmb_sys="${_llmb_sys,,}"
+if [[ "$_llmb_sys" == "h100" ]] || [[ "$_llmb_ucc_flag" == "1" || "$_llmb_ucc_flag" == "true" || "$_llmb_ucc_flag" == "yes" || "$_llmb_ucc_flag" == "on" ]]; then
+  export UCX_TLS='^ucc'
+  export OMPI_MCA_coll='^ucc'
+  export OMPI_MCA_coll_ucc_enable=0
+  echo "Disabling UCC; exporting UCX_TLS=^ucc OMPI_MCA_coll=^ucc OMPI_MCA_coll_ucc_enable=0"
+fi
+unset _llmb_ucc_flag _llmb_sys
+'''

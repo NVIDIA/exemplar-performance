@@ -9,7 +9,7 @@ This recipe contains information and scripts to produce performance results for 
 
 Configurations use weak scaling methodology (global batch size scales proportionally with GPU count).
 
-FP8 is supported on GB300, GB200, B300, and B200 and uses the MX scaling recipe (`FP8_RECIPE=fp8_mx`, the default on Blackwell). H100 runs BF16 only. Where a table lists `FP8/BF16`, both precisions share the same parallelism configuration.
+FP8 is supported on GB300, GB200, B300, and B200 and uses the MX scaling recipe (`FP8_RECIPE=fp8_mx`, the default on Blackwell). NVFP4 is supported for Qwen3 235B on the same GPUs. H100 runs BF16 only. Where a table lists two precisions (for example `FP8/BF16` or `FP8/NVFP4`), both share the same parallelism configuration.
 
 ## GB300
 
@@ -28,8 +28,8 @@ FP8 is supported on GB300, GB200, B300, and B200 and uses the MX scaling recipe 
 | :-------- | :--: | :----: | :----: | --: | --: | --: | --: | --: | --: | --: | :---: | --: |
 | BF16      | 256  |  4096  |   94   |   1 |   4 |   1 |  32 |  64 | N/A |   2 | 8192  |  64 |
 | BF16      | 512  |  4096  |   94   |   1 |   4 |   1 |  32 | 128 | N/A |   2 | 16384 |  64 |
-| FP8       | 256  |  4096  |   94   |   1 |   4 |   1 |  32 |  64 |  12 |   2 | 8192  |  64 |
-| FP8       | 512  |  4096  |   94   |   1 |   4 |   1 |  32 | 128 |  12 |   2 | 16384 |  64 |
+| FP8/NVFP4 | 256  |  4096  |   94   |   1 |   4 |   1 |  32 |  64 |  12 |   2 | 8192  |  64 |
+| FP8/NVFP4 | 512  |  4096  |   94   |   1 |   4 |   1 |  32 | 128 |  12 |   2 | 16384 |  64 |
 
 ## GB200
 
@@ -48,8 +48,8 @@ FP8 is supported on GB300, GB200, B300, and B200 and uses the MX scaling recipe 
 | :-------- | :--: | :----: | :----: | --: | --: | --: | --: | --: | --: | --: | :---: | --: |
 | BF16      | 256  |  4096  |   94   |   1 |   8 |   1 |   8 |  32 | N/A |   1 | 8192  | 256 |
 | BF16      | 512  |  4096  |   94   |   1 |   8 |   1 |   8 |  64 | N/A |   1 | 16384 | 256 |
-| FP8       | 256  |  4096  |   94   |   1 |   8 |   1 |  32 |  32 |   3 |   1 | 8192  | 256 |
-| FP8       | 512  |  4096  |   94   |   1 |   8 |   1 |  32 |  64 |   3 |   1 | 16384 | 256 |
+| FP8/NVFP4 | 256  |  4096  |   94   |   1 |   8 |   1 |  32 |  32 |   3 |   1 | 8192  | 256 |
+| FP8/NVFP4 | 512  |  4096  |   94   |   1 |   8 |   1 |  32 |  64 |   3 |   1 | 16384 | 256 |
 
 ## B300
 
@@ -68,8 +68,8 @@ FP8 is supported on GB300, GB200, B300, and B200 and uses the MX scaling recipe 
 | :-------- | :--: | :----: | :----: | --: | --: | --: | --: | --: | --: | --: | :---: | --: |
 | BF16      | 256  |  4096  |   94   |   1 |   8 |   1 |   8 |  32 | N/A |   2 | 8192  | 128 |
 | BF16      | 512  |  4096  |   94   |   1 |   8 |   1 |   8 |  64 | N/A |   2 | 16384 | 128 |
-| FP8       | 256  |  4096  |   94   |   1 |   8 |   1 |   8 |  32 |   3 |   2 | 8192  | 128 |
-| FP8       | 512  |  4096  |   94   |   1 |   8 |   1 |   8 |  64 |   3 |   2 | 16384 | 128 |
+| FP8/NVFP4 | 256  |  4096  |   94   |   1 |   8 |   1 |   8 |  32 |   3 |   2 | 8192  | 128 |
+| FP8/NVFP4 | 512  |  4096  |   94   |   1 |   8 |   1 |   8 |  64 |   3 |   2 | 16384 | 128 |
 
 ## B200
 
@@ -88,8 +88,8 @@ FP8 is supported on GB300, GB200, B300, and B200 and uses the MX scaling recipe 
 | :-------- | :--: | :----: | :----: | --: | --: | --: | --: | --: | --: | --: | :---: | --: |
 | BF16      | 256  |  4096  |   94   |   1 |   8 |   1 |   8 |  32 |   4 |   1 | 8192  | 256 |
 | BF16      | 512  |  4096  |   94   |   1 |   8 |   1 |   8 |  64 |   4 |   1 | 16384 | 256 |
-| FP8       | 256  |  4096  |   94   |   1 |   8 |   1 |   8 |  32 |   3 |   1 | 8192  | 256 |
-| FP8       | 512  |  4096  |   94   |   1 |   8 |   1 |   8 |  64 |   3 |   1 | 16384 | 256 |
+| FP8/NVFP4 | 256  |  4096  |   94   |   1 |   8 |   1 |   8 |  32 |   3 |   1 | 8192  | 256 |
+| FP8/NVFP4 | 512  |  4096  |   94   |   1 |   8 |   1 |   8 |  64 |   3 |   1 | 16384 | 256 |
 
 ## H100
 
@@ -176,13 +176,13 @@ No special access is required to run this benchmark.
 
 ## Slurm
 
-We reference a number of Slurm commands and parameters in this document. A brief summary is included below. It's important to note these are a guide and might not be applicable to all environments. Please consult with your system administrator for the parameters that are specific to your system.
+This document references several Slurm commands and parameters. A brief summary is included below. Note that these are guidelines and might not apply to all environments. Consult your system administrator for the parameters specific to your system.
 
 **Common parameters:**
 
 - `SBATCH_PARTITION` or `-p` - Partition (or queue) to use.
-- `SBATCH_ACCOUNT` or `-A` - Slurm account to associate with your job, different from your user. Meant for accounting purposes.
-- `SBATCH_GPUS_PER_NODE` or `--gres=gpu:<num gpus>` - If your cluster is configured with GRES this should be set to all GPUs in a node. Ignore if not configured.
+- `SBATCH_ACCOUNT` or `-A` - Slurm account to associate with your job, different from your user. Used for accounting purposes.
+- `SBATCH_GPUS_PER_NODE` or `--gres=gpu:<num gpus>` - If your cluster is configured with GRES, this should be set to all GPUs in a node. Ignore if not configured.
 - Encountering errors such as 'GPUs not found' or 'Cannot submit to this partition without GPU resources' means this setting is required.
 
 These parameters can be set either by exporting the environment variable or using the corresponding `sbatch` flag.
@@ -285,6 +285,8 @@ JOB_TOTAL_GPUS=<number> GPU_TYPE=<type> [DTYPE=<precision>] [MODEL_SIZE=<size>] 
 
 - `DTYPE`: Precision format (default: `bf16`)
   - `bf16` - BFloat16 precision
+  - `fp8` - FP8 precision, GB300/GB200/B300/B200 only
+  - `nvfp4` - NVFP4 precision, `235b` on GB300/GB200/B300/B200 only
 - `MODEL_SIZE`: Model variant (default: `235b`)
   - `235b` - 235 billion parameter model (22 billion active)
   - `30b` - 30 billion parameter model (3 billion active)
@@ -336,7 +338,7 @@ Profiling is supported with Nsight Systems or PyTorch Profiler.
 
 To enable profiling with Nsight Systems, use the `-p` flag with `llmb-run` or set `ENABLE_PROFILE=true` when submitting your job. The job will run for a total of 50 steps where steps 45-50 will be profiled.
 
-In order to view the resulting profiles, ensure you have the latest version of Nsight Systems installed. For more information visit: [Nsight Systems](https://docs.nvidia.com/nsight-systems/)
+To view the resulting profiles, ensure you have the latest version of Nsight Systems installed. For more information, visit [Nsight Systems](https://docs.nvidia.com/nsight-systems/).
 
 ### Profiling job details:
 
@@ -372,14 +374,14 @@ ENABLE_GPU_METRICS=true llmb-run submit -w pretrain_qwen3 -s 235b --dtype bf16 -
 
 ### Viewing results
 
-In order to view the profile traces (\*.nsys-rep files) interactively:
+To view the profile traces (\*.nsys-rep files) interactively:
 
 - Install the latest [Nsight Systems client](https://developer.nvidia.com/nsight-systems/get-started) on your preferred system
-- Copy the generated .nsys-rep files to a folder on your preferred system. E.g., /home/nsight-traces/
-- Open Nsight Systems client, then click "File | Open" and select one or more .nsys-rep files from /home/nsight-systems folder. For more details, see [Reading Your Report in GUI guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#opening-an-existing-report).
+- Copy the generated .nsys-rep files to a folder on your preferred system, for example `/home/nsight-traces/`.
+- Open Nsight Systems client, then click "File | Open" and select one or more .nsys-rep files from that folder. For more details, see [Reading Your Report in GUI guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#opening-an-existing-report).
 - Once loaded you can analyze the workload behavior to learn about any performance bottlenecks associated with the model or the job run.
 
-Since most of the benchmarking jobs run on multiple GPUs, there will be multiple .nsys-rep files generated for each run. [Multi-Report Analysis Guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#multi-report-analysis) will be very helpful to automate the analysis and get to results quicker by using Nsight recipes.
+Because most benchmarking jobs run on multiple GPUs, each run generates multiple .nsys-rep files. The [Multi-Report Analysis Guide](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#multi-report-analysis) can help automate the analysis and get to results more quickly using Nsight recipes.
 
 **See** these [tutorials](https://developer.nvidia.com/nsight-systems/get-started#tutorials) to get a quick start if you are new to Nsight profiling.
 

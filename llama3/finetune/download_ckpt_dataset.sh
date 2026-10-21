@@ -1,24 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # This script is intended to be run by the LLMB installer as a *setup task*
 # (job_type: nemo2) after dependencies have already been installed.
@@ -29,12 +11,20 @@ set -eu -o pipefail
 
 export WORKLOAD_TYPE=finetune
 export MODEL_NAME=llama3
-export FW_VERSION=26.06.01
 
 # --- Required environment variables (provided by the installer) ---
 : "${GPU_TYPE:?Required variable GPU_TYPE}"
 : "${LLMB_INSTALL:?Required variable LLMB_INSTALL}"
 : "${LLMB_WORKLOAD:?Provided by installer}"
+
+GPU_TYPE=${GPU_TYPE,,}
+
+if [[ $GPU_TYPE == "h100" ]]; then
+    export FW_VERSION=26.06.01
+else
+    export FW_VERSION=26.08.01
+fi
+
 export OPENBLAS_NUM_THREADS=1 # Required for login nodes with tight memory restrictions. Do not remove.
 
 # Directory for cached objects
@@ -51,8 +41,20 @@ export HF_DATASETS_OFFLINE=1
 export NEMO_HOME=${NEMO_HOME:-$LLMB_WORKLOAD/checkpoint_and_dataset}
 export NEMORUN_HOME=$LLMB_WORKLOAD
 
-SCRIPT_NAME="$LLMB_WORKLOAD/Megatron-Bridge/examples/conversion/convert_checkpoints.py"
+CONVERSION_EXTRA_ARGS=()
+if [[ $GPU_TYPE == "h100" ]]; then
+    SCRIPT_NAME="$LLMB_WORKLOAD/Megatron-Bridge/examples/conversion/convert_checkpoints.py"
+else
+    SCRIPT_NAME="$LLMB_WORKLOAD/Megatron-Bridge/scripts/conversion/run_conversion.py"
+    CONVERSION_EXTRA_ARGS=(--device cpu --overwrite)
+fi
 HF_MODEL_PATH=${HF_MODEL_PATH:-$LLMB_WORKLOAD/Meta-Llama-3-70B}
+
+if [[ ! -f $SCRIPT_NAME ]]; then
+    echo "ERROR: Conversion worker not found at $SCRIPT_NAME." >&2
+    echo "The pinned Megatron-Bridge commit in metadata.yaml does not provide it." >&2
+    exit 1
+fi
 
 if [[ ! -d $HF_MODEL_PATH ]]; then
     echo "ERROR: Expected local Hugging Face model repo at $HF_MODEL_PATH." >&2
@@ -69,7 +71,6 @@ fi
 export IMAGE="${IMAGE:-${LLMB_INSTALL}/images/nvidia+nemo+${FW_VERSION}.sqsh}"
 
 TIME_LIMIT=${TIME_LIMIT:-"00:55:00"}
-GPU_TYPE=${GPU_TYPE,,}
 CONTAINER_MOUNTS="$LLMB_WORKLOAD:$LLMB_WORKLOAD,$HF_HOME:$HF_HOME"
 
 echo "Preparing SQuAD dataset cache..."
@@ -106,7 +107,8 @@ srun \
     python3 "$SCRIPT_NAME" import \
     --hf-model "$HF_MODEL_PATH" \
     --megatron-path "$LLMB_WORKLOAD/checkpoint_and_dataset/llama3_70b" \
-    --torch-dtype bfloat16
+    --torch-dtype bfloat16 \
+    ${CONVERSION_EXTRA_ARGS[@]+"${CONVERSION_EXTRA_ARGS[@]}"}
 
 popd > /dev/null
 

@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# uv
+# uv.lock is intentionally committed (reproducible installs)
+
+# Test / lint cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Experiment output
+jobs/
+laptop_sweep/
+.cache/evals/
+
+# Local scratch (charts, working files, ad-hoc notes — not for the repo)
+tmp/
+issues/
+
+# Enroot/harbor cache (docker→sqsh images, container rootfs)
+.enroot/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+research/
+.env
+
+.DS_Store
+*.pdf

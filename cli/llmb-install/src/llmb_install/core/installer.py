@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 """Main LLMB installer orchestrator.
 
@@ -32,12 +14,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from llmb_install.cluster.gpu import filter_workloads_by_gpu_type, resolve_gpu_overrides
+from llmb_install.cluster.kubernetes import check_kubernetes_prerequisites
+from llmb_install.cluster.nvlink import describe_failure, detect_nvl_topology, uses_block_topology
 from llmb_install.config.cluster import create_cluster_config
 from llmb_install.config.headless import (
     load_installation_config,
     save_installation_config,
 )
-from llmb_install.config.models import InstallConfig, SlurmConfig
+from llmb_install.config.models import ExecutionTarget, InstallConfig, KubernetesConfig, RunConfig, SlurmConfig
 from llmb_install.config.system import (
     clear_install_state,
     install_state_exists,
@@ -46,7 +30,7 @@ from llmb_install.config.system import (
     save_install_state,
     save_system_config,
 )
-from llmb_install.constants import EXIT_CANCELLED, EXIT_ERROR
+from llmb_install.constants import EXIT_CANCELLED, EXIT_ERROR, NVL_DOMAINS_BY_GPU
 from llmb_install.core.dependency import (
     _resolve_dependencies,
     clone_git_repos,
@@ -57,7 +41,9 @@ from llmb_install.core.dependency import (
 from llmb_install.core.exemplar import get_exemplar_workloads, validate_exemplar_workloads
 from llmb_install.core.workload import (
     build_workload_dict,
+    collect_environment_prompts,
     filter_tools_from_workload_list,
+    missing_environment_prompts,
     run_setup_tasks,
 )
 from llmb_install.downloads.compute_uv import setup_compute_uv_binaries
@@ -68,6 +54,7 @@ from llmb_install.environment.cache import setup_cache_directories
 from llmb_install.environment.venv_manager import (
     create_virtual_environment,
     get_venv_environment,
+    setup_uv_python_preference,
 )
 from llmb_install.ui.interface import UIInterface
 
@@ -77,8 +64,9 @@ from llmb_install.ui.prompts.environment import (
     prompt_environment_variables,
 )
 from llmb_install.ui.prompts.installation import (
+    prompt_cluster_type,
+    prompt_image_download_method,
     prompt_install_location,
-    prompt_install_method,
 )
 from llmb_install.ui.prompts.workload import prompt_workload_selection
 from llmb_install.ui.rich_ui import RichUI
@@ -95,6 +83,48 @@ from llmb_install.utils.filesystem import (
 from llmb_install.utils.git import ensure_git_lfs_configured, is_git_lfs_installed
 from llmb_install.utils.install_summary import write_install_summary_file
 from llmb_install.utils.logging import get_logger, setup_logging
+
+
+def _nvcrectl_setup_init(
+    namespace: 'Optional[str]' = None,
+    kubeconfig: 'Optional[str]' = None,
+    chart_version: 'Optional[str]' = None,
+) -> None:
+    """Run ``nvcrectl setup init`` to initialise the nvcre environment.
+
+    nvcre (https://github.com/NVIDIA/cluster-readiness-engine) is open source
+    and its Helm chart is public on GHCR, so no registry credential is needed
+    for the chart pull.
+    """
+    import shutil
+    import subprocess
+
+    print("\nInitialising nvcrectl.")
+    print("---------------------")
+
+    if shutil.which("nvcrectl") is None:
+        print("  ⚠️  'nvcrectl' not found on PATH. Install it before submitting WorkloadRuns.")
+        return
+
+    cmd = ["nvcrectl", "setup", "init"]
+    if kubeconfig:
+        cmd += ["--kubeconfig", kubeconfig]
+    if chart_version:
+        cmd += ["--version", chart_version]
+
+    # Run setup init interactively so the user sees and can respond to prompts.
+    result = subprocess.run(cmd, text=True)
+
+    if result.returncode != 0:
+        print(f"  ⚠️  'nvcrectl setup init' exited with code {result.returncode}.")
+        if not chart_version:
+            print(
+                "      If the error mentions a dev build with no chart on GHCR, re-run llmb-install\n"
+                "      and provide a published chart version when prompted, or add\n"
+                "      'nvcrectl_chart_version: <version>' to your cluster_config.yaml."
+            )
+    else:
+        print("  ✓ nvcrectl setup init completed.")
 
 
 class _ResumeExecutionError(BaseException):
@@ -173,8 +203,17 @@ class Installer:
             return None
 
         # Validate required fields
-        required = ['gpu_type', 'workloads', 'slurm', 'install']
+        required = ['gpu_type', 'workloads', 'install']
         if not all(k in cluster_config for k in required):
+            return None
+
+        # A config is resumable when it carries the block for its orchestration
+        # target. Configs predating execution_target are Slurm (the only target
+        # then) and carry a slurm block.
+        if cluster_config.get('execution_target', 'slurm') == ExecutionTarget.KUBERNETES:
+            if 'kubernetes' not in cluster_config:
+                return None
+        elif 'slurm' not in cluster_config:
             return None
 
         # Check that workloads.installed is a list
@@ -266,13 +305,16 @@ class Installer:
             final_config = InstallConfig(
                 install_path=config.install_path,
                 gpu_type=config.gpu_type,
+                nvl_domain=config.nvl_domain,
+                nvl_block_sizes=config.nvl_block_sizes,
                 node_architecture=config.node_architecture,
                 venv_type=config.venv_type,
                 slurm=config.slurm,
+                kubernetes=config.kubernetes,
                 environment_vars=config.environment_vars,
                 selected_workloads=completed_workloads,  # Only the completed ones
                 workload_selection_mode=config.workload_selection_mode,
-                install_method=config.install_method,
+                image_download_method=config.image_download_method,
                 ui_mode=config.ui_mode,
                 dev_mode=config.dev_mode,
                 llmb_repo=config.llmb_repo,
@@ -295,6 +337,8 @@ class Installer:
                     }
                 }
 
+            kubernetes_info = final_config.kubernetes.model_dump() if final_config.kubernetes else None
+
             create_cluster_config(
                 final_config.install_path,
                 final_config.llmb_repo,
@@ -305,9 +349,12 @@ class Installer:
                 final_config.venv_type,
                 workload_venvs,
                 node_architecture=final_config.node_architecture,
-                install_method=final_config.install_method,
+                image_download_method=final_config.image_download_method,
                 image_folder=getattr(final_config, 'image_folder', None),
+                nvl_domain=final_config.nvl_domain,
+                nvl_block_sizes=final_config.nvl_block_sizes,
                 existing_cluster_config=existing_cluster_config,  # For incremental installs
+                kubernetes_info=kubernetes_info,
             )
             print(f"✓ Configuration saved to {final_config.install_path}/cluster_config.yaml")
 
@@ -321,8 +368,7 @@ class Installer:
             return True
 
         except Exception as e:
-            print(f"Error completing installation: {e}")
-            print("Resume state preserved for retry.")
+            print("Could not complete installation. Resume state preserved for retry.")
             raise _ResumeExecutionError(e) from e
 
     def _check_and_handle_resume(self, args: argparse.Namespace, state_result=None) -> bool:
@@ -536,7 +582,9 @@ class Installer:
             # No need to set it again here
 
             # Re-run dependency grouping on remaining workloads for optimal installation plan
-            filtered_workloads = filter_workloads_by_gpu_type(self.workloads, config.gpu_type)
+            filtered_workloads = filter_workloads_by_gpu_type(
+                self.workloads, config.gpu_type, execution_target=config.execution_target
+            )
             from llmb_install.core.workload import filter_tools_from_workload_list
 
             tools = filter_tools_from_workload_list(self.workloads)
@@ -571,8 +619,6 @@ class Installer:
             return True
 
         except Exception as e:
-            print(f"\nError during resume: {e}")
-            print("You may need to start a fresh installation.")
             raise _ResumeExecutionError(e) from e
 
     def _edit_resume_installation(
@@ -687,7 +733,9 @@ class Installer:
                 )
 
             # Prepare workloads and perform installation with new config
-            filtered_workloads = self._prepare_workloads(new_config.gpu_type, workloads_to_install)
+            filtered_workloads = self._prepare_workloads(
+                new_config.gpu_type, workloads_to_install, execution_target=new_config.execution_target
+            )
 
             # Build existing_workload_venvs for venv reuse
             # For incremental installs, combine original venvs with those from partial install
@@ -715,8 +763,6 @@ class Installer:
             return True
 
         except Exception as e:
-            print(f"\nError during edit: {e}")
-            print("You may need to start a fresh installation.")
             raise _ResumeExecutionError(e) from e
 
     def run(self, args: argparse.Namespace) -> None:
@@ -770,7 +816,7 @@ class Installer:
                 self.root_dir = find_llmb_repo_root()
                 resume_config = None  # State cleared, no longer resuming
         else:
-            # No resume state - check if running from existing installation directory
+            # No resume state - check if running from existing installation directory.
             install_path_from_cwd = self._check_if_running_from_install_dir()
             if install_path_from_cwd:
                 cluster_config = self._detect_incremental_install(install_path_from_cwd)
@@ -875,11 +921,55 @@ class Installer:
         # Update config with dev_mode from args if present (InstallConfig default is False)
         config.dev_mode = getattr(args, 'dev_mode', False)
 
+        # Variables the selected recipes declare under environment_prompts must be in the playfile
+        # and non-blank.
+        env_prompts = collect_environment_prompts(self.workloads, config.selected_workloads)
+        missing_prompts = missing_environment_prompts(env_prompts, config.environment_vars)
+        if missing_prompts:
+            print("Error: the playfile's environment variables do not satisfy the selected workloads:")
+            for prompt in missing_prompts:
+                print(f"  - {prompt.name} is missing (required by {', '.join(prompt.workloads)})")
+            print("Fix them under 'environment_vars' in the playfile.")
+            raise SystemExit(EXIT_ERROR)
+
+        domains = NVL_DOMAINS_BY_GPU[config.gpu_type]
+        if not uses_block_topology(config.gpu_type):
+            fixed_nvl_domain = domains[0]
+            if config.nvl_domain not in (None, fixed_nvl_domain) or config.nvl_block_sizes is not None:
+                print(
+                    f"Warning: ignoring playfile NVLink settings; {config.gpu_type.upper()} uses NVL{fixed_nvl_domain}."
+                )
+            config.nvl_domain = fixed_nvl_domain
+            config.nvl_block_sizes = None
+        elif config.execution_target == ExecutionTarget.KUBERNETES:
+            # No Slurm to query; the domain is the single-rack size unless the playfile says otherwise.
+            if config.nvl_domain is None:
+                config.nvl_domain = min(domains)
+        elif config.nvl_domain is None:
+            detection = detect_nvl_topology(config.gpu_type)
+            if detection.reason == 'detected' and detection.nvl_domain in domains:
+                config.nvl_domain = detection.nvl_domain
+                config.nvl_block_sizes = detection.block_sizes
+            else:
+                print(f"Error: {describe_failure(detection)} Set 'nvl_domain' in the playfile.")
+                raise SystemExit(EXIT_ERROR)
+        elif config.nvl_block_sizes is None:
+            detection = detect_nvl_topology(config.gpu_type)
+            if detection.reason == 'detected':
+                config.nvl_block_sizes = detection.block_sizes
+                if detection.nvl_domain != config.nvl_domain:
+                    print(
+                        f"Warning: playfile declares NVL{config.nvl_domain} but the Slurm topology "
+                        f"looks like NVL{detection.nvl_domain}."
+                    )
+
         print(f"Environment type: {config.venv_type}")
         print(f"Install path: {config.install_path}")
         print(f"GPU type: {config.gpu_type}")
         print(f"Node architecture: {config.node_architecture}")
-        print(f"Install method: {config.install_method}")
+        if config.nvl_domain is not None:
+            print(f"NVLink domain: NVL{config.nvl_domain}")
+        print(f"Install method: {config.image_download_method}")
         print(f"Selected workloads: {', '.join(config.selected_workloads)}")
         print()
 
@@ -888,7 +978,9 @@ class Installer:
         config.llmb_repo = self.root_dir  # Ensure config has the actual repo path used
 
         # Prepare workloads and perform installation
-        filtered_workloads = self._prepare_workloads(config.gpu_type, config.selected_workloads)
+        filtered_workloads = self._prepare_workloads(
+            config.gpu_type, config.selected_workloads, execution_target=config.execution_target
+        )
 
         # Pass config to _perform_installation
         self._perform_installation(
@@ -965,7 +1057,9 @@ class Installer:
             config.image_folder = args.image_folder
 
         # Prepare workloads and perform installation
-        filtered_workloads = self._prepare_workloads(config.gpu_type, config.selected_workloads)
+        filtered_workloads = self._prepare_workloads(
+            config.gpu_type, config.selected_workloads, execution_target=config.execution_target
+        )
 
         self._perform_installation(
             config,
@@ -981,7 +1075,7 @@ class Installer:
         """
         print()  # header spacing
 
-        # NEW: Check if running from existing LLMB_INSTALL (entrance point #1)
+        # NEW: Check if running from existing LLMB_INSTALL (entrance point #1).
         install_path_from_cwd = self._check_if_running_from_install_dir()
         if install_path_from_cwd:
             cluster_config = self._detect_incremental_install(install_path_from_cwd)
@@ -1033,7 +1127,9 @@ class Installer:
                     return
 
                 # Prepare workloads for installation
-                filtered_workloads = self._prepare_workloads(config.gpu_type, config.selected_workloads)
+                filtered_workloads = self._prepare_workloads(
+                    config.gpu_type, config.selected_workloads, execution_target=config.execution_target
+                )
 
                 # Perform incremental installation
                 self._perform_installation(
@@ -1066,7 +1162,9 @@ class Installer:
                 existing_venvs = getattr(config, '_existing_venvs', {})
                 existing_cluster_config = getattr(config, '_existing_cluster_config', None)
 
-                filtered_workloads = self._prepare_workloads(config.gpu_type, config.selected_workloads)
+                filtered_workloads = self._prepare_workloads(
+                    config.gpu_type, config.selected_workloads, execution_target=config.execution_target
+                )
 
                 # Perform incremental installation
                 self._perform_installation(
@@ -1087,7 +1185,9 @@ class Installer:
                 override_defaults = config
 
         # Prepare workloads and perform installation
-        filtered_workloads = self._prepare_workloads(config.gpu_type, config.selected_workloads)
+        filtered_workloads = self._prepare_workloads(
+            config.gpu_type, config.selected_workloads, execution_target=config.execution_target
+        )
 
         self._perform_installation(
             config,
@@ -1135,6 +1235,13 @@ class Installer:
         venv_type = prompt_environment_type(ui, defaults.get('venv_type'))
         print()
 
+        cluster_type = prompt_cluster_type(ui, 'kubernetes' if defaults.get('kubernetes') else 'slurm')
+        if cluster_type is None:
+            print("\nInstallation cancelled.")
+            raise SystemExit(EXIT_CANCELLED)
+        is_kubernetes = cluster_type == 'kubernetes'
+        print()
+
         # Loop until we get a valid install path (not an existing installation, or user accepts incremental)
         while True:
             install_path = prompt_install_location(ui, default=defaults.get('install_path'))
@@ -1142,7 +1249,9 @@ class Installer:
                 print("\nInstallation cancelled.")
                 raise SystemExit(EXIT_CANCELLED)
 
-            # NEW: Check for existing installation (entrance point #2)
+            # Check for an existing installation (entrance point #2). Its execution target is
+            # authoritative for incremental installs; the earlier cluster-type choice applies
+            # only when this path becomes a fresh installation.
             cluster_config = self._detect_incremental_install(install_path)
             if cluster_config:
                 # Validate llmb_repo path before offering incremental install
@@ -1159,15 +1268,21 @@ class Installer:
 
                 installed_workloads = cluster_config.get('workloads', {}).get('installed', [])
                 gpu_type = cluster_config.get('gpu_type', 'unknown')
+                execution_target = cluster_config.get('execution_target', 'slurm')
+                target_label = 'Kubernetes' if execution_target == ExecutionTarget.KUBERNETES else 'Slurm'
 
                 print(f"\nExisting installation detected at {install_path} ({gpu_type.upper()})")
+                print(f"  Execution target: {target_label}")
                 print(f"  Currently installed: {', '.join(installed_workloads)}")
                 print()
 
                 choice = ui.prompt_select(
                     "What would you like to do?",
                     choices=[
-                        {'name': 'Add workloads to existing installation', 'value': 'incremental'},
+                        {
+                            'name': f'Add workloads to existing {target_label} installation',
+                            'value': 'incremental',
+                        },
                         {'name': 'Choose different installation path', 'value': 'different'},
                     ],
                     default='incremental',
@@ -1243,6 +1358,7 @@ class Installer:
         from llmb_install.ui.prompts.gpu import (
             prompt_node_architecture as new_prompt_node_architecture,
         )
+        from llmb_install.ui.prompts.gpu import prompt_nvl_domain
         from llmb_install.ui.prompts.slurm import (
             prompt_slurm_info as new_prompt_slurm_info,
         )
@@ -1257,24 +1373,44 @@ class Installer:
                 'cpu_partition': slurm_config_data['cpu_partition'],
             }
 
-        slurm_config = new_prompt_slurm_info(ui, slurm_defaults, express_mode=False)
-        if not slurm_config:
-            print("\nInstallation cancelled.")
-            raise SystemExit(EXIT_CANCELLED)
+        # Kubernetes target: no SLURM prompt; collect namespace/kubeconfig/pull-secrets.
+        kubernetes_obj = None
+        if is_kubernetes:
+            from llmb_install.ui.prompts.kubernetes import prompt_kubernetes_info
+
+            slurm_config = None
+            k8s_result = prompt_kubernetes_info(ui, defaults.get('kubernetes'), express_mode=False)
+            if not k8s_result:
+                print("\nInstallation cancelled.")
+                raise SystemExit(EXIT_CANCELLED)
+            kubernetes_obj = KubernetesConfig(**k8s_result['kubernetes'])
+        else:
+            slurm_config = new_prompt_slurm_info(ui, slurm_defaults, express_mode=False)
+            if not slurm_config:
+                print("\nInstallation cancelled.")
+                raise SystemExit(EXIT_CANCELLED)
 
         gpu_type = new_prompt_gpu_type(ui, self.workloads, defaults.get('gpu_type'), express_mode=False)
 
+        gpu_partition_for_arch = slurm_config['slurm']['gpu_partition'] if slurm_config else None
         node_architecture = new_prompt_node_architecture(
             ui,
             gpu_type,
             defaults.get('node_architecture'),
             express_mode=False,
-            gpu_partition=slurm_config['slurm']['gpu_partition'],
+            gpu_partition=gpu_partition_for_arch,
+        )
+        nvl_domain, nvl_block_sizes = prompt_nvl_domain(
+            ui,
+            gpu_type,
+            defaults.get('nvl_domain'),
+            query_slurm=not is_kubernetes,
         )
         print()
 
         # Filter workloads by GPU type
-        filtered_workloads = filter_workloads_by_gpu_type(self.workloads, gpu_type)
+        execution_target = ExecutionTarget.KUBERNETES if is_kubernetes else ExecutionTarget.SLURM
+        filtered_workloads = filter_workloads_by_gpu_type(self.workloads, gpu_type, execution_target=execution_target)
         if not filtered_workloads:
             print(f"No workloads found that support {gpu_type} GPU type.")
             raise SystemExit(EXIT_ERROR)
@@ -1286,11 +1422,18 @@ class Installer:
         # Resolve GPU-specific images/repos
         filtered_workloads = resolve_gpu_overrides(filtered_workloads, gpu_type)
 
-        install_method = prompt_install_method(ui, defaults.get('install_method'), express_mode=False)
-        if install_method is None:
-            print("\nInstallation cancelled.")
-            raise SystemExit(EXIT_CANCELLED)
-        print()
+        # For Slurm installs, ask where image/dataset downloads run.
+        # Kubernetes skips downloads entirely so this choice does not apply.
+        if is_kubernetes:
+            image_download_method = 'local'
+        else:
+            image_download_method = prompt_image_download_method(
+                ui, defaults.get('image_download_method'), express_mode=False
+            )
+            if image_download_method is None:
+                print("\nInstallation cancelled.")
+                raise SystemExit(EXIT_CANCELLED)
+            print()
 
         # In dev mode, skip exemplar/custom question and go straight to workload selection
         selected, selection_mode = prompt_workload_selection(
@@ -1305,31 +1448,41 @@ class Installer:
             print("\nInstallation cancelled.")
             raise SystemExit(EXIT_CANCELLED)
 
-        env_vars = prompt_environment_variables(ui, defaults.get('environment_vars'), express_mode=False)
+        env_prompts = collect_environment_prompts(filtered_workloads, selected)
+        env_vars = prompt_environment_variables(
+            ui, defaults.get('environment_vars'), express_mode=False, prompts=env_prompts
+        )
         if env_vars is None:
             print("\nInstallation cancelled.")
             raise SystemExit(EXIT_CANCELLED)
         print()
 
         # Create configuration object
-        slurm_obj = SlurmConfig(
-            account=slurm_config['slurm']['account'],
-            gpu_partition=slurm_config['slurm']['gpu_partition'],
-            cpu_partition=slurm_config['slurm']['cpu_partition'],
-            gpu_partition_gres=slurm_config['slurm'].get('gpu_partition_gres'),
-            cpu_partition_gres=slurm_config['slurm'].get('cpu_partition_gres'),
+        slurm_obj = (
+            SlurmConfig(
+                account=slurm_config['slurm']['account'],
+                gpu_partition=slurm_config['slurm']['gpu_partition'],
+                cpu_partition=slurm_config['slurm']['cpu_partition'],
+                gpu_partition_gres=slurm_config['slurm'].get('gpu_partition_gres'),
+                cpu_partition_gres=slurm_config['slurm'].get('cpu_partition_gres'),
+            )
+            if slurm_config
+            else None
         )
 
         config = InstallConfig(
             install_path=install_path,
             gpu_type=gpu_type,
+            nvl_domain=nvl_domain,
+            nvl_block_sizes=nvl_block_sizes,
             node_architecture=node_architecture,
             venv_type=venv_type,
             slurm=slurm_obj,
+            kubernetes=kubernetes_obj,
             environment_vars=env_vars,
             selected_workloads=selected,
             workload_selection_mode=selection_mode,
-            install_method=install_method,
+            image_download_method=image_download_method,
             ui_mode=ui_mode,
             dev_mode=dev_mode,
             llmb_repo=self.root_dir,
@@ -1371,30 +1524,44 @@ class Installer:
         venv_type = resume_config.venv_type
         print()
 
-        # 2. SLURM configuration - allow changes
-        from llmb_install.ui.prompts.slurm import (
-            prompt_slurm_info as new_prompt_slurm_info,
-        )
+        # 2./3. Orchestration target. A Kubernetes install has no Slurm settings and no image
+        # downloads: keep its Kubernetes settings and credentials, so the resumed run takes the
+        # Kubernetes path rather than silently becoming a Slurm install.
+        slurm_obj = None
+        if resume_config.execution_target == ExecutionTarget.KUBERNETES:
+            install_method = 'local'
+        else:
+            # SLURM configuration - allow changes
+            from llmb_install.ui.prompts.slurm import (
+                prompt_slurm_info as new_prompt_slurm_info,
+            )
 
-        # Prepare SLURM defaults from resume config
-        slurm_defaults = None
-        if resume_config.slurm:
-            slurm_defaults = {
-                'account': resume_config.slurm.account,
-                'gpu_partition': resume_config.slurm.gpu_partition,
-                'cpu_partition': resume_config.slurm.cpu_partition,
-            }
+            # Prepare SLURM defaults from resume config
+            slurm_defaults = None
+            if resume_config.slurm:
+                slurm_defaults = {
+                    'account': resume_config.slurm.account,
+                    'gpu_partition': resume_config.slurm.gpu_partition,
+                    'cpu_partition': resume_config.slurm.cpu_partition,
+                }
 
-        slurm_config = new_prompt_slurm_info(ui, slurm_defaults, express_mode=False)
-        if not slurm_config:
-            print("\nConfiguration cancelled.")
-            raise SystemExit(EXIT_CANCELLED)
+            slurm_config = new_prompt_slurm_info(ui, slurm_defaults, express_mode=False)
+            if not slurm_config:
+                print("\nConfiguration cancelled.")
+                raise SystemExit(EXIT_CANCELLED)
+            slurm_obj = SlurmConfig(
+                account=slurm_config['slurm']['account'],
+                gpu_partition=slurm_config['slurm']['gpu_partition'],
+                cpu_partition=slurm_config['slurm']['cpu_partition'],
+                gpu_partition_gres=slurm_config['slurm'].get('gpu_partition_gres'),
+                cpu_partition_gres=slurm_config['slurm'].get('cpu_partition_gres'),
+            )
 
-        # 3. Install method - allow changes if system supports both
-        install_method = prompt_install_method(ui, resume_config.install_method, express_mode=False)
-        if install_method is None:
-            print("\nInstallation cancelled.")
-            raise SystemExit(EXIT_CANCELLED)
+            # 3. Image download method - allow changes if system supports both
+            install_method = prompt_image_download_method(ui, resume_config.image_download_method, express_mode=False)
+            if install_method is None:
+                print("\nInstallation cancelled.")
+                raise SystemExit(EXIT_CANCELLED)
         print()
 
         # 4. Workload selection - restricted to original selection minus completed
@@ -1406,7 +1573,9 @@ class Installer:
             selected = []
         else:
             # Prepare workloads dict for selection (filtering by original GPU type)
-            filtered_workloads = filter_workloads_by_gpu_type(self.workloads, resume_config.gpu_type)
+            filtered_workloads = filter_workloads_by_gpu_type(
+                self.workloads, resume_config.gpu_type, execution_target=resume_config.execution_target
+            )
             tools = filter_tools_from_workload_list(self.workloads)
             filtered_workloads.update(tools)
             filtered_workloads = resolve_gpu_overrides(filtered_workloads, resume_config.gpu_type)
@@ -1447,19 +1616,16 @@ class Installer:
                 return InstallConfig(
                     install_path=resume_config.install_path,
                     gpu_type=resume_config.gpu_type,
+                    nvl_domain=resume_config.nvl_domain,
+                    nvl_block_sizes=resume_config.nvl_block_sizes,
                     node_architecture=resume_config.node_architecture,
                     llmb_repo=resume_config.llmb_repo,
                     dev_mode=resume_config.dev_mode,
                     image_folder=resume_config.image_folder,
                     venv_type=venv_type,
-                    slurm=SlurmConfig(
-                        account=slurm_config['slurm']['account'],
-                        gpu_partition=slurm_config['slurm']['gpu_partition'],
-                        cpu_partition=slurm_config['slurm']['cpu_partition'],
-                        gpu_partition_gres=slurm_config['slurm'].get('gpu_partition_gres'),
-                        cpu_partition_gres=slurm_config['slurm'].get('cpu_partition_gres'),
-                    ),
-                    install_method=install_method,
+                    slurm=slurm_obj,
+                    kubernetes=resume_config.kubernetes,
+                    image_download_method=install_method,
                     selected_workloads=[],
                     environment_vars=resume_config.environment_vars,  # Keep existing
                     ui_mode=ui_mode,
@@ -1473,7 +1639,14 @@ class Installer:
         # Re-prompt for environment variables, passing existing as defaults
         # This allows users to update HF_TOKEN or other variables
         existing_env_vars = resume_config.environment_vars.copy()
-        new_env_vars = prompt_environment_variables(ui, defaults=existing_env_vars, express_mode=False)
+        # Environment prompts from every workload of this install, including completed ones,
+        # so an already-installed workload's variable is not dropped on edit.
+        env_prompts = collect_environment_prompts(
+            self.workloads, list(dict.fromkeys([*resume_config.selected_workloads, *(selected or [])]))
+        )
+        new_env_vars = prompt_environment_variables(
+            ui, defaults=existing_env_vars, express_mode=False, prompts=env_prompts
+        )
 
         if new_env_vars is None:  # User cancelled
             print("\nConfiguration cancelled.")
@@ -1482,20 +1655,13 @@ class Installer:
         # Merge new env vars
         env_vars = new_env_vars
 
-        # Create SLURM config object
-        slurm_obj = SlurmConfig(
-            account=slurm_config['slurm']['account'],
-            gpu_partition=slurm_config['slurm']['gpu_partition'],
-            cpu_partition=slurm_config['slurm']['cpu_partition'],
-            gpu_partition_gres=slurm_config['slurm'].get('gpu_partition_gres'),
-            cpu_partition_gres=slurm_config['slurm'].get('cpu_partition_gres'),
-        )
-
         # Create updated configuration with locked and modified fields
         config = InstallConfig(
             # LOCKED FIELDS - use original values
             install_path=resume_config.install_path,
             gpu_type=resume_config.gpu_type,
+            nvl_domain=resume_config.nvl_domain,
+            nvl_block_sizes=resume_config.nvl_block_sizes,
             node_architecture=resume_config.node_architecture,
             llmb_repo=resume_config.llmb_repo,
             dev_mode=resume_config.dev_mode,
@@ -1503,9 +1669,10 @@ class Installer:
             # EDITABLE FIELDS - use new values
             venv_type=venv_type,
             slurm=slurm_obj,
-            install_method=install_method,
+            image_download_method=install_method,
             selected_workloads=selected,
             # PRESERVED FIELDS - keep original
+            kubernetes=resume_config.kubernetes,
             environment_vars=env_vars,
             ui_mode=ui_mode,
             cache_dirs_configured=resume_config.cache_dirs_configured,
@@ -1545,8 +1712,10 @@ class Installer:
         print(f"{locked_prefix}Install Path: {config.install_path}")
         print(f"{locked_prefix}GPU Type: {config.gpu_type}")
         print(f"{locked_prefix}Node Architecture: {config.node_architecture}")
+        if config.nvl_domain is not None:
+            print(f"{locked_prefix}NVLink Domain: NVL{config.nvl_domain}")
         print(f"{locked_prefix}Virtual Environment: {config.venv_type}")
-        print(f"Install Mode: {config.install_method}")
+        print(f"Install Mode: {config.image_download_method}")
 
         if config.slurm:
             print(f"SLURM Account: {config.slurm.account}")
@@ -1684,11 +1853,13 @@ class Installer:
 
         # Extract locked configuration from cluster_config
         gpu_type = cluster_config['gpu_type']
+        nvl_domain = cluster_config.get('nvl_domain')
+        nvl_block_sizes = cluster_config.get('nvl_block_sizes')
         llmb_repo = cluster_config.get('llmb_repo')
 
         # Extract install-specific metadata (new in Phase 1)
         install_metadata = cluster_config.get('install', {})
-        install_method = install_metadata.get('method', 'local')
+        install_method = install_metadata.get('image_download_method', install_metadata.get('method', 'local'))
 
         # Extract venv_type with backward compatibility fallback
         from llmb_install.environment.venv_utils import extract_venv_type_from_config
@@ -1717,8 +1888,10 @@ class Installer:
         image_folder_from_flag = getattr(args, 'image_folder', None) if args else None
         image_folder = image_folder_from_flag or image_folder_from_config  # Flag takes precedence
 
-        # Extract SLURM, env_vars, etc. - ALL LOCKED, just reuse
+        # Extract orchestration target and its settings - ALL LOCKED, just reuse
+        execution_target = cluster_config.get('execution_target', 'slurm')
         slurm_config_dict = cluster_config.get('slurm', {})
+        kubernetes_config_dict = cluster_config.get('kubernetes', {})
         env_vars = cluster_config.get('environment', {})
 
         ui = self.create_ui(ui_mode)
@@ -1730,8 +1903,12 @@ class Installer:
         print(f"🔒 Install Path: {install_path}")
         print(f"🔒 GPU Type: {gpu_type}")
         print(f"🔒 Node Architecture: {node_architecture}")
+        if nvl_domain is not None:
+            print(f"🔒 NVLink Domain: NVL{nvl_domain}")
         print(f"🔒 Virtual Environment: {venv_type}")
-        if slurm_config_dict:
+        if execution_target == ExecutionTarget.KUBERNETES:
+            print(f"🔒 Namespace: {kubernetes_config_dict.get('namespace', 'default')}")
+        else:
             print(f"🔒 SLURM Account: {slurm_config_dict.get('account', 'N/A')}")
             print(f"🔒 GPU Partition: {slurm_config_dict.get('gpu', {}).get('partition', 'N/A')}")
             print(f"🔒 CPU Partition: {slurm_config_dict.get('cpu', {}).get('partition', 'N/A')}")
@@ -1745,7 +1922,7 @@ class Installer:
         print()
 
         # Filter workloads to exclude already installed
-        filtered_workloads = filter_workloads_by_gpu_type(self.workloads, gpu_type)
+        filtered_workloads = filter_workloads_by_gpu_type(self.workloads, gpu_type, execution_target=execution_target)
         tools = filter_tools_from_workload_list(self.workloads)
         filtered_workloads.update(tools)
         filtered_workloads = resolve_gpu_overrides(filtered_workloads, gpu_type)
@@ -1776,25 +1953,33 @@ class Installer:
             raise SystemExit(EXIT_CANCELLED)
 
         # Build InstallConfig using existing settings
-        gpu_slurm = slurm_config_dict.get('gpu', {})
-        cpu_slurm = slurm_config_dict.get('cpu', {})
-        slurm_obj = SlurmConfig(
-            account=slurm_config_dict.get('account', ''),
-            gpu_partition=gpu_slurm.get('partition', ''),
-            cpu_partition=cpu_slurm.get('partition', ''),
-            gpu_partition_gres=gpu_slurm.get('gres'),
-            cpu_partition_gres=cpu_slurm.get('gres'),
-        )
+        slurm_obj = None
+        kubernetes_obj = None
+        if execution_target == ExecutionTarget.KUBERNETES:
+            kubernetes_obj = KubernetesConfig.model_validate(kubernetes_config_dict)
+        else:
+            gpu_slurm = slurm_config_dict.get('gpu', {})
+            cpu_slurm = slurm_config_dict.get('cpu', {})
+            slurm_obj = SlurmConfig(
+                account=slurm_config_dict.get('account', ''),
+                gpu_partition=gpu_slurm.get('partition', ''),
+                cpu_partition=cpu_slurm.get('partition', ''),
+                gpu_partition_gres=gpu_slurm.get('gres'),
+                cpu_partition_gres=cpu_slurm.get('gres'),
+            )
 
         config = InstallConfig(
             install_path=install_path,
             gpu_type=gpu_type,
+            nvl_domain=nvl_domain,
+            nvl_block_sizes=nvl_block_sizes,
             node_architecture=node_architecture,
             venv_type=venv_type,
             slurm=slurm_obj,
+            kubernetes=kubernetes_obj,
             environment_vars=env_vars,
             selected_workloads=selected,
-            install_method=install_method,
+            image_download_method=install_method,
             ui_mode=ui_mode,
             dev_mode=False,  # Incremental never uses dev mode
             llmb_repo=llmb_repo,
@@ -1825,20 +2010,29 @@ class Installer:
             print("Error: System config disappeared between checks")
             raise SystemExit(EXIT_ERROR)
 
+        from llmb_install.ui.prompts.gpu import prompt_nvl_domain
+
         ui = SimpleUI()  # Use simple UI for minimal prompts
+
+        use_kubernetes = system_config.execution_target == ExecutionTarget.KUBERNETES
 
         # Display summary of saved configuration first
         ui.print_section("Express Mode Configuration Summary")
         ui.log(f"GPU Type: {system_config.gpu_type.upper()}")
         ui.log(f"Architecture: {system_config.node_architecture}")
         ui.log("Environment: uv")
-        ui.log(f"Install Method: {system_config.install_method}")
-        if system_config.slurm:
-            ui.log(f"SLURM Account: {system_config.slurm.account}")
-            ui.log(f"GPU Partition: {system_config.slurm.gpu_partition}")
-            ui.log(f"CPU Partition: {system_config.slurm.cpu_partition}")
-            if system_config.slurm.gpu_partition_gres:
-                ui.log(f"GPUs per Node: {system_config.slurm.gpu_partition_gres}")
+        if use_kubernetes:
+            ui.log("Install Method: kubernetes")
+            if system_config.kubernetes:
+                ui.log(f"Namespace: {system_config.kubernetes.namespace}")
+        else:
+            ui.log(f"Install Method: {system_config.image_download_method}")
+            if system_config.slurm:
+                ui.log(f"SLURM Account: {system_config.slurm.account}")
+                ui.log(f"GPU Partition: {system_config.slurm.gpu_partition}")
+                ui.log(f"CPU Partition: {system_config.slurm.cpu_partition}")
+                if system_config.slurm.gpu_partition_gres:
+                    ui.log(f"GPUs per Node: {system_config.slurm.gpu_partition_gres}")
         if system_config.image_folder:
             ui.log(f"Image Folder: {system_config.image_folder}")
         if system_config.environment_vars:
@@ -1892,7 +2086,9 @@ class Installer:
         if args.workloads:
             if args.workloads.lower() == 'all':
                 # Filter available workloads by saved GPU type
-                filtered_workloads = filter_workloads_by_gpu_type(self.workloads, system_config.gpu_type)
+                filtered_workloads = filter_workloads_by_gpu_type(
+                    self.workloads, system_config.gpu_type, execution_target=system_config.execution_target
+                )
                 if not filtered_workloads:
                     print(f"Error: No workloads available for GPU type: {system_config.gpu_type}")
                     raise SystemExit(EXIT_ERROR)
@@ -1913,7 +2109,9 @@ class Installer:
         elif getattr(args, 'exemplar', False):
             # Exemplar mode: Use exemplar.yaml to select workloads
             workload_selection_mode = 'exemplar'
-            filtered_workloads = filter_workloads_by_gpu_type(self.workloads, system_config.gpu_type)
+            filtered_workloads = filter_workloads_by_gpu_type(
+                self.workloads, system_config.gpu_type, execution_target=system_config.execution_target
+            )
             if not filtered_workloads:
                 print(f"Error: No workloads available for GPU type: {system_config.gpu_type}")
                 raise SystemExit(EXIT_ERROR)
@@ -1933,7 +2131,9 @@ class Installer:
                 raise SystemExit(EXIT_ERROR) from e
         else:
             # Prompt for workload selection
-            filtered_workloads = filter_workloads_by_gpu_type(self.workloads, system_config.gpu_type)
+            filtered_workloads = filter_workloads_by_gpu_type(
+                self.workloads, system_config.gpu_type, execution_target=system_config.execution_target
+            )
             if not filtered_workloads:
                 print(f"Error: No workloads available for GPU type: {system_config.gpu_type}")
                 raise SystemExit(EXIT_ERROR)
@@ -1950,8 +2150,16 @@ class Installer:
                 print("\nInstallation cancelled.")
                 raise SystemExit(EXIT_CANCELLED)
 
-        # Use saved environment variables (express mode doesn't prompt for these)
-        env_vars = system_config.environment_vars.copy() if system_config.environment_vars else {}
+        # Express mode uses saved or exported values and prompts only for required
+        # environment variables that are still missing (plus the NVLink domain when
+        # it cannot be auto-detected, since topology is never saved).
+        env_prompts = collect_environment_prompts(self.workloads, selected)
+        env_vars = prompt_environment_variables(
+            ui, defaults=system_config.environment_vars, express_mode=True, prompts=env_prompts
+        )
+        if env_vars is None:
+            print("\nInstallation cancelled.")
+            raise SystemExit(EXIT_CANCELLED)
 
         # Handle image folder - use saved config if not provided via CLI
         image_folder = getattr(args, 'image_folder', None)
@@ -1959,28 +2167,52 @@ class Installer:
             image_folder = system_config.image_folder
             ui.log(f"Using saved image folder: {image_folder}")
 
-        # Create SLURM config object
+        # Resolve the orchestration target. The Kubernetes target skips SLURM entirely;
+        # its settings come from the saved system config.
         slurm_obj = None
-        if system_config.slurm:
-            slurm_obj = SlurmConfig(
-                account=system_config.slurm.account,
-                gpu_partition=system_config.slurm.gpu_partition,
-                cpu_partition=system_config.slurm.cpu_partition,
-                gpu_partition_gres=system_config.slurm.gpu_partition_gres,
-                cpu_partition_gres=system_config.slurm.cpu_partition_gres,
-            )
+        kubernetes_obj = None
+        if use_kubernetes:
+            image_download_method = 'local'
+            kubernetes_obj = system_config.kubernetes
+            if kubernetes_obj is None:
+                from llmb_install.ui.prompts.kubernetes import prompt_kubernetes_info
+
+                k8s_result = prompt_kubernetes_info(ui, None, express_mode=True)
+                if not k8s_result:
+                    print("\nInstallation cancelled.")
+                    raise SystemExit(EXIT_CANCELLED)
+                kubernetes_obj = KubernetesConfig(**k8s_result['kubernetes'])
+        else:
+            image_download_method = system_config.image_download_method
+            if system_config.slurm:
+                slurm_obj = SlurmConfig(
+                    account=system_config.slurm.account,
+                    gpu_partition=system_config.slurm.gpu_partition,
+                    cpu_partition=system_config.slurm.cpu_partition,
+                    gpu_partition_gres=system_config.slurm.gpu_partition_gres,
+                    cpu_partition_gres=system_config.slurm.cpu_partition_gres,
+                )
 
         # Use saved values from system config, except for recipe environment type
         # which is forced to uv for fresh installs.
+        nvl_domain, nvl_block_sizes = prompt_nvl_domain(
+            ui,
+            system_config.gpu_type,
+            query_slurm=not use_kubernetes,
+        )
+
         config = InstallConfig(
             install_path=install_path,
             gpu_type=system_config.gpu_type,
+            nvl_domain=nvl_domain,
+            nvl_block_sizes=nvl_block_sizes,
             node_architecture=system_config.node_architecture,
             venv_type=venv_type,
             slurm=slurm_obj,
+            kubernetes=kubernetes_obj,
             environment_vars=env_vars,
             selected_workloads=selected,
-            install_method=system_config.install_method,
+            image_download_method=image_download_method,
             ui_mode='simple',  # Express mode uses simple UI
             image_folder=image_folder,
             dev_mode=dev_mode,
@@ -2009,8 +2241,10 @@ class Installer:
             gpu_type_display = system_config.gpu_type.upper()
             print(f"Available workloads for {gpu_type_display}:")
 
-            # Filter workloads by saved GPU type
-            filtered_workloads = filter_workloads_by_gpu_type(self.workloads, system_config.gpu_type)
+            # Filter workloads by saved GPU type (and cluster type)
+            filtered_workloads = filter_workloads_by_gpu_type(
+                self.workloads, system_config.gpu_type, execution_target=system_config.execution_target
+            )
             if not filtered_workloads:
                 print(f"No workloads available for {gpu_type_display}")
                 return
@@ -2058,15 +2292,19 @@ class Installer:
                 for name in sorted(gpu_workloads[gpu_type]):
                     print(f"  {name}")
 
-    def _categorize_missing_workloads(self, workload_names: List[str]) -> Tuple[List[Tuple[str, List[str]]], List[str]]:
-        """Categorize workloads as unsupported (exist but wrong GPU) or not found (don't exist).
+    def _categorize_missing_workloads(
+        self, workload_names: List[str], gpu_type: str, execution_target: str = ExecutionTarget.SLURM
+    ) -> Tuple[List[Tuple[str, List[str], bool]], List[str]]:
+        """Categorize workloads as unsupported (exist but wrong GPU/target) or not found.
 
         Args:
             workload_names: List of workload names to categorize
+            gpu_type: Selected GPU type
+            execution_target: Cluster execution target to check support against
 
         Returns:
             Tuple of (unsupported_workloads, not_found_workloads)
-            - unsupported_workloads: List of (name, supported_gpu_types)
+            - unsupported_workloads: List of (name, supported_gpu_types, target_supported)
             - not_found_workloads: List of workload names
         """
         unsupported = []
@@ -2074,34 +2312,54 @@ class Installer:
 
         for w in workload_names:
             if w in self.workloads:
-                supported_gpus = sorted(self.workloads[w].get('run', {}).get('gpu_configs', {}).keys())
-                unsupported.append((w, supported_gpus))
+                run_config = self.workloads[w].get('run', {})
+                supported_gpus = sorted(run_config.get('gpu_configs', {}).keys())
+                target_supported = RunConfig.model_validate(run_config).supports(execution_target, gpu_type)
+                unsupported.append((w, supported_gpus, target_supported))
             else:
                 not_found.append(w)
 
         return unsupported, not_found
 
-    def _prepare_workloads(self, gpu_type: str, selected: List[str]) -> Dict[str, Dict[str, Any]]:
+    @staticmethod
+    def _print_unsupported_workloads(
+        unsupported: List[Tuple[str, List[str], bool]], gpu_type: str, execution_target: str = ExecutionTarget.SLURM
+    ) -> None:
+        """Explain why selected workloads cannot be installed for this GPU type / execution target."""
+        no_target = [name for name, gpus, target_ok in unsupported if gpu_type in gpus and not target_ok]
+        wrong_gpu = [(name, gpus) for name, gpus, target_ok in unsupported if gpu_type not in gpus]
+        if wrong_gpu:
+            print(f"\nError: The following workloads do not support gpu_type '{gpu_type}':")
+            for name, gpus in wrong_gpu:
+                print(f"  - {name} (supported gpu_types: {', '.join(gpus)})")
+        if no_target:
+            print(f"\nError: The following workloads do not support execution target '{execution_target}':")
+            for name in no_target:
+                print(f"  - {name}")
+
+    def _prepare_workloads(
+        self, gpu_type: str, selected: List[str], execution_target: str = ExecutionTarget.SLURM
+    ) -> Dict[str, Dict[str, Any]]:
         """Prepare workloads for installation by filtering and resolving GPU overrides.
 
         Args:
             gpu_type: Selected GPU type
             selected: List of selected workload keys
+            execution_target: Cluster execution target; only workloads that declare it in
+                ``run.execution_targets`` are prepared.
 
         Returns:
             Dictionary of prepared workloads
         """
-        # Filter workloads by GPU type
-        filtered_workloads = filter_workloads_by_gpu_type(self.workloads, gpu_type)
+        # Filter workloads by GPU type and the cluster's execution target.
+        filtered_workloads = filter_workloads_by_gpu_type(self.workloads, gpu_type, execution_target=execution_target)
         if not filtered_workloads:
             # Early exit: No workloads in the repository support this GPU type
-            unsupported, _ = self._categorize_missing_workloads(selected)
+            unsupported, _ = self._categorize_missing_workloads(selected, gpu_type, execution_target)
 
             if unsupported:
                 # User selected specific workloads - show what they support
-                print(f"\nError: The following workloads do not support gpu_type '{gpu_type}':")
-                for name, gpus in unsupported:
-                    print(f"  - {name} (supported gpu_types: {', '.join(gpus)})")
+                self._print_unsupported_workloads(unsupported, gpu_type, execution_target)
             else:
                 # Generic error (e.g., empty selected list or invalid GPU type)
                 print(f"No workloads found that support {gpu_type} GPU type.")
@@ -2118,12 +2376,10 @@ class Installer:
         # Validate that all selected workloads exist
         missing_workloads = [w for w in selected if w not in filtered_workloads]
         if missing_workloads:
-            unsupported, not_found = self._categorize_missing_workloads(missing_workloads)
+            unsupported, not_found = self._categorize_missing_workloads(missing_workloads, gpu_type, execution_target)
 
             if unsupported:
-                print(f"\nError: The following workloads do not support gpu_type '{gpu_type}':")
-                for name, gpus in unsupported:
-                    print(f"  - {name} (supported gpu_types: {', '.join(gpus)})")
+                self._print_unsupported_workloads(unsupported, gpu_type, execution_target)
 
             if not_found:
                 print(f"\nError: The following workloads were not found: {not_found}")
@@ -2183,7 +2439,7 @@ class Installer:
                 - install_path: Target directory for installation
                 - gpu_type, node_architecture: Hardware configuration
                 - venv_type: Python environment type (uv/venv/conda)
-                - slurm: SLURM cluster configuration (if install_method='slurm')
+                - slurm: SLURM cluster configuration (if image_download_method='slurm')
                 - selected_workloads: List of workload names to install
                 - environment_vars: Environment variables to set during installation
                 - dev_mode: If True, skip state saving and use repo in-place
@@ -2222,10 +2478,13 @@ class Installer:
             The name 'install_config' distinguishes this from 'existing_cluster_config'
             and other config types used throughout the installer.
         """
-        # Configure uv/pip cache directories before any venv/dependency work so that
-        # all install subprocesses inherit them via os.environ. Single source of truth
-        # for every install mode (interactive/express/headless/resume/incremental).
+        # Export user-provided environment_vars, uv/pip cache directories and uv python
+        # preference before any venv/dependency work so that all install subprocesses
+        # inherit them via os.environ. Single source of truth for every install mode
+        # (interactive/express/headless/resume/incremental).
+        os.environ.update(install_config.environment_vars)
         setup_cache_directories(install_config.install_path, install_config.venv_type)
+        setup_uv_python_preference()
 
         # Clear any existing install state only if this is NOT a resume operation
         if not is_resume:
@@ -2262,50 +2521,105 @@ class Installer:
         os.makedirs(os.path.join(install_config.install_path, "bin"), exist_ok=True)
 
         create_llmb_run_symlink(install_config.install_path)
-        setup_compute_uv_binaries(install_config.install_path, install_config.node_architecture)
-
-        print("\nDownloading required container images.")
-        print("--------------------------------")
-        required_images = get_required_images(filtered_workloads, install_config.selected_workloads)
-        print("\nRequired container images:")
-        for image, filename in sorted(required_images.items()):
-            print(f"  - {image} -> {filename}")
-        print("\n")
-
-        # Use image_folder from config
-        effective_image_folder = install_config.image_folder
-
+        is_kubernetes = install_config.execution_target == ExecutionTarget.KUBERNETES
         slurm_info = {'slurm': install_config.slurm.model_dump()} if install_config.slurm else {}
+        kubernetes_info = install_config.kubernetes.model_dump() if install_config.kubernetes else None
 
-        fetch_container_images(
-            required_images,
-            install_config.install_path,
-            install_config.node_architecture,
-            install_config.install_method,
-            slurm_info,
-            effective_image_folder,
-        )
+        # Kubernetes target: workloads run as nvcre WorkloadRun custom resources, so
+        # the container image, HuggingFace assets, and profiling tools are provisioned
+        # in-cluster (image pull + runtime download) and skipped locally. Everything
+        # else - shared venvs, git clones, pip packages - runs through the standard
+        # install machinery, since launch.sh runs setup_experiment.py on the launch
+        # node. Preflight the cluster before the standard install flow.
+        if is_kubernetes:
+            crd_ok = check_kubernetes_prerequisites(kubernetes_info.get('kubeconfig'))
+            ngc_api_key = install_config.kubernetes.ngc_api_key or ''
+            if ngc_api_key and kubernetes_info.get('image_pull_secrets'):
+                from llmb_install.cluster.kubernetes import create_image_pull_secrets
 
-        # Download HuggingFace assets
-        hf_token = install_config.environment_vars.get('HF_TOKEN')
-        download_huggingface_files_for_workloads(
-            filtered_workloads,
-            install_config.selected_workloads,
-            install_config.install_path,
-            hf_token,
-            gpu_type=install_config.gpu_type,
-        )
+                create_image_pull_secrets(
+                    secret_names=kubernetes_info['image_pull_secrets'],
+                    ngc_api_key=ngc_api_key,
+                    namespace=kubernetes_info.get('namespace', 'default'),
+                    kubeconfig=kubernetes_info.get('kubeconfig'),
+                )
+            hf_token = install_config.environment_vars.get('HF_TOKEN', '')
+            if hf_token:
+                from llmb_install.cluster.kubernetes import create_hf_token_secret
 
-        # Download and install required tools
-        required_tools = get_required_tools(filtered_workloads, install_config.selected_workloads)
-        if required_tools:
-            print("\nDownloading required tools.")
+                hf_secret_name = 'hf-token-secret'
+                hf_secret_key = 'hf-token'  # the key the inference Helm charts read
+                ok = create_hf_token_secret(
+                    secret_name=hf_secret_name,
+                    hf_token=hf_token,
+                    namespace=kubernetes_info.get('namespace', 'default'),
+                    secret_key=hf_secret_key,
+                    kubeconfig=kubernetes_info.get('kubeconfig'),
+                )
+                if ok:
+                    install_config.environment_vars.pop('HF_TOKEN', None)
+                    kubernetes_info['hf_token_secret_name'] = hf_secret_name
+                    kubernetes_info['hf_token_secret_key'] = hf_secret_key
+            # Run nvcrectl setup init if explicitly requested OR if the CRD was
+            # not found (meaning nvcre is not yet installed on the cluster).
+            if kubernetes_info.get('run_nvcrectl_init', False) or not crd_ok:
+                if not crd_ok and not kubernetes_info.get('run_nvcrectl_init', False):
+                    print("\n⚠️  CRD not found — running 'nvcrectl setup init' to install nvcre.")
+                _nvcrectl_setup_init(
+                    namespace=kubernetes_info.get('namespace'),
+                    kubeconfig=kubernetes_info.get('kubeconfig'),
+                    chart_version=kubernetes_info.get('nvcrectl_chart_version'),
+                )
+            else:
+                print("\nSkipping 'nvcrectl setup init' (nvcre CRD already present).")
+                print(
+                    "\nKubernetes install: skipping image, HuggingFace asset, and tool setup (provisioned in-cluster)."
+                )
+        else:
+            setup_compute_uv_binaries(install_config.install_path, install_config.node_architecture)
+
+            print("\nDownloading required container images.")
             print("--------------------------------")
-            print("\nRequired tools:")
-            for tool_name, version in sorted(required_tools):
-                print(f"  - {tool_name}: {version}")
+            required_images = get_required_images(filtered_workloads, install_config.selected_workloads)
+            print("\nRequired container images:")
+            for image, filename in sorted(required_images.items()):
+                print(f"  - {image} -> {filename}")
             print("\n")
-            fetch_and_install_tools(required_tools, install_config.install_path, install_config.node_architecture)
+
+            # Use image_folder from config
+            effective_image_folder = install_config.image_folder
+
+            fetch_container_images(
+                required_images,
+                install_config.install_path,
+                install_config.node_architecture,
+                install_config.image_download_method,
+                slurm_info,
+                effective_image_folder,
+            )
+
+            # Download HuggingFace assets. Read from os.environ rather than install_config so a
+            # shell-exported HF_TOKEN is honored in playfile mode too (the playfile value, if any,
+            # was already applied to os.environ above).
+            hf_token = os.environ.get('HF_TOKEN')
+            download_huggingface_files_for_workloads(
+                filtered_workloads,
+                install_config.selected_workloads,
+                install_config.install_path,
+                hf_token,
+                gpu_type=install_config.gpu_type,
+            )
+
+            # Download and install required tools
+            required_tools = get_required_tools(filtered_workloads, install_config.selected_workloads)
+            if required_tools:
+                print("\nDownloading required tools.")
+                print("--------------------------------")
+                print("\nRequired tools:")
+                for tool_name, version in sorted(required_tools):
+                    print(f"  - {tool_name}: {version}")
+                print("\n")
+                fetch_and_install_tools(required_tools, install_config.install_path, install_config.node_architecture)
 
         # Initialize with existing venvs so that state saves during resume always
         # include venv paths for previously completed workloads. Without this,
@@ -2359,7 +2673,6 @@ class Installer:
                             install_config.venv_type,
                             install_config.install_path,
                             slurm_info,
-                            install_config.environment_vars,
                             install_config.gpu_type,
                             install_config.node_architecture,
                         )
@@ -2426,7 +2739,6 @@ class Installer:
                                 install_config.venv_type,
                                 install_config.install_path,
                                 slurm_info,
-                                install_config.environment_vars,
                                 install_config.gpu_type,
                                 install_config.node_architecture,
                             )
@@ -2478,8 +2790,6 @@ class Installer:
                         env['LLMB_INSTALL'] = install_config.install_path
                         env['MANUAL_INSTALL'] = 'false'
                         env['GPU_TYPE'] = install_config.gpu_type
-                        if install_config.environment_vars:
-                            env.update(install_config.environment_vars)
 
                         first_workload_dir = os.path.join(install_config.install_path, "workloads", first_workload_key)
                         install_dependencies(venv_path, install_config.venv_type, dependencies, first_workload_dir, env)
@@ -2494,7 +2804,6 @@ class Installer:
                                 install_config.venv_type,
                                 install_config.install_path,
                                 slurm_info,
-                                install_config.environment_vars,
                                 install_config.gpu_type,
                                 install_config.node_architecture,
                             )
@@ -2519,9 +2828,12 @@ class Installer:
                         install_config.venv_type,
                         all_venvs,
                         node_architecture=install_config.node_architecture,
-                        install_method=install_config.install_method,
+                        image_download_method=install_config.image_download_method,
                         image_folder=install_config.image_folder,
+                        nvl_domain=install_config.nvl_domain,
+                        nvl_block_sizes=install_config.nvl_block_sizes,
                         existing_cluster_config=existing_cluster_config,
+                        kubernetes_info=kubernetes_info,
                     )
                 except Exception as config_err:
                     self.logger.debug(f"Could not save partial cluster config: {config_err}")
@@ -2559,9 +2871,12 @@ class Installer:
             install_config.venv_type,
             all_venvs,  # Includes venvs for all completed workloads
             node_architecture=install_config.node_architecture,
-            install_method=install_config.install_method,
+            image_download_method=install_config.image_download_method,
             image_folder=install_config.image_folder,
+            nvl_domain=install_config.nvl_domain,
+            nvl_block_sizes=install_config.nvl_block_sizes,
             existing_cluster_config=existing_cluster_config,  # For incremental installs
+            kubernetes_info=kubernetes_info,
         )
 
         print(f"\nInstallation complete! Workloads have been installed to: {install_config.install_path}")

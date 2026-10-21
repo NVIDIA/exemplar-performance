@@ -1,11 +1,16 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 
 #SBATCH --job-name="llmb_collector:microbenchmark"
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --time=00:15:00
+
+if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 2))); then
+    printf 'Requires Bash 4.2 or greater (running: %s).\n' "${BASH_VERSION:-not Bash}" >&2
+    exit 1
+fi
 
 set -euo pipefail
 
@@ -28,11 +33,9 @@ if [[ ! -x $UVX ]]; then
     exit 1
 fi
 
-# uvx stores its ephemeral environment and downloaded packages in UV_CACHE_DIR.
-# Keep both that cache and any uv-managed Python installation out of $HOME.
+# uvx stores its ephemeral environment and downloaded packages in UV_CACHE_DIR; keep it out of $HOME.
 export UV_CACHE_DIR=${UV_CACHE_DIR:-$LLMB_INSTALL/.cache/uv}
-export UV_PYTHON_INSTALL_DIR=${UV_PYTHON_INSTALL_DIR:-$LLMB_INSTALL/.cache/uv/python}
-mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR" "$LLMB_EXPERIMENT_DIR"
+mkdir -p "$UV_CACHE_DIR" "$LLMB_EXPERIMENT_DIR"
 
 SNAPSHOT_ROOT=$LLMB_REPO/microbenchmarks/llmb_collector/source_snapshot
 COLLECTOR_SOURCE=$SNAPSHOT_ROOT/llmb_collector

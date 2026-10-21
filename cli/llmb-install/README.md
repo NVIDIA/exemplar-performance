@@ -13,7 +13,7 @@ The recommended way to install llmb-install is using the automated installer scr
 $LLMB_REPO/install.sh
 ```
 
-This script will setup the environment and install the necessary tools.
+This script sets up the environment and installs the necessary tools.
 
 ### Manual Installation
 
@@ -95,7 +95,7 @@ After your first successful installation, the installer saves system configurati
 llmb-install express /work/llmb --workloads all
 
 # Express mode with specific workloads
-llmb-install express /work/llmb --workloads pretrain_nemotron-h,pretrain_llama3.1
+llmb-install express /work/llmb --workloads pretrain_deepseek-v3,pretrain_llama3.1
 
 # Express mode with prompts for missing values
 llmb-install express
@@ -298,7 +298,7 @@ Error: uv is required to create recipe environments.
    ```bash
    curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
-2. Re-run `./install.sh` so it can install or pin the supported uv version.
+2. Re-run `./install.sh`; it verifies the uv version and installs the version required by the release if needed.
 
 ### Cache Directory Warnings
 
@@ -395,12 +395,12 @@ llmb-install express --help
 
 ### Express Mode Flags
 
-| Flag                        | Purpose                                                     | Example                                                                  |
-| --------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `install_path` (positional) | Installation directory                                      | `llmb-install express /work/llmb`                                        |
-| `-w, --workloads`           | Workloads to install                                        | `--workloads all` or `--workloads pretrain_nemotron-h,pretrain_llama3.1` |
-| `--exemplar`                | Install all 'pretrain' reference workloads (Exemplar Cloud) | `llmb-install express --exemplar`                                        |
-| `--list-workloads`          | Show available workloads and exit                           | `llmb-install express --list-workloads`                                  |
+| Flag                        | Purpose                                                     | Example                                                                   |
+| --------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `install_path` (positional) | Installation directory                                      | `llmb-install express /work/llmb`                                         |
+| `-w, --workloads`           | Workloads to install                                        | `--workloads all` or `--workloads pretrain_deepseek-v3,pretrain_llama3.1` |
+| `--exemplar`                | Install all 'pretrain' reference workloads (Exemplar Cloud) | `llmb-install express --exemplar`                                         |
+| `--list-workloads`          | Show available workloads and exit                           | `llmb-install express --list-workloads`                                   |
 
 **Note on flag order**: `-v/--verbose`, `-i/--image-folder`, and `-d/--dev-mode` are **global flags** and must be provided **before** the `express` subcommand (e.g. `llmb-install -v express ...`).
 
@@ -450,7 +450,7 @@ To disable: `export LLMB_DISABLE_RESUME=1`
 **Manual container import** (if automatic download fails):
 
 ```bash
-enroot import -o $LLMB_INSTALL/images/nvidian+nemo+25.02.01.sqsh \
+enroot import -o $LLMB_INSTALL/images/nvidia+nemo+25.02.01.sqsh \
     docker://nvcr.io/nvidia/nemo:25.02.01
 ```
 
@@ -485,12 +485,13 @@ After installation, verify setup:
 
 The installer recognizes the following environment variables to control behavior:
 
-| Variable                      | Purpose                                                   | Input                            |
-| ----------------------------- | --------------------------------------------------------- | -------------------------------- |
-| `LLMB_DISABLE_RESUME`         | Disable resume functionality                              | `1`, `true`, or `yes` to disable |
-| `LLMB_DISABLE_GIT_CACHE`      | Disable git repository caching                            | `1`, `true`, or `yes` to disable |
-| `LLMB_USE_PIP_FALLBACK`       | Use standard pip instead of uv pip in uv environments     | `1`, `true`, or `yes` to enable  |
-| `LLMB_DISABLE_MANAGED_PYTHON` | Disable enforced managed python usage for UV environments | `1`, `true`, or `yes` to disable |
+| Variable                 | Purpose                                               | Input                                              |
+| ------------------------ | ----------------------------------------------------- | -------------------------------------------------- |
+| `LLMB_DISABLE_RESUME`    | Disable resume functionality                          | `1`, `true`, or `yes` to disable                   |
+| `LLMB_DISABLE_GIT_CACHE` | Disable git repository caching                        | `1`, `true`, or `yes` to disable                   |
+| `LLMB_USE_PIP_FALLBACK`  | Use standard pip instead of uv pip in uv environments | `1`, `true`, or `yes` to enable                    |
+| `UV_NO_MANAGED_PYTHON`   | Use system python instead of uv-managed python        | `1` to require system python                       |
+| `UV_PYTHON_PREFERENCE`   | Fine-grained uv interpreter preference                | `only-managed`, `managed`, `system`, `only-system` |
 
 **Resume Control**: Set `LLMB_DISABLE_RESUME=1` to prevent automatic resume detection and always start fresh installations.
 
@@ -498,7 +499,11 @@ The installer recognizes the following environment variables to control behavior
 
 **Pip Fallback**: As a last resort, set `LLMB_USE_PIP_FALLBACK=1` to use standard pip instead of uv pip when using uv environments. Standard pip is typically significantly slower for LLMB installations; for resource-limit errors, reduce uv concurrency as described in [Package Installation Resource Limit Errors](#package-installation-resource-limit-errors) instead.
 
-**Managed Python**: By default, UV environments use managed python versions for consistency. Set `LLMB_DISABLE_MANAGED_PYTHON=1` to use system python instead if available.
+**Managed Python**: By default the installer exports `UV_MANAGED_PYTHON=1` so uv downloads and uses its own Python 3.12 for the venv, setup tasks and `uvx`, giving a consistent interpreter across login and compute nodes. To use system python instead, set uv's own `UV_NO_MANAGED_PYTHON=1` (or a `UV_PYTHON_PREFERENCE`) before running the installer; the default is only applied when none of `UV_MANAGED_PYTHON`, `UV_NO_MANAGED_PYTHON` or `UV_PYTHON_PREFERENCE` is set. Note that `UV_NO_MANAGED_PYTHON=1` fails rather than falling back if no system Python 3.12 is available. `LLMB_DISABLE_MANAGED_PYTHON` is deprecated and mapped to `UV_NO_MANAGED_PYTHON=1`.
+
+**Playfile Environment Variables**: `environment_vars` from a playfile (or entered interactively) are exported into the installer's own environment before any downloads or setup tasks run, exactly as if you had set them in your shell before running `llmb-install`, and take precedence over shell values. They are also written to `cluster_config.yaml` for `llmb-run`.
+
+Setting more than one of `UV_MANAGED_PYTHON`, `UV_NO_MANAGED_PYTHON` or `UV_PYTHON_PREFERENCE` (across shell and playfile) is an error.
 
 ## Development
 

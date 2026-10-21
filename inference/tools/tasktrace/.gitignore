@@ -1,0 +1,39 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+
+# Rust / Maturin build
+target/
+target-static/
+dist/
+build/
+*.whl
+*.so
+*.dylib
+
+# Project
+artifacts/
+
+# Environment and secrets
+.env
+.env.*
+.env.local
+
+# Logs
+*.log

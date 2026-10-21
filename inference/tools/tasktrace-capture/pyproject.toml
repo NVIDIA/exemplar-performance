@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[project]
+name = "tasktrace-capture"
+version = "0.1.0"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+    "harbor @ git+https://github.com/harbor-framework/harbor.git@c57e9a5f3531ad468dbd3a72b1c7ad72a31db34f",
+    "matplotlib",
+    "numpy",
+    "opensandbox==0.1.15",
+    "pydantic>=2.0",
+    "pyyaml",
+    "rich",
+]
+
+[project.scripts]
+tasktrace-capture = "tasktrace_capture.cli:main"
+tasktrace-capture-plots = "tasktrace_capture.plot_timing:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["tasktrace_capture"]

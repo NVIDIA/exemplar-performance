@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 
 """Dependency resolution and installation for LLMB workloads.
@@ -496,16 +478,28 @@ def _clone_or_get_from_cache(name: str, repo_url: str, install_path: str, target
     # Validate and clean up cache if it exists but is invalid
     _cleanup_invalid_git_repo(cache_path, is_bare=True, description="cache repository")
 
+    git_env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0'}
+    git_clone_timeout = 600  # 10 minutes
+
     # Ensure repo is in cache
     if not os.path.exists(cache_path):
         logger.debug(f"Creating mirror of {repo_url} in cache")
+        print(f"  Cloning {name} from {repo_url} (this may take a few minutes)...")
         os.makedirs(cache_dir, exist_ok=True)
         try:
             subprocess.run(
-                ['git', 'clone', '--mirror', repo_url, cache_path], check=True, capture_output=True, text=True
+                ['git', 'clone', '--mirror', repo_url, cache_path],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=git_env,
+                timeout=git_clone_timeout,
             )
+        except subprocess.TimeoutExpired:
+            logger.error(f"Timed out cloning {repo_url} after {git_clone_timeout}s")
+            raise
         except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to cache {repo_url}: {e.stderr}")
+            e.add_note(f"Failed to cache {repo_url}")
             raise
     else:
         logger.debug(f"Using cached repository for {name}")
@@ -514,9 +508,20 @@ def _clone_or_get_from_cache(name: str, repo_url: str, install_path: str, target
         if not _commit_exists_in_repo(cache_path, commit):
             logger.debug(f"Commit {commit} not in cache, fetching updates for {name}")
             try:
-                subprocess.run(['git', 'fetch', 'origin'], cwd=cache_path, check=True, capture_output=True, text=True)
+                subprocess.run(
+                    ['git', 'fetch', 'origin'],
+                    cwd=cache_path,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    env=git_env,
+                    timeout=git_clone_timeout,
+                )
+            except subprocess.TimeoutExpired:
+                logger.error(f"Timed out fetching {repo_url} after {git_clone_timeout}s")
+                raise
             except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to update cache for {name} for required commit {commit}: {e.stderr}")
+                e.add_note(f"Failed to update cache for {name} for required commit {commit}")
                 raise
 
             # Verify commit exists after fetch
@@ -565,6 +570,8 @@ def _clone_or_get_from_cache(name: str, repo_url: str, install_path: str, target
                     check=True,
                     capture_output=True,
                     text=True,
+                    env=git_env,
+                    timeout=git_clone_timeout,
                 )
 
                 # Update default branch tracking to use origin instead of cache
@@ -583,7 +590,7 @@ def _clone_or_get_from_cache(name: str, repo_url: str, install_path: str, target
                         logger.debug(f"Could not update branch.{default_branch}.remote for {name}")
                         pass
         except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to clone {name} from cache: {e.stderr}")
+            e.add_note(f"Failed to clone {name} from cache")
             raise
     else:
         logger.debug(f"Repository {name} already exists, fetching from cache")
@@ -594,7 +601,7 @@ def _clone_or_get_from_cache(name: str, repo_url: str, install_path: str, target
             try:
                 subprocess.run(['git', 'fetch', 'cache'], cwd=target_path, check=True, capture_output=True, text=True)
             except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to fetch cache updates for {name} for required commit {commit}: {e.stderr}")
+                e.add_note(f"Failed to fetch cache updates for {name} for required commit {commit}")
                 raise
 
             # Verify commit exists after fetch
@@ -639,7 +646,13 @@ def clone_git_repos(git_deps: Dict[str, Any], target_dir: str, install_path: str
         commit = repo_info['commit']
 
         if use_cache:
-            clone_path = _clone_or_get_from_cache(name, repo_url, install_path, target_dir, commit)
+            clone_path = _clone_or_get_from_cache(
+                name,
+                repo_url,
+                install_path,
+                target_dir,
+                commit,
+            )
         else:
             # Direct cloning without cache
             repo_name = _derive_repo_name_from_url(repo_url)
@@ -658,15 +671,19 @@ def clone_git_repos(git_deps: Dict[str, Any], target_dir: str, install_path: str
                         text=True,
                     )
                 except subprocess.CalledProcessError as e:
-                    logger.error(f"Failed to clone {repo_url}: {e.stderr}")
+                    e.add_note(f"Failed to clone {repo_url}")
                     raise
             else:
                 try:
                     subprocess.run(
-                        ['git', 'fetch', 'origin'], cwd=clone_path, check=True, capture_output=True, text=True
+                        ['git', 'fetch', 'origin'],
+                        cwd=clone_path,
+                        check=True,
+                        capture_output=True,
+                        text=True,
                     )
                 except subprocess.CalledProcessError as e:
-                    logger.error(f"Failed to fetch {repo_url}: {e.stderr}")
+                    e.add_note(f"Failed to fetch {repo_url}")
                     raise
 
         # Checkout the specific commit
@@ -676,7 +693,7 @@ def clone_git_repos(git_deps: Dict[str, Any], target_dir: str, install_path: str
                 ['git', 'checkout', '-f', commit], cwd=clone_path, check=True, capture_output=True, text=True
             )
         except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to checkout commit {commit} in {clone_path}: {e.stderr}")
+            e.add_note(f"Failed to checkout commit {commit} in {clone_path}")
             raise
 
         # Update submodules if specified
@@ -691,7 +708,7 @@ def clone_git_repos(git_deps: Dict[str, Any], target_dir: str, install_path: str
                     text=True,
                 )
             except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to checkout submodules for {name}: {e.stderr}")
+                e.add_note(f"Failed to checkout submodules for {name}")
                 raise
 
         print(f"  ✓ {name}")

@@ -1,0 +1,1023 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tasktrace-capture-replay-swebench-verified-gb300-gpu-tt
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/cell: tasktrace-capture-replay-swebench-verified-gb300-gpu }
+---
+# The coordinator creates, follows and (when one cannot start) deletes its own task pods; nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tasktrace-capture-replay-swebench-verified-gb300-gpu-tt
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/cell: tasktrace-capture-replay-swebench-verified-gb300-gpu }
+rules:
+  - { apiGroups: [""], resources: [pods], verbs: [create, get, list, watch, delete] }
+  - { apiGroups: [""], resources: [pods/log], verbs: [get] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tasktrace-capture-replay-swebench-verified-gb300-gpu-tt
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/cell: tasktrace-capture-replay-swebench-verified-gb300-gpu }
+subjects: [{ kind: ServiceAccount, name: tasktrace-capture-replay-swebench-verified-gb300-gpu-tt, namespace: ${NAMESPACE} }]
+roleRef: { kind: Role, name: tasktrace-capture-replay-swebench-verified-gb300-gpu-tt, apiGroup: rbac.authorization.k8s.io }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tasktrace-capture-replay-swebench-verified-gb300-gpu-tt-steps
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/cell: tasktrace-capture-replay-swebench-verified-gb300-gpu }
+data:
+  coordinator.sh: |
+
+    # TaskTrace coordinator: spawns this rung's fresh task pods, follows them, exits with the verdict.
+    set -eu
+    TT=/model-cache/tasktrace
+    KUBECTL="$TT/bin/$(uname -m)/kubectl"
+    [ -x "$KUBECTL" ] || { echo "[coord] ERROR: kubectl missing at $KUBECTL; run llmb-k8s install for this cell" >&2; exit 1; }
+    kc() { "$KUBECTL" -n "$NAMESPACE" "$@"; }
+    START_TIMEOUT="${TT_POD_START_TIMEOUT:-1800}"
+    PREFIX="$TT_CELL-$RUN_ID-c$TT_RUNG"
+    CAPTURE_ENV="/artifacts/$RUN_ID/c$TT_RUNG/capture/capture.env"
+    mkdir -p "/artifacts/$RUN_ID" # the task pods mount only this folder
+    # The run's lifecycle bookends, as the llm-perf bench Job writes them; the fetch stamps the cluster into it.
+    META="/artifacts/$RUN_ID/run_meta.json"
+    [ -s "$META" ] || printf '{"run_id": "%s", "started_at_utc": "%s"}\n' "$RUN_ID" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$META"
+
+    spawn() { # template role index pod-name
+        sed -e "s|@@POD_NAME@@|$4|g" -e "s|@@INDEX@@|$3|g" -e "s|@@RUN_ID@@|$RUN_ID|g" -e "s|@@RUNG@@|$TT_RUNG|g" \
+            -e "s|@@NODE@@|$NODE_NAME|g" -e "s|@@OWNER_NAME@@|$POD_NAME|g" -e "s|@@OWNER_UID@@|$POD_UID|g" \
+            "/tt-steps/$1" | kc create -f - > /dev/null
+        echo "[coord] $2 pod $4 created on $NODE_NAME"
+    }
+
+    follow() { # pod-name: stream its log, prefixed, in the background until its container ends
+        (
+            until kc logs -f "pod/$1" 2> /dev/null; do
+                case "$(kc get pod "$1" -o jsonpath='{.status.phase}' 2> /dev/null || true)" in
+                    Succeeded | Failed | "") kc logs "pod/$1" 2> /dev/null || true; break ;;
+                esac
+                sleep 3
+            done
+        ) | sed "s|^|[$1] |" &
+    }
+
+    outcome() { # pod-name: wait for the pod to end; print its container's exit code (1 if it never ran)
+        waited=0
+        seen=""
+        while :; do
+            out="$(kc get pod "$1" -o jsonpath='{.status.phase}|{.status.containerStatuses[0].state.waiting.reason}|{.status.containerStatuses[0].state.terminated.exitCode}' 2> /dev/null)" || out="Gone||"
+            phase="${out%%|*}"
+            rest="${out#*|}"
+            reason="${rest%%|*}"
+            code="${rest#*|}"
+            case "$phase" in
+                Succeeded | Failed) echo "${code:-1}"; return 0 ;;
+                Gone) echo "[coord] pod $1 disappeared" >&2; echo 1; return 0 ;;
+                Running) waited=0 ;;
+                *)
+                    waited=$((waited + 5))
+                    if [ -n "$reason" ] && [ "$reason" != "$seen" ]; then
+                        echo "[coord] pod $1 waiting: $reason" >&2
+                        seen="$reason"
+                    fi
+                    if [ "$waited" -ge "$START_TIMEOUT" ]; then
+                        echo "[coord] pod $1 did not start within $START_TIMEOUT seconds (${reason:-pending}); deleting it" >&2
+                        kc delete pod "$1" --wait=false > /dev/null 2>&1 || true
+                        echo 1
+                        return 0
+                    fi
+                    ;;
+            esac
+            sleep 5
+        done
+    }
+
+    echo "[coord] cell=$TT_CELL run=$RUN_ID rung=$TT_RUNG mode=$TT_MODE node=$NODE_NAME"
+    if [ -n "${TT_SERVER_URL:-}" ]; then
+        # run.sh waits for the server before applying this Job, except with --detach.
+        waited=0
+        until wget -q -T 10 -O /dev/null "$TT_SERVER_URL/health" 2> /dev/null; do
+            if [ "$waited" -ge "$TT_SERVER_STARTUP_TIMEOUT" ]; then
+                echo "[coord] ERROR: the server at $TT_SERVER_URL is not healthy after $waited seconds" >&2
+                exit 1
+            fi
+            sleep 10
+            waited=$((waited + 10))
+        done
+        echo "[coord] server $TT_SERVER_URL is healthy"
+        spawn warmup-pod.yaml warmup 0 "$PREFIX-warmup"
+        follow "$PREFIX-warmup"
+        rc="$(outcome "$PREFIX-warmup")"
+        wait
+        echo "[coord] warm-up pod exit status: $rc"
+        [ "$rc" = 0 ] || { echo "[coord] ERROR: the server warm-up failed; no capture or replay" >&2; exit 1; }
+    fi
+    if [ "$TT_MODE" = tasktrace-capture-replay ]; then
+        spawn capture-pod.yaml capture 0 "$PREFIX-capture"
+        follow "$PREFIX-capture"
+        rc="$(outcome "$PREFIX-capture")"
+        wait
+        echo "[coord] capture pod exit status: $rc"
+        [ -s "$CAPTURE_ENV" ] || { echo "[coord] ERROR: the capture step did not finish (no $CAPTURE_ENV); no replay" >&2; exit 1; }
+    fi
+    i=0
+    while [ "$i" -lt "$TT_RUNG" ]; do
+        spawn replay-pod.yaml replay "$i" "$PREFIX-r$i"
+        follow "$PREFIX-r$i"
+        if [ -n "${TT_SERVER_URL:-}" ]; then
+            spawn llm-pod.yaml llm "$i" "$PREFIX-l$i"
+            follow "$PREFIX-l$i"
+        fi
+        i=$((i + 1))
+    done
+    verdict=0
+    i=0
+    while [ "$i" -lt "$TT_RUNG" ]; do
+        # The replay pod's verdict covers its LLM replay too: it waits for the llm pod's result.
+        rc="$(outcome "$PREFIX-r$i")"
+        echo "[coord] replay pod $PREFIX-r$i exit status: $rc"
+        [ "$rc" = 0 ] || verdict=1
+        if [ -n "${TT_SERVER_URL:-}" ]; then
+            # The replay pod waits for its llm pod. If it ended first (it failed, or its tool replay never started),
+            # don't leave the llm pod waiting on it, as Slurm's llm-replay --align-pid doesn't: in the recorded loop
+            # order, mark the tool side ended so the llm pod finishes and reports; otherwise stop the llm pod.
+            dir="/artifacts/$RUN_ID/c$TT_RUNG/$i"
+            phase="$(kc get pod "$PREFIX-l$i" -o jsonpath='{.status.phase}' 2> /dev/null || true)"
+            if { [ "$phase" = Running ] || [ "$phase" = Pending ]; } && [ ! -s "$dir/llm/llm.exit" ]; then
+                if [ -d "$dir/profile/container_profile/loop_order" ]; then
+                    : > "$dir/profile/container_profile/loop_order/tool_end"
+                else
+                    kc delete pod "$PREFIX-l$i" --wait=false > /dev/null 2>&1 || true
+                fi
+            fi
+            echo "[coord] llm pod $PREFIX-l$i exit status: $(outcome "$PREFIX-l$i")"
+        fi
+        i=$((i + 1))
+    done
+    wait
+    started="$(sed -n 's/.*"started_at_utc": "\([^"]*\)".*/\1/p' "$META")"
+    wall=$(($(date -u +%s) - $(date -u -D '%Y-%m-%dT%H:%M:%SZ' -d "$started" +%s)))
+    printf '{"run_id": "%s", "started_at_utc": "%s", "completed_at_utc": "%s", "wall_seconds_total": %s}\n' \
+        "$RUN_ID" "$started" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$wall" > "$META"
+    exit "$verdict"
+  steps.sh: |
+
+    # One TaskTrace step in a fresh task pod: `steps.sh capture` or `steps.sh replay` (the Slurm launch.sh sequence,
+    # split where Slurm switches containers), and for a -gpu cell `warmup` and `llm` (its model-call side).
+    # This script is the pod's main process.
+    set -eu -o pipefail
+    ROLE="${1:?usage: steps.sh capture|replay|warmup|llm}"
+    die() { echo "[launch] ERROR: $*" >&2; exit 1; }
+    TT=/model-cache/tasktrace
+    RUNG_DIR="/artifacts/$RUN_ID/c$TT_RUNG"
+    CAPTURE_OUT="$RUNG_DIR/capture"
+    SERVER_INFO="$RUNG_DIR/server/server.json"
+    LLM_TIMEOUT="${TT_LLM_TIMEOUT:-1800}"
+    case "$ROLE" in
+        capture) OUT="$CAPTURE_OUT" ;;
+        replay) OUT="$RUNG_DIR/$TT_INDEX" ;;
+        warmup) OUT="$RUNG_DIR/server" ;;
+        llm) OUT="$RUNG_DIR/$TT_INDEX/llm" ;;
+        *) die "unknown step '$ROLE'" ;;
+    esac
+    mkdir -p "$OUT"
+    cd "$TT_WORKDIR" || die "task workdir $TT_WORKDIR is missing; is this the task image?"
+
+    # --- tools staged by scripts/stage-tasktrace.sh (install) ----------------------------------------------------
+    PYTHON="${TT_PYTHON:-python3}"
+    "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' 2> /dev/null \
+        || die "$PYTHON is not a working Python >= 3.8 in this image"
+    RECIPE_PY="$TT/common/tasktrace_recipe.py"
+    [[ -f $RECIPE_PY ]] || die "missing $RECIPE_PY; run llmb-k8s install for this cell"
+    ARCH="$(uname -m)"
+    [[ $ARCH == "$TT_IMAGE_ARCH_EXPECTED" ]] || die "task image is $TT_IMAGE_ARCH_EXPECTED but this node is $ARCH"
+    TASKTRACE_BIN="$TT/bin/$ARCH/tasktrace"
+    [[ -x $TASKTRACE_BIN ]] || die "tasktrace binary missing at $TASKTRACE_BIN; run llmb-k8s install"
+    TRACE_VARS="$("$PYTHON" "$RECIPE_PY" resolve-trace --root "$TT/trajectories" --selector "$TT_SELECTOR")" || exit 1
+    eval "$TRACE_VARS"
+    [[ -s $TRACE ]] || die "no trace for '$TRACE_ID' at $TRACE; run llmb-k8s install"
+    [[ $TT_PACING == recorded || $TT_PACING == unpaced ]] || die "bad pacing '$TT_PACING'"
+    # A trajectory without recorded timings (tasktrace-capture --trajectory-timings omit) has no schedule to
+    # pace by: the shipped one for replay-only, this run's own capture for capture+replay.
+    if [[ $TT_MODE == tasktrace-capture-replay ]]; then
+        [[ ${TT_TRAJECTORY_TIMINGS:-keep} == keep || $TT_PACING == unpaced ]] \
+            || die "a trajectory captured without timings can only replay unpaced (pacing '$TT_PACING')"
+    else
+        [[ ${TRACE_TIMED:-1} == 1 || $TT_PACING == unpaced ]] \
+            || die "the trajectory carries no recorded timings, so it can only replay unpaced (pacing '$TT_PACING')"
+    fi
+    case "$TT_CPUS" in *[!0-9]* | "" | 0) die "TT_CPUS must be a positive integer (got '$TT_CPUS')" ;; esac
+    TIMEOUT_ARGS=()
+    [[ -n ${TT_TIMEOUT_SEC:-} ]] && TIMEOUT_ARGS=(--timeout-sec "$TT_TIMEOUT_SEC")
+    IMAGE_SHA256="${TT_IMAGE_DIGEST#sha256:}"
+
+    # --- CPU pinning + regime record --------------------------------------------------------------------------------
+    # Like Slurm's cpuset step, pin TT_CPUS of the CPUs this pod may use: the recipe's replay.cpuset when it names
+    # one, else replay pod i takes the i-th slice so K pods on shared cores do not pile onto the same ones. Whether
+    # those cores are EXCLUSIVE (kubelet static CPU manager) or shared is recorded, not assumed.
+    AFFINITY="$(taskset -cp $$ 2> /dev/null | awk -F': ' '{print $2}' || true)"
+    if [[ $ROLE == warmup || $ROLE == llm ]]; then
+        CPUSET="${TT_SERVER_CPUSET:-}" # the model-call side runs on the server's CPUs, off the replay's
+    else
+        CPUSET="$(AFF="$AFFINITY" FIXED="${TT_CPUSET:-}" "$PYTHON" - "$TT_CPUS" "$TT_INDEX" "$TT_RUNG" <<'PYEOF'
+    import os, sys
+    want, index, pods = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
+    def expand(text):
+        cpus = []
+        for part in filter(None, text.strip().split(",")):
+            a, _, b = part.partition("-")
+            cpus.extend(range(int(a), int(b or a) + 1))
+        return cpus
+    cpus, fixed = expand(os.environ.get("AFF", "")), expand(os.environ.get("FIXED", ""))
+    if fixed:
+        if len(fixed) != want:
+            sys.exit(f"replay.cpuset names {len(fixed)} CPUs but replay.cpus is {want}")
+        if pods > 1:
+            sys.exit(f"replay.cpuset pins one replay; a rung of {pods} replay pods would share it")
+        outside = sorted(set(fixed) - set(cpus))
+        if outside:
+            sys.exit(f"replay.cpuset CPUs {outside} are not among this pod's CPUs ({os.environ.get('AFF') or 'unknown'})")
+        chosen = fixed
+    elif len(cpus) >= want * (index + 1):
+        chosen = cpus[want * index : want * (index + 1)]
+    else:
+        chosen = cpus[:want]
+    print(",".join(str(c) for c in chosen))
+    PYEOF
+        )" || die "CPU pinning failed"
+    fi
+    PIN=()
+    if [[ -n $CPUSET ]] && command -v taskset > /dev/null 2>&1; then PIN=(taskset -c "$CPUSET"); fi
+    TT_CONTAINER_CPU="$TT_CONTAINER_CPU" "$PYTHON" - "$OUT/cpu_regime.json" "$CPUSET" "$AFFINITY" <<'PYEOF'
+    import json, os, sys
+
+    def read(path):
+        try:
+            return open(path).read().strip()
+        except OSError:
+            return None
+
+    def count(cpulist):
+        n = 0
+        for part in filter(None, (cpulist or "").split(",")):
+            a, _, b = part.partition("-")
+            n += int(b or a) - int(a) + 1
+        return n
+
+    effective = read("/sys/fs/cgroup/cpuset.cpus.effective")
+    node_cpus = os.cpu_count()
+    if effective is None or node_cpus is None:
+        regime = "unknown"
+    elif count(effective) < node_cpus:
+        regime = "exclusive-cores"  # the kubelet carved this pod a private cpuset (static CPU manager)
+    else:
+        regime = "shared-cores"  # CFS quota only: TT_CPUS of time on whichever cores are free
+    json.dump(
+        {
+            "regime": regime,
+            "cpuset_cpus_effective": effective,
+            "cpu_max": read("/sys/fs/cgroup/cpu.max"),
+            "process_affinity": sys.argv[3] or None,
+            "pinned_cpuset": sys.argv[2] or None,
+            "requested_cpus": int(os.environ["TT_CPUS"]),
+            "container_cpu_limit": os.environ.get("TT_CONTAINER_CPU") or None,
+            "node_cpu_count": node_cpus,
+            "hostname": os.uname().nodename,
+            "arch": os.uname().machine,
+        },
+        open(sys.argv[1], "w"),
+        indent=2,
+    )
+    PYEOF
+    echo "[launch] step: $ROLE  node pod: $(hostname)  arch: $ARCH  gpu_type: ${TT_GPU_TYPE:-unknown}  rung: $TT_RUNG  index: $TT_INDEX"
+    echo "[launch] tasktrace: $TASKTRACE_BIN ($(tr '\n' ' ' < "$TT/bin/$ARCH/tasktrace.version" 2> /dev/null || echo 'no version file'))"
+    echo "[launch] selection: $TT_SELECTOR -> $TRACE_MODEL / $TRACE_HARNESS / $TRACE_DATASET / $TRACE_ID"
+    echo "[launch] image: $TT_IMAGE_REF"
+    echo "[launch] pacing: $TT_PACING  cpus: $TT_CPUS  cpuset: ${CPUSET:-none}  regime: $(sed -n 's/.*"regime": "\([^"]*\)".*/\1/p' "$OUT/cpu_regime.json")"
+    echo "[launch] output: $OUT"
+
+    # --- capture: the live run against the EXTERNAL endpoint, then stage the trajectory -------------------------------
+    capture_step() {
+        VENV="$TT/venv/$ARCH"
+        CAPTURE_BIN="$VENV/bin/tasktrace-capture"
+        [[ -x $CAPTURE_BIN ]] || die "tasktrace-capture missing at $CAPTURE_BIN; run llmb-k8s install for this cell"
+        API_KEY="${TT_API_KEY:-}"
+        SECRET="$API_KEY"
+        if [[ -n ${TT_SERVER_URL:-} ]]; then
+            API_KEY=tasktrace-local-server # vLLM runs without --api-key; the OpenAI client still wants one
+            SECRET=""
+        fi
+        [[ -n $API_KEY ]] || die "TT_API_KEY is empty; the Secret named by the profile's api_key_secret variable has no api_key"
+        [[ $TT_LIVE_MODEL == */* ]] || die "capture.model must be <provider>/<model id> (got '$TT_LIVE_MODEL')"
+        [[ $TT_API_BASE == */v1 ]] || echo "[launch] WARNING: capture.api_base does not end in /v1 ('$TT_API_BASE')" >&2
+        case "$TT_AGENT_TIMEOUT" in *[!0-9]* | "" | 0) die "capture.agent_timeout_sec must be a positive integer" ;; esac
+        ENDPOINT_MODEL_ID="${TT_LIVE_MODEL#*/}"
+        if [[ ${TT_SKIP_ENDPOINT_CHECK:-0} != "1" ]]; then
+            echo "[launch] endpoint check: POST $TT_API_BASE/chat/completions model=$ENDPOINT_MODEL_ID (1 token)"
+            TT_API_KEY="$API_KEY" "$PYTHON" "$RECIPE_PY" endpoint-check --base "$TT_API_BASE" --model "$ENDPOINT_MODEL_ID" \
+                || die "endpoint check failed; set capture.skip_endpoint_check: true to bypass"
+        fi
+        # Home, caches and the agent's installs stay in THIS pod's filesystem and die with it; only curated outputs
+        # go to the artifacts PVC. HOME is the image's own, as for the replay.
+        export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 PATH="$VENV/bin:$PATH"
+        # tasktrace-capture runs INSIDE the task container: no nested container; the image is verified.
+        export TASKTRACE_CAPTURE_CURRENT_IMAGE_REF="$TT_IMAGE_REF" TASKTRACE_CAPTURE_CURRENT_WORKDIR="$TT_WORKDIR"
+        CAPTURE_DIR="$OUT/tasktrace-capture"
+        STAGED_DIR="$OUT/trajectories/$TRACE_MODEL/$TRACE_HARNESS/$TRACE_DATASET/$TRACE_ID"
+        PROVENANCE="$STAGED_DIR/provenance.json"
+        mkdir -p "$STAGED_DIR"
+        CAPTURE_ARGS=(
+            --runtime current
+            --task "$TRACE_DATASET/$TRACE_ID"
+            --agent "$AGENT"
+            --model "$TT_LIVE_MODEL"
+            --n-concurrent 1
+            -k 1
+            --agent-timeout "$TT_AGENT_TIMEOUT"
+            --instrument-shell-commands
+            --instrument-shell-perfetto-depth 1
+            --output-dir "$CAPTURE_DIR"
+        )
+        # As on Slurm: non-interactive Bash gets the image's .bashrc (SWE-bench activates its conda env there), and
+        # the trace records it so the replay sets the same BASH_ENV.
+        if [[ ${TT_SOURCE_IMAGE_BASHRC:-1} == 1 ]]; then CAPTURE_ARGS+=(--source-image-bashrc); fi
+        # capture.trajectory_timings (RUN_CONF_CAPTURE_TRAJECTORY_TIMINGS): omit writes the trajectory without timings
+        if [[ ${TT_TRAJECTORY_TIMINGS:-keep} == omit ]]; then CAPTURE_ARGS+=(--trajectory-timings omit); fi
+        # As on Slurm (RUN_CONF_CAPTURE_ARGS): capture.extra_args, split on whitespace, after the cell's own.
+        if [[ -n ${TT_CAPTURE_ARGS:-} ]]; then
+            read -r -a EXTRA_CAPTURE_ARGS <<< "$TT_CAPTURE_ARGS"
+            CAPTURE_ARGS+=(${EXTRA_CAPTURE_ARGS[@]+"${EXTRA_CAPTURE_ARGS[@]}"})
+        fi
+        SERVER_STAGE_ENV=(TT_API_KEY_VAR=TT_API_KEY)
+        if [[ -n ${TT_SERVER_URL:-} ]]; then
+            CAPTURE_ARGS+=(
+                --api-base "$TT_API_BASE"
+                --allow-private-api
+            )
+            SERVER_STAGE_ENV=(
+                TT_API_KEY_VAR=""
+                TT_LLM_MODE=live-server
+                TT_SERVER_INFO="$SERVER_INFO"
+                TT_SERVER_CONFIG="${SERVING_CONFIG:-$TT_SERVED_MODEL}"
+                TT_LIVE_MODEL="$TT_LIVE_MODEL"
+                TT_LIVE_MODEL_DEFAULT="${LIVE_MODEL_DEFAULT:-}"
+                TT_API_BASE="$TT_API_BASE"
+            )
+        fi
+        echo "[launch] capture: ${PIN[*]} tasktrace-capture ${CAPTURE_ARGS[*]} --agent-env OPENAI_API_BASE=$TT_API_BASE --agent-env OPENAI_BASE_URL=$TT_API_BASE --agent-env OPENAI_API_KEY=<secret>"
+        CAPTURE_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        cd "$OUT"
+        set +e
+        "${PIN[@]}" "$CAPTURE_BIN" "${CAPTURE_ARGS[@]}" \
+            --agent-env "OPENAI_API_BASE=$TT_API_BASE" \
+            --agent-env "OPENAI_BASE_URL=$TT_API_BASE" \
+            --agent-env "OPENAI_API_KEY=$API_KEY"
+        CAPTURE_EXIT=$?
+        set -e
+        CAPTURE_FINISHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        echo "[launch] tasktrace-capture exit status: $CAPTURE_EXIT"
+        cd "$TT_WORKDIR"
+
+        TRACE=""
+        if [[ -d $CAPTURE_DIR/runs ]]; then
+            TRACE=$(find "$CAPTURE_DIR/runs" -type f -path '*/agent/tasktrace_capture_replay_trajectory.jsonl' -printf '%T@ %p\n' 2> /dev/null | sort -n | tail -n 1 | cut -d' ' -f2-)
+        fi
+        [[ -n $TRACE ]] || echo "[launch] ERROR: capture produced no finalized trajectory under $CAPTURE_DIR/runs" >&2
+        set +e
+        env "${SERVER_STAGE_ENV[@]}" \
+            TT_RUNTIME=current \
+            TT_TRACE_MODEL="$TRACE_MODEL" \
+            TT_TRACE_HARNESS="$TRACE_HARNESS" \
+            TT_TRACE_DATASET="$TRACE_DATASET" \
+            TT_TRACE_ID="$TRACE_ID" \
+            TT_AGENT="$AGENT" \
+            TT_ENDPOINT_MODEL_ID="$ENDPOINT_MODEL_ID" \
+            TT_CAPTURE_EXIT="$CAPTURE_EXIT" \
+            TT_CAPTURE_STARTED_AT="$CAPTURE_STARTED_AT" \
+            TT_CAPTURE_FINISHED_AT="$CAPTURE_FINISHED_AT" \
+            TT_CAPTURE_ARGS="${CAPTURE_ARGS[*]}" \
+            TT_CAPTURE_DIR="$CAPTURE_DIR" \
+            TT_IMAGE_PATH="" \
+            TT_IMAGE_SHA256="$IMAGE_SHA256" \
+            TT_IMAGE_IDENTITY=oci-digest \
+            TT_IMAGE_ARCH="$ARCH" \
+            TT_VENV_VERSION_FILE="$VENV.version" \
+            TT_TASKTRACE_VERSION_FILE="$TT/bin/$ARCH/tasktrace.version" \
+            TT_NODE="$(hostname)" \
+            TT_JOB_ID="$RUN_ID" \
+            TT_CPUSET="$CPUSET" \
+            "$PYTHON" "$RECIPE_PY" stage \
+            --trace "$TRACE" \
+            --staged-dir "$STAGED_DIR" \
+            --provenance "$PROVENANCE"
+        STAGE_EXIT=$?
+        SCRUB_REPORT="$OUT/secret_scan.json"
+        TT_SECRET="$SECRET" "$PYTHON" "$RECIPE_PY" secret-scan \
+            --root "$OUT" \
+            --report "$SCRUB_REPORT"
+        set -e
+        # The hand-off to the replay pods: what the capture yielded, as absolute paths on the artifacts PVC.
+        {
+            printf 'CAPTURE_EXIT=%q\n' "$CAPTURE_EXIT"
+            printf 'STAGE_EXIT=%q\n' "$STAGE_EXIT"
+            printf 'CAPTURE_DIR=%q\n' "$CAPTURE_DIR"
+            printf 'PROVENANCE=%q\n' "$PROVENANCE"
+            printf 'STAGED_TRACE=%q\n' "$STAGED_DIR/trajectory.jsonl"
+            printf 'SCRUB_REPORT=%q\n' "$SCRUB_REPORT"
+        } > "$OUT/capture.env.tmp"
+        mv -f "$OUT/capture.env.tmp" "$OUT/capture.env"
+        echo "[launch] capture hand-off: $OUT/capture.env (stage exit $STAGE_EXIT)"
+        [[ $STAGE_EXIT -eq 0 ]]
+    }
+
+    # --- replay: tool-side re-execution in THIS fresh pod, CPU from THIS pod's cgroup; then the verdict -----------------
+    replay_step() {
+        PROFILE_DIR="$OUT/profile"
+        SUMMARY="$OUT/summary.json"
+        STAGE_EXIT=0
+        if [[ $TT_MODE == tasktrace-capture-replay ]]; then
+            [[ -s $CAPTURE_OUT/capture.env ]] || die "no $CAPTURE_OUT/capture.env; see the capture pod's log"
+            # shellcheck disable=SC1091
+            source "$CAPTURE_OUT/capture.env"
+            TRACE="$STAGED_TRACE"
+            # Replay what the capture wrote, whichever setting omitted the timings (capture.trajectory_timings, or
+            # --trajectory-timings in capture.extra_args).
+            if [[ $STAGE_EXIT -eq 0 ]]; then
+                eval "$("$PYTHON" "$RECIPE_PY" trace-timed --trace "$TRACE")"
+                [[ $TRACE_TIMED == 1 || $TT_PACING == unpaced ]] \
+                    || die "the capture wrote no timings, so its trajectory can only replay unpaced (pacing '$TT_PACING')"
+            fi
+        fi
+        REPLAY_EXIT=""
+        # A trajectory without recorded timings has no schedule: with a server, the tool replay and the llm pod keep
+        # the recorded agent loop's order instead, handing off through files on the run's shared /artifacts volume.
+        LOOP_ARGS=()
+        if [[ -n ${TT_SERVER_URL:-} && ${TRACE_TIMED:-1} == 0 ]]; then LOOP_ARGS=(--loop-order); fi
+        LOOP_DIR="$PROFILE_DIR/container_profile/loop_order"
+        if [[ $STAGE_EXIT -eq 0 ]]; then
+            mkdir -p "$PROFILE_DIR"
+            echo "[launch] replay: ${PIN[*]} tasktrace profile trace $TRACE --runtime current --pacing $TT_PACING ${LOOP_ARGS[*]}"
+            # The llm pod times the recorded model calls from here. tasktrace in current mode writes its own start_ns
+            # only when it finishes, so this marker stands in for the one Slurm's task container writes.
+            if [[ -n ${TT_SERVER_URL:-} ]]; then date +%s%N > "$OUT/replay_started"; fi
+            set +e
+            "${PIN[@]}" "$TASKTRACE_BIN" profile trace "$TRACE" \
+                --runtime current \
+                --current-container-exclusive \
+                --workdir "$TT_WORKDIR" \
+                --allocated-cpus "$TT_CPUS" \
+                --pacing "$TT_PACING" \
+                ${LOOP_ARGS[@]+"${LOOP_ARGS[@]}"} \
+                --strace-mode none \
+                ${TIMEOUT_ARGS[@]+"${TIMEOUT_ARGS[@]}"} \
+                --output-dir "$PROFILE_DIR"
+            REPLAY_EXIT=$?
+            set -e
+            echo "[launch] tasktrace exit status: $REPLAY_EXIT"
+            # tasktrace marks its side ended on any normal or error exit; a killed one can't, so mark it here.
+            if [[ ${#LOOP_ARGS[@]} -gt 0 && -d $LOOP_DIR ]]; then : > "$LOOP_DIR/tool_end"; fi
+        else
+            echo "[launch] skipping replay: the capture did not yield a replayable trajectory." >&2
+        fi
+        GPU_ARGS=()
+        if [[ -n ${TT_SERVER_URL:-} ]]; then
+            LLM_EXIT=""
+            if [[ -n $REPLAY_EXIT && ${#LOOP_ARGS[@]} -gt 0 && ! -d $LOOP_DIR ]]; then
+                echo "[launch] the tool replay never started its loop; not waiting for the LLM replay" >&2
+            elif [[ -n $REPLAY_EXIT ]]; then
+                echo "[launch] waiting for the LLM replay ($OUT/llm/llm.exit)"
+                waited=0
+                until [[ -s $OUT/llm/llm.exit || $waited -ge $LLM_TIMEOUT ]]; do
+                    sleep 5
+                    waited=$((waited + 5))
+                done
+                LLM_EXIT="$(cat "$OUT/llm/llm.exit" 2> /dev/null || true)"
+                echo "[launch] llm-replay exit status: ${LLM_EXIT:-none}"
+            fi
+            GPU_ARGS=(
+                --workload "${TT_MODE//-/_}_gpu"
+                --llm-report "$OUT/llm/llm_replay_report.json"
+                --llm-exit "$LLM_EXIT"
+                --server-info "$SERVER_INFO"
+            )
+        fi
+        set +e
+        if [[ $TT_MODE == tasktrace-capture-replay ]]; then
+            "$PYTHON" "$RECIPE_PY" summarize-capture \
+                --provenance "$PROVENANCE" \
+                --profile-dir "$PROFILE_DIR" \
+                --summary "$SUMMARY" \
+                --scrub-report "$SCRUB_REPORT" \
+                --pacing "$TT_PACING" \
+                --cpus "$TT_CPUS" \
+                --cpuset "$CPUSET" \
+                --stage-exit "$STAGE_EXIT" \
+                --replay-exit "${REPLAY_EXIT:-}" \
+                --capture-dir "$CAPTURE_DIR" \
+                --replay-image-sha256 "$IMAGE_SHA256" \
+                ${GPU_ARGS[@]+"${GPU_ARGS[@]}"}
+        else
+            "$PYTHON" "$RECIPE_PY" summarize-replay \
+                --out-dir "$PROFILE_DIR" \
+                --summary "$SUMMARY" \
+                --trace-id "$TRACE_ID" \
+                --pacing "$TT_PACING" \
+                --cpus "$TT_CPUS" \
+                --cpuset "$CPUSET" \
+                --replay-exit "$REPLAY_EXIT" \
+                ${GPU_ARGS[@]+"${GPU_ARGS[@]}"}
+        fi
+        STATUS=$?
+        set -e
+        echo "[launch] summary: $SUMMARY"
+        exit "$STATUS"
+    }
+
+    # --- warmup (-gpu): record the server, then the untimed warm-up requests, as the Slurm *-gpu recipes do -------------
+    warmup_step() {
+        VERSION="$("$PYTHON" -c 'import json, sys, urllib.request
+    print(json.load(urllib.request.urlopen(sys.argv[1] + "/version", timeout=30)).get("version", ""))' "$TT_SERVER_URL" || true)"
+        TT_SERVER_VERSION="$VERSION" TT_SERVER_API_BASE="$TT_SERVER_URL/v1" TT_SERVER_PORT=8000 \
+            TT_SERVER_SERVED_MODEL="$TT_SERVED_MODEL" TT_SERVER_CPUSET="${TT_SERVER_CPUSET:-}" TT_SERVER_NODE="$TT_NODE" \
+            "$PYTHON" "$RECIPE_PY" server-info --out "$SERVER_INFO"
+        echo "[launch] server: $TT_SERVER_URL ($TT_SERVED_MODEL, vLLM ${VERSION:-unknown}); record: $SERVER_INFO"
+        echo "[launch] warming the server up"
+        "${PIN[@]}" "$PYTHON" "$RECIPE_PY" llm-replay \
+            --trace "$TRACE" \
+            --api-base "$TT_SERVER_URL/v1" \
+            --model "$TT_SERVED_MODEL" \
+            --timeout-sec "$LLM_TIMEOUT" \
+            --warmup-only
+    }
+
+    # --- llm (-gpu): the recorded model calls against the server, beside the replay pod of the same index ---------------
+    llm_step() {
+        if [[ $TT_MODE == tasktrace-capture-replay ]]; then
+            [[ -s $CAPTURE_OUT/capture.env ]] || die "no $CAPTURE_OUT/capture.env; see the capture pod's log"
+            # shellcheck disable=SC1091
+            source "$CAPTURE_OUT/capture.env"
+            if [[ $STAGE_EXIT -ne 0 ]]; then
+                echo "[launch] skipping the LLM replay: the capture did not yield a replayable trajectory." >&2
+                exit 0
+            fi
+            TRACE="$STAGED_TRACE"
+            eval "$("$PYTHON" "$RECIPE_PY" trace-timed --trace "$TRACE")"
+        fi
+        if [[ ${TRACE_TIMED:-1} == 0 ]]; then
+            # No recorded timings: the calls follow the recorded agent loop, handing off with the replay pod's tasktrace.
+            ALIGN_ARGS=(
+                --loop-sync-dir "$RUNG_DIR/$TT_INDEX/profile/container_profile/loop_order"
+            )
+            echo "[launch] llm calls in the recorded loop order, handing off through ${ALIGN_ARGS[1]}"
+        else
+            lead="$("$PYTHON" "$RECIPE_PY" llm-replay --trace "$TRACE" --lead-only)"
+            LLM_START_OFFSET="${lead#LLM_START_OFFSET=}"
+            ALIGN_ARGS=(
+                --start-delay "$LLM_START_OFFSET"
+                --align-file "$RUNG_DIR/$TT_INDEX/replay_started"
+            )
+            echo "[launch] first llm call $LLM_START_OFFSET seconds after the first tool action, as recorded"
+        fi
+        echo "[launch] llm replay: $TT_SERVER_URL/v1 model $TT_SERVED_MODEL  pacing $TT_PACING  log $OUT/llm-replay.log"
+        set +e
+        "${PIN[@]}" "$PYTHON" "$RECIPE_PY" llm-replay \
+            --trace "$TRACE" \
+            --api-base "$TT_SERVER_URL/v1" \
+            --model "$TT_SERVED_MODEL" \
+            --pacing "$TT_PACING" \
+            --timeout-sec "$LLM_TIMEOUT" \
+            "${ALIGN_ARGS[@]}" \
+            --output "$OUT/llm_replay_report.json" > "$OUT/llm-replay.log" 2>&1
+        LLM_EXIT=$?
+        set -e
+        tail -n 1 "$OUT/llm-replay.log" | sed 's/^/[launch] /' || true
+        echo "$LLM_EXIT" > "$OUT/llm.exit.tmp"
+        mv -f "$OUT/llm.exit.tmp" "$OUT/llm.exit"
+        echo "[launch] llm-replay exit status: $LLM_EXIT"
+        exit "$LLM_EXIT"
+    }
+
+    "$ROLE"_step
+  capture-pod.yaml: |
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: "@@POD_NAME@@"
+      labels:
+        app.kubernetes.io/managed-by: llmb-recipe
+        llmb.nvidia.com/cell: tasktrace-capture-replay-swebench-verified-gb300-gpu
+        llmb.nvidia.com/run-id: "@@RUN_ID@@"
+        llmb.nvidia.com/rung: "@@RUNG@@"
+        llmb.nvidia.com/role: capture
+      annotations:
+        llmb.nvidia.com/task-image: "ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490:latest@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78"
+      # Owned by the coordinator pod: Kubernetes GC deletes this pod with it.
+      ownerReferences:
+        - { apiVersion: v1, kind: Pod, name: "@@OWNER_NAME@@", uid: "@@OWNER_UID@@", controller: false, blockOwnerDeletion: false }
+    spec:
+      restartPolicy: Never
+      activeDeadlineSeconds: 7200
+      automountServiceAccountToken: false
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      # The coordinator's node: the same hardware for capture and every replay, and the RWO artifacts PVC is attached there.
+      nodeSelector: { kubernetes.io/hostname: "@@NODE@@" }
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+        - { key: kubernetes.io/arch, operator: Exists }
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim: { claimName: ${MODEL_CACHE_PVC}, readOnly: true }
+        - name: artifacts
+          persistentVolumeClaim: { claimName: tasktrace-capture-replay-swebench-verified-gb300-gpu-artifacts }
+        - name: steps
+          configMap: { name: tasktrace-capture-replay-swebench-verified-gb300-gpu-tt-steps }
+      containers:
+        - name: task
+          image: ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490:latest@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78
+          imagePullPolicy: IfNotPresent
+          workingDir: /testbed
+          # requests == limits (Guaranteed): cpu.max is a real allocation for tasktrace to read, and integer CPUs are
+          # eligible for exclusive cores under the kubelet's static CPU-manager policy. Exclusivity is recorded
+          # (cpu_regime.json), never required: external clusters may run shared cores.
+          resources:
+            requests: { cpu: "8", memory: 64Gi }
+            limits:   { cpu: "8", memory: 64Gi }
+          volumeMounts:
+            # The task's filesystem holds as little of ours as each step needs, since an agent's `find /` walks it and
+            # on Slurm the tools stay outside the container. A replay of a shipped trace needs only the static binary,
+            # the recipe module and the trace; the capture needs the staged tasktrace-capture venv, and the replays of
+            # a capture mount what the capture pod did, so they see the filesystem the live agent saw.
+            - { name: model-cache, mountPath: /model-cache/tasktrace, subPath: tasktrace, readOnly: true }
+            # Only this run's folder: earlier runs (earlier captures of the same task, with their patches and verifier
+            # results) stay out of the task's filesystem.
+            - { name: artifacts, mountPath: /artifacts/@@RUN_ID@@, subPath: "@@RUN_ID@@" }
+            - { name: steps, mountPath: /tt-steps, readOnly: true }
+          env:
+            - { name: RUN_ID, value: "@@RUN_ID@@" }
+            - { name: TT_CELL, value: "tasktrace-capture-replay-swebench-verified-gb300-gpu" }
+            - { name: TT_MODE, value: "tasktrace-capture-replay" }
+            - { name: TT_RUNG, value: "@@RUNG@@" }
+            - { name: TT_INDEX, value: "@@INDEX@@" }
+            - { name: TT_SELECTOR, value: "nemotron-3-ultra-vllm_miniswe_django-11490" }
+            - { name: TT_IMAGE_REF, value: "ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490:latest@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78" }
+            - { name: TT_IMAGE_DIGEST, value: "sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78" }
+            - { name: TT_IMAGE_ARCH_EXPECTED, value: "aarch64" }
+            - { name: TT_WORKDIR, value: "/testbed" }
+            - { name: TT_PACING, value: "recorded" }
+            - { name: TT_CPUS, value: "4" }
+            - { name: TT_CPUSET, value: "" }
+            - { name: TT_CONTAINER_CPU, value: "8" }
+            - { name: TT_TIMEOUT_SEC, value: "" }
+            - { name: TT_TRAJECTORY_TIMINGS, value: "keep" }
+            - { name: TT_GPU_TYPE, value: "gb300" }
+            - { name: TT_NODE, value: "@@NODE@@" }
+            - { name: TT_SERVER_URL, value: "http://tasktrace-capture-replay-swebench-verified-gb300-gpu-server:8000" }
+            - { name: TT_SERVED_MODEL, value: "nemotron-3-ultra-nvfp4" }
+            - { name: TT_SERVER_CPUSET, value: "4-139" }
+            - { name: TT_LIVE_MODEL, value: "openai/nemotron-3-ultra-nvfp4" }
+            - { name: TT_API_BASE, value: "http://tasktrace-capture-replay-swebench-verified-gb300-gpu-server:8000/v1" }
+            - { name: TT_AGENT_TIMEOUT, value: "2400" }
+            - { name: TT_SKIP_ENDPOINT_CHECK, value: "0" }
+            - { name: TT_SOURCE_IMAGE_BASHRC, value: "1" }
+            - { name: TT_CAPTURE_ARGS, value: "" }
+          command: ["/bin/bash", "/tt-steps/steps.sh", "capture"]
+
+  replay-pod.yaml: |
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: "@@POD_NAME@@"
+      labels:
+        app.kubernetes.io/managed-by: llmb-recipe
+        llmb.nvidia.com/cell: tasktrace-capture-replay-swebench-verified-gb300-gpu
+        llmb.nvidia.com/run-id: "@@RUN_ID@@"
+        llmb.nvidia.com/rung: "@@RUNG@@"
+        llmb.nvidia.com/role: replay
+      annotations:
+        llmb.nvidia.com/task-image: "ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490:latest@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78"
+      # Owned by the coordinator pod: Kubernetes GC deletes this pod with it.
+      ownerReferences:
+        - { apiVersion: v1, kind: Pod, name: "@@OWNER_NAME@@", uid: "@@OWNER_UID@@", controller: false, blockOwnerDeletion: false }
+    spec:
+      restartPolicy: Never
+      activeDeadlineSeconds: 7200
+      automountServiceAccountToken: false
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      # The coordinator's node: the same hardware for capture and every replay, and the RWO artifacts PVC is attached there.
+      nodeSelector: { kubernetes.io/hostname: "@@NODE@@" }
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+        - { key: kubernetes.io/arch, operator: Exists }
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim: { claimName: ${MODEL_CACHE_PVC}, readOnly: true }
+        - name: artifacts
+          persistentVolumeClaim: { claimName: tasktrace-capture-replay-swebench-verified-gb300-gpu-artifacts }
+        - name: steps
+          configMap: { name: tasktrace-capture-replay-swebench-verified-gb300-gpu-tt-steps }
+      containers:
+        - name: task
+          image: ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490:latest@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78
+          imagePullPolicy: IfNotPresent
+          workingDir: /testbed
+          # requests == limits (Guaranteed): cpu.max is a real allocation for tasktrace to read, and integer CPUs are
+          # eligible for exclusive cores under the kubelet's static CPU-manager policy. Exclusivity is recorded
+          # (cpu_regime.json), never required: external clusters may run shared cores.
+          resources:
+            requests: { cpu: "8", memory: 64Gi }
+            limits:   { cpu: "8", memory: 64Gi }
+          volumeMounts:
+            # The task's filesystem holds as little of ours as each step needs, since an agent's `find /` walks it and
+            # on Slurm the tools stay outside the container. A replay of a shipped trace needs only the static binary,
+            # the recipe module and the trace; the capture needs the staged tasktrace-capture venv, and the replays of
+            # a capture mount what the capture pod did, so they see the filesystem the live agent saw.
+            - { name: model-cache, mountPath: /model-cache/tasktrace, subPath: tasktrace, readOnly: true }
+            # Only this run's folder: earlier runs (earlier captures of the same task, with their patches and verifier
+            # results) stay out of the task's filesystem.
+            - { name: artifacts, mountPath: /artifacts/@@RUN_ID@@, subPath: "@@RUN_ID@@" }
+            - { name: steps, mountPath: /tt-steps, readOnly: true }
+          env:
+            - { name: RUN_ID, value: "@@RUN_ID@@" }
+            - { name: TT_CELL, value: "tasktrace-capture-replay-swebench-verified-gb300-gpu" }
+            - { name: TT_MODE, value: "tasktrace-capture-replay" }
+            - { name: TT_RUNG, value: "@@RUNG@@" }
+            - { name: TT_INDEX, value: "@@INDEX@@" }
+            - { name: TT_SELECTOR, value: "nemotron-3-ultra-vllm_miniswe_django-11490" }
+            - { name: TT_IMAGE_REF, value: "ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490:latest@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78" }
+            - { name: TT_IMAGE_DIGEST, value: "sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78" }
+            - { name: TT_IMAGE_ARCH_EXPECTED, value: "aarch64" }
+            - { name: TT_WORKDIR, value: "/testbed" }
+            - { name: TT_PACING, value: "recorded" }
+            - { name: TT_CPUS, value: "4" }
+            - { name: TT_CPUSET, value: "" }
+            - { name: TT_CONTAINER_CPU, value: "8" }
+            - { name: TT_TIMEOUT_SEC, value: "" }
+            - { name: TT_TRAJECTORY_TIMINGS, value: "keep" }
+            - { name: TT_GPU_TYPE, value: "gb300" }
+            - { name: TT_NODE, value: "@@NODE@@" }
+            - { name: TT_SERVER_URL, value: "http://tasktrace-capture-replay-swebench-verified-gb300-gpu-server:8000" }
+            - { name: TT_SERVED_MODEL, value: "nemotron-3-ultra-nvfp4" }
+            - { name: TT_SERVER_CPUSET, value: "4-139" }
+          command: ["/bin/bash", "/tt-steps/steps.sh", "replay"]
+
+  warmup-pod.yaml: |
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: "@@POD_NAME@@"
+      labels:
+        app.kubernetes.io/managed-by: llmb-recipe
+        llmb.nvidia.com/cell: tasktrace-capture-replay-swebench-verified-gb300-gpu
+        llmb.nvidia.com/run-id: "@@RUN_ID@@"
+        llmb.nvidia.com/rung: "@@RUNG@@"
+        llmb.nvidia.com/role: warmup
+      annotations:
+        llmb.nvidia.com/task-image: "ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490:latest@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78"
+      # Owned by the coordinator pod: Kubernetes GC deletes this pod with it.
+      ownerReferences:
+        - { apiVersion: v1, kind: Pod, name: "@@OWNER_NAME@@", uid: "@@OWNER_UID@@", controller: false, blockOwnerDeletion: false }
+    spec:
+      restartPolicy: Never
+      activeDeadlineSeconds: 7200
+      automountServiceAccountToken: false
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      # The coordinator's node: the same hardware for capture and every replay, and the RWO artifacts PVC is attached there.
+      nodeSelector: { kubernetes.io/hostname: "@@NODE@@" }
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+        - { key: kubernetes.io/arch, operator: Exists }
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim: { claimName: ${MODEL_CACHE_PVC}, readOnly: true }
+        - name: artifacts
+          persistentVolumeClaim: { claimName: tasktrace-capture-replay-swebench-verified-gb300-gpu-artifacts }
+        - name: steps
+          configMap: { name: tasktrace-capture-replay-swebench-verified-gb300-gpu-tt-steps }
+      containers:
+        - name: task
+          image: ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490:latest@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78
+          imagePullPolicy: IfNotPresent
+          workingDir: /testbed
+          # requests == limits (Guaranteed): cpu.max is a real allocation for tasktrace to read, and integer CPUs are
+          # eligible for exclusive cores under the kubelet's static CPU-manager policy. Exclusivity is recorded
+          # (cpu_regime.json), never required: external clusters may run shared cores.
+          # The model-call side only sends HTTP requests: a small allocation, not a task pod's.
+          resources:
+            requests: { cpu: "2", memory: 4Gi }
+            limits:   { cpu: "2", memory: 4Gi }
+          volumeMounts:
+            # The task's filesystem holds as little of ours as each step needs, since an agent's `find /` walks it and
+            # on Slurm the tools stay outside the container. A replay of a shipped trace needs only the static binary,
+            # the recipe module and the trace; the capture needs the staged tasktrace-capture venv, and the replays of
+            # a capture mount what the capture pod did, so they see the filesystem the live agent saw.
+            - { name: model-cache, mountPath: /model-cache/tasktrace, subPath: tasktrace, readOnly: true }
+            # Only this run's folder: earlier runs (earlier captures of the same task, with their patches and verifier
+            # results) stay out of the task's filesystem.
+            - { name: artifacts, mountPath: /artifacts/@@RUN_ID@@, subPath: "@@RUN_ID@@" }
+            - { name: steps, mountPath: /tt-steps, readOnly: true }
+          env:
+            - { name: RUN_ID, value: "@@RUN_ID@@" }
+            - { name: TT_CELL, value: "tasktrace-capture-replay-swebench-verified-gb300-gpu" }
+            - { name: TT_MODE, value: "tasktrace-capture-replay" }
+            - { name: TT_RUNG, value: "@@RUNG@@" }
+            - { name: TT_INDEX, value: "@@INDEX@@" }
+            - { name: TT_SELECTOR, value: "nemotron-3-ultra-vllm_miniswe_django-11490" }
+            - { name: TT_IMAGE_REF, value: "ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490:latest@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78" }
+            - { name: TT_IMAGE_DIGEST, value: "sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78" }
+            - { name: TT_IMAGE_ARCH_EXPECTED, value: "aarch64" }
+            - { name: TT_WORKDIR, value: "/testbed" }
+            - { name: TT_PACING, value: "recorded" }
+            - { name: TT_CPUS, value: "4" }
+            - { name: TT_CPUSET, value: "" }
+            - { name: TT_CONTAINER_CPU, value: "8" }
+            - { name: TT_TIMEOUT_SEC, value: "" }
+            - { name: TT_TRAJECTORY_TIMINGS, value: "keep" }
+            - { name: TT_GPU_TYPE, value: "gb300" }
+            - { name: TT_NODE, value: "@@NODE@@" }
+            - { name: TT_SERVER_URL, value: "http://tasktrace-capture-replay-swebench-verified-gb300-gpu-server:8000" }
+            - { name: TT_SERVED_MODEL, value: "nemotron-3-ultra-nvfp4" }
+            - { name: TT_SERVER_CPUSET, value: "4-139" }
+            # server.json (tasktrace_recipe.py server-info): the server this run used.
+            - { name: TT_SERVER_CONFIG, value: "nemotron-3-ultra-nvfp4" }
+            - { name: TT_SERVER_ENGINE, value: vllm }
+            - { name: TT_SERVER_IMAGE_REF, value: "nvcr.io/nvidia/ai-dynamo/vllm-runtime@sha256:9fefbd10b63c52030326e22ed0eb9d87082fee53709fe327b5b2773e267792bc" }
+            - { name: TT_SERVER_MODEL_REPO, value: "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4" }
+            - { name: TT_SERVER_MODEL_REVISION, value: "183968f87ae4cedce3039313cac1fd43d112c578" }
+            - { name: TT_SERVER_TP, value: "4" }
+            - { name: TT_SERVER_GPU_COUNT, value: "4" }
+            - { name: TT_SERVER_GPU_NAME, value: "gb300" }
+            - { name: TT_SERVER_MAX_MODEL_LEN, value: "262144" }
+            - { name: TT_SERVER_GPU_MEM_UTIL, value: "0.9" }
+            - { name: TT_SERVER_EXTRA_ARGS, value: "--disable-custom-all-reduce\n--enable-expert-parallel\n--kv-cache-dtype fp8\n--mamba-ssm-cache-dtype float16\n--enable-chunked-prefill\n--enable-prefix-caching\n--enable-prompt-tokens-details\n--tool-call-parser qwen3_coder\n--reasoning-parser nemotron_v3\n--enable-auto-tool-choice\n--override-generation-config \u0027{\"temperature\": 1.0, \"top_p\": 0.95}\u0027" }
+            - { name: TT_SERVER_ENV, value: "HF_HUB_OFFLINE=1\nTRANSFORMERS_OFFLINE=1\nVLLM_ATTENTION_BACKEND=FLASHINFER\n" }
+          command: ["/bin/bash", "/tt-steps/steps.sh", "warmup"]
+
+  llm-pod.yaml: |
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: "@@POD_NAME@@"
+      labels:
+        app.kubernetes.io/managed-by: llmb-recipe
+        llmb.nvidia.com/cell: tasktrace-capture-replay-swebench-verified-gb300-gpu
+        llmb.nvidia.com/run-id: "@@RUN_ID@@"
+        llmb.nvidia.com/rung: "@@RUNG@@"
+        llmb.nvidia.com/role: llm
+      annotations:
+        llmb.nvidia.com/task-image: "ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490:latest@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78"
+      # Owned by the coordinator pod: Kubernetes GC deletes this pod with it.
+      ownerReferences:
+        - { apiVersion: v1, kind: Pod, name: "@@OWNER_NAME@@", uid: "@@OWNER_UID@@", controller: false, blockOwnerDeletion: false }
+    spec:
+      restartPolicy: Never
+      activeDeadlineSeconds: 7200
+      automountServiceAccountToken: false
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      # The coordinator's node: the same hardware for capture and every replay, and the RWO artifacts PVC is attached there.
+      nodeSelector: { kubernetes.io/hostname: "@@NODE@@" }
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+        - { key: kubernetes.io/arch, operator: Exists }
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim: { claimName: ${MODEL_CACHE_PVC}, readOnly: true }
+        - name: artifacts
+          persistentVolumeClaim: { claimName: tasktrace-capture-replay-swebench-verified-gb300-gpu-artifacts }
+        - name: steps
+          configMap: { name: tasktrace-capture-replay-swebench-verified-gb300-gpu-tt-steps }
+      containers:
+        - name: task
+          image: ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490:latest@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78
+          imagePullPolicy: IfNotPresent
+          workingDir: /testbed
+          # requests == limits (Guaranteed): cpu.max is a real allocation for tasktrace to read, and integer CPUs are
+          # eligible for exclusive cores under the kubelet's static CPU-manager policy. Exclusivity is recorded
+          # (cpu_regime.json), never required: external clusters may run shared cores.
+          # The model-call side only sends HTTP requests: a small allocation, not a task pod's.
+          resources:
+            requests: { cpu: "2", memory: 4Gi }
+            limits:   { cpu: "2", memory: 4Gi }
+          volumeMounts:
+            # The task's filesystem holds as little of ours as each step needs, since an agent's `find /` walks it and
+            # on Slurm the tools stay outside the container. A replay of a shipped trace needs only the static binary,
+            # the recipe module and the trace; the capture needs the staged tasktrace-capture venv, and the replays of
+            # a capture mount what the capture pod did, so they see the filesystem the live agent saw.
+            - { name: model-cache, mountPath: /model-cache/tasktrace, subPath: tasktrace, readOnly: true }
+            # Only this run's folder: earlier runs (earlier captures of the same task, with their patches and verifier
+            # results) stay out of the task's filesystem.
+            - { name: artifacts, mountPath: /artifacts/@@RUN_ID@@, subPath: "@@RUN_ID@@" }
+            - { name: steps, mountPath: /tt-steps, readOnly: true }
+          env:
+            - { name: RUN_ID, value: "@@RUN_ID@@" }
+            - { name: TT_CELL, value: "tasktrace-capture-replay-swebench-verified-gb300-gpu" }
+            - { name: TT_MODE, value: "tasktrace-capture-replay" }
+            - { name: TT_RUNG, value: "@@RUNG@@" }
+            - { name: TT_INDEX, value: "@@INDEX@@" }
+            - { name: TT_SELECTOR, value: "nemotron-3-ultra-vllm_miniswe_django-11490" }
+            - { name: TT_IMAGE_REF, value: "ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490:latest@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78" }
+            - { name: TT_IMAGE_DIGEST, value: "sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78" }
+            - { name: TT_IMAGE_ARCH_EXPECTED, value: "aarch64" }
+            - { name: TT_WORKDIR, value: "/testbed" }
+            - { name: TT_PACING, value: "recorded" }
+            - { name: TT_CPUS, value: "4" }
+            - { name: TT_CPUSET, value: "" }
+            - { name: TT_CONTAINER_CPU, value: "8" }
+            - { name: TT_TIMEOUT_SEC, value: "" }
+            - { name: TT_TRAJECTORY_TIMINGS, value: "keep" }
+            - { name: TT_GPU_TYPE, value: "gb300" }
+            - { name: TT_NODE, value: "@@NODE@@" }
+            - { name: TT_SERVER_URL, value: "http://tasktrace-capture-replay-swebench-verified-gb300-gpu-server:8000" }
+            - { name: TT_SERVED_MODEL, value: "nemotron-3-ultra-nvfp4" }
+            - { name: TT_SERVER_CPUSET, value: "4-139" }
+          command: ["/bin/bash", "/tt-steps/steps.sh", "llm"]
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tasktrace-capture-replay-swebench-verified-gb300-gpu-tt-${RUN_ID}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    llmb.nvidia.com/cell: tasktrace-capture-replay-swebench-verified-gb300-gpu
+    llmb.nvidia.com/run-id: "${RUN_ID}"
+    llmb.nvidia.com/scenario: agentic
+    llmb.nvidia.com/rung: "1"
+  annotations:
+    llmb.nvidia.com/owner: "${OWNER}"
+    llmb.nvidia.com/trace-selector: "nemotron-3-ultra-vllm_miniswe_django-11490"
+    llmb.nvidia.com/task-image: "ghcr.io/epoch-research/swe-bench.eval.arm64.django__django-11490:latest@sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        llmb.nvidia.com/cell: tasktrace-capture-replay-swebench-verified-gb300-gpu
+        llmb.nvidia.com/run-id: "${RUN_ID}"
+        llmb.nvidia.com/rung: "1"
+        llmb.nvidia.com/role: coordinator
+    spec:
+      restartPolicy: Never
+      serviceAccountName: tasktrace-capture-replay-swebench-verified-gb300-gpu-tt
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      # The task image is aarch64, and every task pod lands on THIS pod's node: the coordinator MUST
+      # land on a matching node (hard affinity). Beyond that the cluster decides: TASKTRACE_NODE_SELECTOR from the
+      # profile (empty = anywhere of that arch), the same way BENCH_NODE_SELECTOR places the llm-perf bench pod.
+      nodeSelector: { ${TASKTRACE_NODE_SELECTOR} }
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - { key: kubernetes.io/arch, operator: In, values: [arm64] }
+        # On the server's node, as the Slurm *-gpu recipes run everything on one node; the task pods follow it.
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector: { matchLabels: { app: tasktrace-capture-replay-swebench-verified-gb300-gpu-server } }
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+        - { key: kubernetes.io/arch, operator: Exists }
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim: { claimName: ${MODEL_CACHE_PVC}, readOnly: true }
+        # Mounted so the scheduler places the coordinator where the RWO artifacts PVC can attach; its task pods then
+        # share that attachment on the same node.
+        - name: artifacts
+          persistentVolumeClaim: { claimName: tasktrace-capture-replay-swebench-verified-gb300-gpu-artifacts }
+        - name: steps
+          configMap: { name: tasktrace-capture-replay-swebench-verified-gb300-gpu-tt-steps }
+      containers:
+        - name: coordinator
+          image: docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - { name: model-cache, mountPath: /model-cache, readOnly: true }
+            - { name: artifacts, mountPath: /artifacts }
+            - { name: steps, mountPath: /tt-steps, readOnly: true }
+          env:
+            - { name: NAMESPACE, value: "${NAMESPACE}" }
+            - { name: RUN_ID, value: "${RUN_ID}" }
+            - { name: TT_CELL, value: "tasktrace-capture-replay-swebench-verified-gb300-gpu" }
+            - { name: TT_MODE, value: "tasktrace-capture-replay" }
+            - { name: TT_RUNG, value: "1" }
+            - { name: POD_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+            - { name: POD_UID, valueFrom: { fieldRef: { fieldPath: metadata.uid } } }
+            - { name: NODE_NAME, valueFrom: { fieldRef: { fieldPath: spec.nodeName } } }
+            - { name: TT_SERVER_URL, value: "http://tasktrace-capture-replay-swebench-verified-gb300-gpu-server:8000" }
+            - { name: TT_SERVER_STARTUP_TIMEOUT, value: "1800" }
+          command: ["/bin/sh", "/tt-steps/coordinator.sh"]

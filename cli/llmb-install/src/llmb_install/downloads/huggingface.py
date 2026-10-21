@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 """HuggingFace downloads and offline preparation.
 
@@ -166,6 +148,15 @@ HF_ALLOW_PATTERNS = [
     "*.yaml",
     "*.md",
     "*.py",
+]
+
+# Some tokenizers reference chat templates stored outside tokenizer_config.json.
+# Keep these patterns scoped to tokenizer assets so config-only cache entries do
+# not download unrelated chat-template files.
+HF_TOKENIZER_ALLOW_PATTERNS = [
+    "*.jinja",
+    "chat_template*",
+    "chat_templates/*",
 ]
 
 HF_IGNORE_PATTERNS = [
@@ -495,34 +486,7 @@ def build_hf_download_plan(
                 f"Check metadata.yaml - use proper dict structure or omit 'downloads' entirely."
             )
 
-        has_legacy = "hf_tokenizers" in downloads
-        has_new = "huggingface" in downloads
-        if has_legacy and has_new:
-            raise ValueError(
-                f"Workload '{key}' defines both 'downloads.hf_tokenizers' and 'downloads.huggingface'. "
-                f"Use only one format (legacy or new) per workload."
-            )
-
-        if has_legacy:
-            tokenizers = downloads.get("hf_tokenizers", [])
-            logger.debug(f"Workload '{key}': downloads.hf_tokenizers = {tokenizers}")
-            if not isinstance(tokenizers, list):
-                raise ValueError(
-                    f"Workload '{key}' has invalid 'downloads.hf_tokenizers': expected list, got {type(tokenizers).__name__}. "
-                    f"Check metadata.yaml - should be:\n"
-                    f"downloads:\n"
-                    f"  hf_tokenizers:\n"
-                    f"    - 'model/name'"
-                )
-            for repo_id in tokenizers:
-                if not isinstance(repo_id, str):
-                    raise ValueError(
-                        f"Workload '{key}' has invalid 'downloads.hf_tokenizers' entry: expected string, "
-                        f"got {type(repo_id).__name__}."
-                    )
-                asset_requirements.setdefault((repo_id, None), set()).add("tokenizer")
-
-        if has_new:
+        if "huggingface" in downloads:
             section = downloads.get("huggingface")
             logger.debug(f"Workload '{key}': downloads.huggingface = {section}")
             where = f"Workload '{key}' 'downloads.huggingface'"
@@ -633,11 +597,14 @@ def download_huggingface_cache_assets(
         logger.debug(f"Snapshotting HuggingFace repo {idx}/{total}: {repo_id}")
         print(f"\n[{idx}/{total}] {repo_id}")
         try:
+            allow_patterns = list(HF_ALLOW_PATTERNS)
+            if "tokenizer" in spec.assets:
+                allow_patterns.extend(HF_TOKENIZER_ALLOW_PATTERNS)
             snapshot_path = _with_retry(
-                lambda hf_spec=spec, tok=normalized_token: snapshot_download(
+                lambda hf_spec=spec, tok=normalized_token, patterns=allow_patterns: snapshot_download(
                     repo_id=hf_spec.repo_id,
                     revision=hf_spec.revision,
-                    allow_patterns=HF_ALLOW_PATTERNS,
+                    allow_patterns=patterns,
                     ignore_patterns=HF_IGNORE_PATTERNS,
                     cache_dir=_hf_hub_cache_dir(cache_dir),
                     token=tok,
@@ -865,14 +832,13 @@ def _maybe_finalize_tokenizer_snapshot(
 
     snapshot_root = Path(snapshot_path)
     tokenizer_config_path = snapshot_root / "tokenizer_config.json"
-    special_tokens_path = snapshot_root / "special_tokens_map.json"
-    if tokenizer_config_path.exists() and special_tokens_path.exists():
+    if tokenizer_config_path.exists():
         return
 
     from transformers import AutoTokenizer
 
     logger.debug(
-        "Generating tokenizer metadata for repo '%s' (missing tokenizer_config.json or special_tokens_map.json)",
+        "Generating tokenizer metadata for repo '%s' (missing tokenizer_config.json)",
         repo_id,
     )
 

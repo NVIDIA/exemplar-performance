@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -5,9 +8,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "llmb-run"
 
-version = "1.16.2"
+version = "1.24.0"
 description = "Lightweight tool for automating large batches of LLM benchmarking workloads"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.0,<3",
     "pyyaml>=6.0",
@@ -40,7 +43,7 @@ skip-string-normalization = true
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = [

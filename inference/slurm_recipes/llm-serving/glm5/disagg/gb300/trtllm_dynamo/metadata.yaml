@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+general:
+  workload: glm5
+  display_name: GLM-5 TRT-LLM Dynamo
+  workload_type: inference
+  framework: trt-llm-dynamo
+  model: GLM-5
+
+container:
+  images:
+    - url: 'nvcr.io#nvidia/ai-dynamo/tensorrtllm-runtime:1.1.0-dev.3'
+      name: 'trtllm-runtime-1.1.0-dev.3'
+
+downloads:
+  huggingface:
+    repos:
+      - repo_id: 'nvidia/GLM-5-NVFP4'
+        repo_type: model
+        revision: 'dc54ff55a7e9e71b85db953d8bc22eca894b44c6'
+        target: workload
+        name: 'glm5-nvfp4'
+
+repositories:
+  srt_slurm:
+    url: 'https://github.com/NVIDIA/srt-slurm.git'
+    commit: 'c180328b98c3793ca84a1e24a030f90545eb7d5d'
+
+setup:
+  venv_req: true
+  dependencies:
+    pip:
+      - package: srtctl
+        repo_key: srt_slurm
+        editable: true
+  tasks:
+    - name: setup_srtslurm
+      cmd: './setup_srtslurm.sh'
+      job_type: local
+
+run:
+  launcher_type: srt_slurm
+  srt_slurm:
+    recipe: recipes/8k_1k/ctx4dep2_gen3tep8_batch64_eplb0_mtp0_conc_64_128_256.yaml
+    recipe_env: RUN_CONF_GLM5_RECIPE
+  gpu_configs:
+    gb300:
+      model_configs:
+        - model_size: '744b'
+          dtypes: ['nvfp4']
+          scales: [32, 36, 40]
+          exact_scales: true

@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -163,7 +145,11 @@ def main() -> int:
     root = Path(args[0]) if args else Path(__file__).resolve().parent.parent
     rows = []
     for rp in sorted((root / "recipes").glob("**/recipe.yaml")):
-        env = (yaml.safe_load(rp.read_text()) or {}).get("envelope") or {}
+        recipe = yaml.safe_load(rp.read_text()) or {}
+        env = recipe.get("envelope") or {}
+        trace_path = ((recipe.get("tasktrace") or {}).get("trace") or {}).get("path")
+        if trace_path:  # agentic cells: trajectories/<model>/<agent>/<dataset>/<task>
+            env["_agent"], env["_task"] = Path(trace_path).parts[-3], Path(trace_path).parts[-1]
         env["_path"] = str(rp.parent.relative_to(root))
         env["recipe_hash"] = _rh.recipe_hash(rp.parent)  # drift guard: any benchmark change flips this
         env["benchmark_id"] = _bid.benchmark_id(rp.parent)  # stable across image/flag rolls — group-by to compare
@@ -194,11 +180,18 @@ def main() -> int:
         "",
         "_✓ marks a covered model·GPU × engine·serving combo (`×N` = N cells there). "
         "Engine column: `engine` when no orchestration framework, "
-        "`engine+framework` (e.g. `sglang+dynamo`) when one is used. Empty = not covered yet._",
+        "`engine+framework` (e.g. `sglang+dynamo`) when one is used. Agentic panels show agent · task · mode instead. "
+        "Empty = not covered yet._",
         "",
     ]
     # facet by (scenario · goal) — the goal refines the scenario (WHAT the benchmark measures)
     facets = sorted({(r.get("scenario", "?"), r.get("goal") or "") for r in rows})
+
+    def gpu_rank(gpu):
+        """Repo-wide GPU ordering for tables: GB300, GB200, B300, B200, H100, then anything else A→Z."""
+        order = ("GB300", "GB200", "B300", "B200", "H100")
+        g = (gpu or "").upper()
+        return (order.index(g), "") if g in order else (len(order), g)
 
     def engine_key(r):
         """engine, or engine+framework when a non-trivial framework is present (e.g. sglang+dynamo)."""
@@ -206,13 +199,25 @@ def main() -> int:
         fw = r.get("framework", "none") or "none"
         return f"{eng}+{fw}" if fw not in ("none", "", None) else eng
 
+    def column_key(r):
+        """engine-serving, or agent · task · mode for agentic cells (their engine and serving are always none)."""
+        if r.get("_agent"):
+            return f"{r['_agent']} · {r['_task']} · {r.get('mode', '?').removeprefix('tasktrace-')}"
+        return f"{engine_key(r)}-{r.get('serving_mode','?')}"
+
     for sc, goal in facets:
         srows = [r for r in rows if r.get("scenario") == sc and (r.get("goal") or "") == goal]
         dists = sorted({r.get("distribution", "?") for r in srows})
         title = f"{sc} · {goal}" if goal else sc
         block += [f"**{title}** — {', '.join(dists)}", ""]
-        cols = sorted({f"{engine_key(r)}-{r.get('serving_mode','?')}" for r in srows})
-        recs = sorted({f"{r.get('model','?')} · {r.get('gpu_type','?')}" for r in srows})
+        cols = sorted({column_key(r) for r in srows})
+        recs = [
+            f"{m} · {g}"
+            for m, g in sorted(
+                {(r.get("model", "?"), r.get("gpu_type", "?")) for r in srows},
+                key=lambda mg: (mg[0], gpu_rank(mg[1])),
+            )
+        ]
         block.append("| model · gpu | " + " | ".join(cols) + " |")
         block.append("|" + "---|" * (len(cols) + 1))
         for rec in recs:
@@ -221,8 +226,7 @@ def main() -> int:
                 match = [
                     r
                     for r in srows
-                    if f"{r.get('model','?')} · {r.get('gpu_type','?')}" == rec
-                    and f"{engine_key(r)}-{r.get('serving_mode','?')}" == col
+                    if f"{r.get('model','?')} · {r.get('gpu_type','?')}" == rec and column_key(r) == col
                 ]
                 if not match:
                     cells.append("")
@@ -252,7 +256,7 @@ def main() -> int:
             r.get("scenario", ""),
             r.get("distribution", ""),
             r.get("model", ""),
-            r.get("gpu_type", ""),
+            gpu_rank(r.get("gpu_type", "")),
         ),
     ):
         link = r.get("results_link") or ""

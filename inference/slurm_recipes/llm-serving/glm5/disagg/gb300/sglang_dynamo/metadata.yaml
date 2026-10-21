@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+general:
+  workload: glm5_sglang_dynamo
+  display_name: GLM-5 SGLang Dynamo
+  workload_type: inference
+  framework: sglang-dynamo
+  model: GLM-5
+
+# LLMB owns the serving and frontend images. The explicit names are stable aliases
+# written to the workload-private srtslurm.yaml by llmb-run at submission time.
+container:
+  images:
+    - url: 'nvcr.io#nvidia/ai-dynamo/sglang-runtime:1.3.0'
+      name: 'sglang-runtime-1.3.0'
+    # Avoid a runtime Docker Hub dependency. Pin the Linux/ARM64 child manifest:
+    # Enroot 4.0.1 cannot import the multi-architecture index digest.
+    - url: 'nginx@sha256:846993cfd1ec2f814d7f3cfdc8df7aa67ecfe6ab233fd990c82d34eea47beb8e'
+      name: 'nginx-1.27.4'
+
+downloads:
+  huggingface:
+    repos:
+      - repo_id: 'zai-org/GLM-5-FP8'
+        repo_type: model
+        revision: '4f96cc5eec29dcee5d6ded54f7ffe889438f9516'
+        target: workload
+        name: 'glm5-fp8'
+
+# Pin an immutable release commit. SRT-Slurm is an orchestration dependency;
+# recipes and artifact provisioning remain owned by LLMB.
+repositories:
+  srt_slurm:
+    url: 'https://github.com/NVIDIA/srt-slurm.git'
+    commit: 'c180328b98c3793ca84a1e24a030f90545eb7d5d'
+
+setup:
+  venv_req: true
+  dependencies:
+    pip:
+      - package: srtctl
+        repo_key: srt_slurm
+        editable: true
+  tasks:
+    - name: setup_srtslurm
+      cmd: './setup_srtslurm.sh'
+      job_type: local
+
+run:
+  launcher_type: srt_slurm
+  srt_slurm:
+    recipe: recipes/gb300/8k_1k/lowlatency/glm5-gb300-fp8-stp-lowlatency-1p9d-bs15-conc150.yaml
+    recipe_env: RUN_CONF_GLM5_SGLANG_RECIPE
+    selector: override_validated
+  gpu_configs:
+    gb300:
+      model_configs:
+        - model_size: '744b'
+          dtypes: ['fp8']
+          # LLMB scale is the physical GPU count requested by the selected
+          # recipe: 10 nodes use 40 GPUs and 18 nodes use 72 GPUs.
+          scales: [40, 72]
+          exact_scales: true

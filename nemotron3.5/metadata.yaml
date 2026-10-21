@@ -1,0 +1,82 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+general:
+  workload: nemotron3.5
+  display_name: nemotron3.5-lightning
+  workload_aliases: [nemotron3.5, nemotron3.5-lightning, nemotron-3.5-lightning, nemotron-lightning]
+  workload_type: pretrain
+  framework: megatron_bridge
+
+container:
+  images:
+    - 'nvcr.io#nvidia/nemo:26.08.01'
+
+downloads:
+  huggingface:
+    cache:
+      - repo_id: 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16'
+        revision: 'b3caaabed0263651a17dc1f2d4ce97e794f76c44'
+        assets: [tokenizer, config]
+
+repositories:
+  megatron_bridge:
+    url: "https://github.com/NVIDIA-NeMo/Megatron-Bridge.git"
+    commit: "acd815328f9f6100020b32732d2996fe1408cd45"
+  nemo_run:
+    url: "https://github.com/NVIDIA-NeMo/Run.git"
+    commit: "6a55313352bf7204a01636ea9a59dd61289da253"
+
+setup:
+  venv_req: true
+  dependencies:
+    git:
+      megatron_bridge:
+        repo_key: megatron_bridge
+        install_method:
+          type: clone
+    pip:
+      - package: nemo_run
+        repo_key: nemo_run
+      # NeMo-Run imports leptonai.api.v1, which leptonai 0.47 removed.
+      - 'leptonai==0.27.3'
+
+tools:
+  nsys: "2026.5.1.161-3889610"
+
+run:
+  launcher_type: 'megatron_bridge'
+  launch_script: 'launch.sh'
+  execution_targets: [slurm, kubernetes]  # launch script handles CLUSTER_TYPE=kubernetes (nvcre)
+
+  gpu_configs:
+    gb300:
+      model_configs:
+        - model_size: '30b'
+          dtypes: ['bf16', 'fp8']
+          scales: [8, 16, 32, 64]
+          exact_scales: true
+    gb200:
+      model_configs:
+        - model_size: '30b'
+          dtypes: ['bf16', 'fp8']
+          scales: [8, 16, 32, 64]
+          exact_scales: true
+    b300:
+      model_configs:
+        - model_size: '30b'
+          dtypes: ['bf16', 'fp8']
+          scales: [8, 16, 32, 64]
+          exact_scales: true
+    b200:
+      model_configs:
+        - model_size: '30b'
+          dtypes: ['bf16', 'fp8']
+          scales: [8, 16, 32, 64]
+          exact_scales: true
+    h100:
+      model_configs:
+        - model_size: '30b'
+          dtypes: ['bf16']
+          scales: [16, 32, 64]
+          exact_scales: true

@@ -1,0 +1,4 @@
+1000 1700000900.0000000090 execve("/bin/../bin/echo", ["echo", "héllo", "line\nnext", "quote\"slash\\", "\x41\101", "comma,[ok]"], 0x1 /* nested, [metadata] */) = 0
+1000 1700000900.010000009 chdir('../work,dir') = 0
+1000 1700000900.020000009 execve("./tool", ["tool", "unknown\qescape"], 0x1) = -1 ENOENT (No such file or directory)
+1000 1700000900.030000009 +++ killed by SIGTERM (Terminated) +++

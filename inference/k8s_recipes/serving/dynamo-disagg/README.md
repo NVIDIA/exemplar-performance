@@ -13,9 +13,8 @@ A **`DynamoGraphDeployment`** ([`dgd-disagg-1m.yaml`](dgd-disagg-1m.yaml)) with:
 Prefill and decode run in **separate pools**. Cross-worker **prefill→decode KV transfer** uses vLLM's **NixlConnector**
 (`kv_role: kv_both`), a pure peer-to-peer KV transport.
 
-**Note on "KVBM".** In Dynamo, the literal *KVBM* is a separate **tiered GPU→CPU→disk offload**
-connector (the DynamoConnector). That is **intentionally NOT used here** — this backend does pure
-cross-worker KV transfer with no CPU/disk offload. NixlConnector matches the design intent (improve prefill parallelism, not KV capacity) and is the supported path.
+This backend uses cross-worker KV transfer without CPU or disk offload. NixlConnector supports the
+prefill/decode split described above.
 
 The worker configuration uses engine arguments supported by `dynamo.vllm`. Serving-only arguments
 (`--tool-call-parser`, `--reasoning-parser`, `--enable-auto-tool-choice`,

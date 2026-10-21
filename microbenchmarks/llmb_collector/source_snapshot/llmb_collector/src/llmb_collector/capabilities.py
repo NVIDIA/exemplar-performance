@@ -10,10 +10,10 @@ capability's documented ``invoke`` signature. See the README "Capability
 registry" section.
 
 ``Capability`` and the two capability names below come from the
-`llmb-capabilities <https://gitlab-master.nvidia.com/unified-cloud-benchmarking/sanitation-tools/llmb-capabilities>`_
-contract package rather than being defined/duplicated locally, so every
-producer and consumer shares one definition of the entry-point group name,
-the ``Capability`` shape, and each capability's supported ``version`` ceiling.
+``llmb-capabilities`` contract package rather than being defined/duplicated
+locally, so every producer and consumer shares one definition of the
+entry-point group name, the ``Capability`` shape, and each capability's
+supported ``version`` ceiling.
 """
 
 from __future__ import annotations
