@@ -1,0 +1,112 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "session_id": "claude-code-fixture",
+  "agent": {
+    "name": "claude-code",
+    "version": "fixture",
+    "model_name": "fixture",
+    "extra": { "cwds": ["/app"] }
+  },
+  "fixture_provenance": {
+    "dataset": "Terminal-Bench 2.0",
+    "curation": "Hermetic representative derived from a Claude Code ATIF capture. Tool names, raw arguments, grouped observations, and source_call_id links were retained; commands and file contents were replaced."
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-08-13T18:00:00.000Z",
+      "source": "agent",
+      "tool_calls": [{
+        "tool_call_id": "toolu_fixture_bash_seed",
+        "function_name": "Bash",
+        "arguments": { "command": "mkdir -p fixture-state && printf 'workspace ready\n'", "description": "Create fixture workspace" },
+        "extra": { "raw_arguments": { "command": "mkdir -p fixture-state && printf 'workspace ready\n'", "description": "Create fixture workspace" }, "tool_use_name": "Bash" }
+      }],
+      "observation": { "results": [{
+        "source_call_id": "toolu_fixture_bash_seed",
+        "content": "workspace ready\\n\\n[stdout]\\nworkspace ready\\n[metadata] {\"noOutputExpected\": false}",
+        "extra": { "tool_result_metadata": { "tool_use_result": { "stdout": "workspace ready\\n", "stderr": "", "interrupted": false, "isImage": false, "noOutputExpected": false }, "raw_tool_result": { "tool_use_id": "toolu_fixture_bash_seed", "type": "tool_result", "content": "workspace ready\\n", "is_error": false } }, "tool_result_is_error": false }
+      }] }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-08-13T18:00:01.000Z",
+      "source": "agent",
+      "tool_calls": [{
+        "tool_call_id": "toolu_fixture_write",
+        "function_name": "Write",
+        "arguments": { "file_path": "fixture-state/state.txt", "content": "ready\n" },
+        "extra": { "raw_arguments": { "file_path": "fixture-state/state.txt", "content": "ready\n" }, "tool_use_name": "Write" }
+      }],
+      "observation": { "results": [{
+        "source_call_id": "toolu_fixture_write",
+        "content": "File created successfully at: fixture-state/state.txt (file state is current in your context — no need to Read it back)\\n\\n[metadata] {\"type\": \"create\", \"filePath\": \"fixture-state/state.txt\", \"content\": \"ready\\\\n\", \"structuredPatch\": [], \"originalFile\": null, \"userModified\": false}",
+        "extra": { "tool_result_metadata": { "tool_use_result": { "type": "create", "filePath": "fixture-state/state.txt", "content": "ready\\n", "structuredPatch": [], "originalFile": null, "userModified": false }, "raw_tool_result": { "tool_use_id": "toolu_fixture_write", "type": "tool_result", "content": "File created successfully at: fixture-state/state.txt (file state is current in your context — no need to Read it back)" } }, "tool_result_is_error": false }
+      }] }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-08-13T18:00:02.000Z",
+      "source": "agent",
+      "tool_calls": [{
+        "tool_call_id": "toolu_fixture_read",
+        "function_name": "Read",
+        "arguments": { "file_path": "fixture-state/state.txt", "offset": 1, "limit": 1 },
+        "extra": { "raw_arguments": { "file_path": "fixture-state/state.txt", "offset": 1, "limit": 1 }, "tool_use_name": "Read" }
+      }],
+      "observation": { "results": [{
+        "source_call_id": "toolu_fixture_read",
+        "content": "     1→ready\n",
+        "extra": { "tool_result_metadata": { "tool_use_result": { "type": "text", "filePath": "fixture-state/state.txt", "offset": 1, "limit": 1, "totalLines": 1 }, "raw_tool_result": { "tool_use_id": "toolu_fixture_read", "type": "tool_result", "content": "     1→ready\n", "is_error": false } }, "tool_result_is_error": false }
+      }] }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-08-13T18:00:03.000Z",
+      "source": "agent",
+      "tool_calls": [{
+        "tool_call_id": "toolu_fixture_bash_write_verify",
+        "function_name": "Bash",
+        "arguments": { "command": "test \"$(cat fixture-state/state.txt)\" = ready && printf 'write verified\n'", "description": "Verify Write state" },
+        "extra": { "raw_arguments": { "command": "test \"$(cat fixture-state/state.txt)\" = ready && printf 'write verified\n'", "description": "Verify Write state" }, "tool_use_name": "Bash" }
+      }],
+      "observation": { "results": [{
+        "source_call_id": "toolu_fixture_bash_write_verify",
+        "content": "write verified\\n\\n[stdout]\\nwrite verified\\n[metadata] {\"noOutputExpected\": false}",
+        "extra": { "tool_result_metadata": { "tool_use_result": { "stdout": "write verified\\n", "stderr": "", "interrupted": false, "isImage": false, "noOutputExpected": false }, "raw_tool_result": { "tool_use_id": "toolu_fixture_bash_write_verify", "type": "tool_result", "content": "write verified\\n", "is_error": false } }, "tool_result_is_error": false }
+      }] }
+    },
+    {
+      "step_id": 5,
+      "timestamp": "2026-08-13T18:00:04.000Z",
+      "source": "agent",
+      "tool_calls": [{
+        "tool_call_id": "toolu_fixture_edit",
+        "function_name": "Edit",
+        "arguments": { "replace_all": false, "file_path": "fixture-state/state.txt", "old_string": "ready", "new_string": "done" },
+        "extra": { "raw_arguments": { "replace_all": false, "file_path": "fixture-state/state.txt", "old_string": "ready", "new_string": "done" }, "tool_use_name": "Edit" }
+      }],
+      "observation": { "results": [{
+        "source_call_id": "toolu_fixture_edit",
+        "content": "The file fixture-state/state.txt has been updated successfully. (file state is current in your context — no need to Read it back)\\n\\n[metadata] {\"filePath\": \"fixture-state/state.txt\", \"oldString\": \"ready\", \"newString\": \"done\", \"originalFile\": \"ready\\\\n\", \"structuredPatch\": [{\"oldStart\": 1, \"oldLines\": 1, \"newStart\": 1, \"newLines\": 1, \"lines\": [\"-ready\", \"+done\"]}], \"userModified\": false, \"replaceAll\": false}",
+        "extra": { "tool_result_metadata": { "tool_use_result": { "filePath": "fixture-state/state.txt", "oldString": "ready", "newString": "done", "originalFile": "ready\\n", "structuredPatch": [{ "oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1, "lines": ["-ready", "+done"] }], "userModified": false, "replaceAll": false }, "raw_tool_result": { "tool_use_id": "toolu_fixture_edit", "type": "tool_result", "content": "The file fixture-state/state.txt has been updated successfully. (file state is current in your context — no need to Read it back)" } }, "tool_result_is_error": false }
+      }] }
+    },
+    {
+      "step_id": 6,
+      "timestamp": "2026-08-13T18:00:05.000Z",
+      "source": "agent",
+      "tool_calls": [{
+        "tool_call_id": "toolu_fixture_bash_edit_verify",
+        "function_name": "Bash",
+        "arguments": { "command": "test \"$(cat fixture-state/state.txt)\" = done && printf 'edit verified\n'", "description": "Verify Edit state" },
+        "extra": { "raw_arguments": { "command": "test \"$(cat fixture-state/state.txt)\" = done && printf 'edit verified\n'", "description": "Verify Edit state" }, "tool_use_name": "Bash" }
+      }],
+      "observation": { "results": [{
+        "source_call_id": "toolu_fixture_bash_edit_verify",
+        "content": "edit verified\\n\\n[stdout]\\nedit verified\\n[metadata] {\"noOutputExpected\": false}",
+        "extra": { "tool_result_metadata": { "tool_use_result": { "stdout": "edit verified\\n", "stderr": "", "interrupted": false, "isImage": false, "noOutputExpected": false }, "raw_tool_result": { "tool_use_id": "toolu_fixture_bash_edit_verify", "type": "tool_result", "content": "edit verified\\n", "is_error": false } }, "tool_result_is_error": false }
+      }] }
+    }
+  ]
+}

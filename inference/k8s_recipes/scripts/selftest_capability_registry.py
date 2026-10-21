@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -219,12 +201,13 @@ class TestProbe(unittest.TestCase):
 
 # ── 3. gap() — the guard/degrade decision + action ──────────────────────────────
 class TestGap(unittest.TestCase):
-    def test_nvlink_absent_strips_forced_env(self):
-        g = cr._gap_nvlink_imex(fabric_recipe(), {}, cr.ABSENT)
-        self.assertEqual(g.level, "WARN")
-        self.assertEqual(g.action, "strip-forced-env")
-        self.assertIn("STRIPPED", g.message)
-        self.assertIn("code=800", g.message)
+    def test_nvlink_nonprovisioned_fails_closed(self):
+        for state in (cr.ABSENT, cr.AVAILABLE, cr.UNKNOWN):
+            with self.subTest(state=state):
+                g = cr._gap_nvlink_imex(fabric_recipe(), {}, state)
+                self.assertEqual(g.level, "FAIL")
+                self.assertIsNone(g.action)
+                self.assertIn("will not launch", g.message)
 
     def test_nvlink_provisioned_passes(self):
         g = cr._gap_nvlink_imex(fabric_recipe(), {}, cr.PROVISIONED)
@@ -326,7 +309,7 @@ class TestRecipeScoping(unittest.TestCase):
         ids = {c.id for c in cr.required_capabilities(fabric_recipe())}
         self.assertIn("nvlink-imex", ids)
 
-    def test_fabric_recipe_on_imexless_cluster_yields_strip_gap(self):
+    def test_fabric_recipe_on_imexless_cluster_yields_fail_gap(self):
         facts = {
             "nvlink_imex": {"crd_present": False, "channel_provisioned": False},
             "node_archs": ["arm64"],
@@ -335,7 +318,8 @@ class TestRecipeScoping(unittest.TestCase):
         }
         gaps = {g.id: g for g in cr.gaps_only(fabric_recipe(), facts)}
         self.assertIn("nvlink-imex", gaps)
-        self.assertEqual(gaps["nvlink-imex"].action, "strip-forced-env")
+        self.assertEqual(gaps["nvlink-imex"].level, "FAIL")
+        self.assertIsNone(gaps["nvlink-imex"].action)
 
 
 # ── 5. relax_serving_env — the crash-killer render strip ────────────────────────
@@ -1398,8 +1382,8 @@ import base64 as _b64
 import json as _json
 from urllib.parse import urlparse as _urlparse, parse_qs as _parse_qs
 
-_DRV = "nvcr.io/nvidian/serving-driver@sha256:aabbcc"
-_SRV = "nvcr.io/nvidian/vllm@sha256:ddeeff"
+_DRV = "nvcr.io/example-org/serving-driver@sha256:aabbcc"
+_SRV = "nvcr.io/example-org/vllm@sha256:ddeeff"
 
 
 def _ngc_dockercfg(user="$oauthtoken", key="NGCKEY"):
@@ -1458,13 +1442,15 @@ class TestPullParseHelpers(unittest.TestCase):
     def test_split_image_ref_digest_and_tag(self):
         self.assertEqual(
             cr.split_image_ref(_DRV),
-            ("nvcr.io", "nvidian/serving-driver", "sha256:aabbcc"),
+            ("nvcr.io", "example-org/serving-driver", "sha256:aabbcc"),
         )
         self.assertEqual(
-            cr.split_image_ref("nvcr.io/nvidian/vllm:v1"),
-            ("nvcr.io", "nvidian/vllm", "v1"),
+            cr.split_image_ref("nvcr.io/example-org/vllm:v1"),
+            ("nvcr.io", "example-org/vllm", "v1"),
         )
         self.assertEqual(cr.split_image_ref("busybox:1.36"), ("docker.io", "library/busybox", "1.36"))
+        # a digest pin that also names its tag: the digest is the reference, the tag is not part of the repo
+        self.assertEqual(cr.split_image_ref("ghcr.io/org/img:latest@sha256:ab"), ("ghcr.io", "org/img", "sha256:ab"))
 
     def test_parse_www_authenticate(self):
         c = cr._parse_www_authenticate('Bearer realm="https://nvcr.io/proxy_auth",service="nvcr.io",scope="x"')
@@ -1489,7 +1475,7 @@ class TestPullProbe(unittest.TestCase):
         res = cr.probe_image_pull_access(
             [_DRV, _SRV],
             _ngc_dockercfg(),
-            FakeRegistry(forbidden={"nvidian/serving-driver"}),
+            FakeRegistry(forbidden={"example-org/serving-driver"}),
         )
         self.assertEqual(res[_DRV]["status"], cr._PULL_FORBIDDEN)
         self.assertEqual(res[_SRV]["status"], cr._PULL_PASS)  # different, accessible org still pulls
@@ -1530,15 +1516,15 @@ class TestPullGap(unittest.TestCase):
         res = cr.probe_image_pull_access(
             [_DRV, _SRV],
             _ngc_dockercfg(),
-            FakeRegistry(forbidden={"nvidian/serving-driver"}),
+            FakeRegistry(forbidden={"example-org/serving-driver"}),
         )
         facts = {"image_pull_access": {"secret": "ngc-registry", "results": res}}
         g = cr.evaluate(self._recipe(), facts, registry=(_entry("image-pull-access"),))[0]
         self.assertEqual(g.level, "FAIL")
         self.assertEqual(g.action, "grant-registry-access")
         self.assertIn("ngc-registry", g.message)  # which secret
-        self.assertIn("nvidian/serving-driver", g.message)  # which repo
-        self.assertIn("nvidian/serving-driver", g.fix)  # the fix names the org to grant
+        self.assertIn("example-org/serving-driver", g.message)  # which repo
+        self.assertIn("example-org/serving-driver", g.fix)  # the fix names the org to grant
         self.assertIn("mirror", g.fix.lower())
 
     def test_all_pass_gap_is_pass(self):

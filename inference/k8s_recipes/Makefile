@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # Validation targets for the Kubernetes recipe collection.
 # Every target is safe to run locally and is what CI invokes.
@@ -146,6 +128,7 @@ test: export TMPDIR := $(SELFTEST_TMPDIR)
 test:
 	@mkdir -p "$(TMPDIR)"
 	@python3 scripts/selftest_sglang_cache_contract.py
+	@python3 scripts/selftest_gb300_release.py
 	@if [ "$(HAS_INTERNAL_TEST_ASSETS)" = 1 ]; then python3 scripts/selftest.py; else echo "skip selftest.py (internal fixtures not shipped)"; fi
 	@python3 scripts/selftest_provenance.py
 	@python3 scripts/selftest_launch_attestation.py
@@ -166,6 +149,7 @@ test:
 	@python3 scripts/selftest_env_override.py
 	@python3 scripts/selftest_charts.py
 	@python3 scripts/selftest_goal_handlers.py
+	@python3 scripts/selftest_agentic_lane.py
 	@python3 scripts/selftest_rung_coverage.py
 	@python3 scripts/selftest_progress_signal.py
 	@python3 scripts/selftest_cell_identity.py
@@ -190,6 +174,7 @@ test:
 	@python3 scripts/selftest_cluster_readiness.py
 	@python3 scripts/selftest_manifest_vars.py
 	@python3 scripts/selftest_fetch_receipt.py
+	@python3 scripts/selftest_fetch_stream.py
 	@python3 scripts/selftest_resilient_results.py
 	@python3 scripts/selftest_wizard_init.py
 	@python3 scripts/selftest_run_id.py

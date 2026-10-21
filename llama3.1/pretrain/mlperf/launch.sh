@@ -1,30 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 set -eu -o pipefail
 
-if [ "${BASH_VERSINFO[0]}" -lt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -lt 2 ]; }; then
-    printf "Unsupported %s version: %s\n" "${BASH}" "${BASH_VERSION}" >&2
-    echo "Requires Bash 4.2 or greater." >&2
+if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 2))); then
+    printf 'Requires Bash 4.2 or greater (running: %s).\n' "${BASH_VERSION:-not Bash}" >&2
     exit 1
 fi
 
@@ -32,14 +13,11 @@ export WORKLOAD_TYPE=pretrain
 export WORKLOAD=llama3.1_mlperf
 export MODEL_FAMILY=llama
 export MODEL_RECIPE=llama31_8b
-export FW_VERSION=26.06.01
+export FW_VERSION=26.08.01
 export IMAGE=${RUN_CONF_IMAGE:-$LLMB_INSTALL/images/nvidia+nemo+$FW_VERSION.sqsh}
 
 export OPENBLAS_NUM_THREADS=1 # Required for login nodes with tight memory restrictions. Do not remove.
-
-export LLMB_WORKLOAD=$LLMB_INSTALL/workloads/${WORKLOAD_TYPE}_${WORKLOAD}
 export NEMORUN_HOME=$LLMB_WORKLOAD
-export LLMB_REPO=$PWD
 
 CLUSTER_TYPE=${CLUSTER_TYPE:-slurm}
 DTYPE=${DTYPE:-nvfp4}
@@ -54,22 +32,13 @@ ENABLED_GPU_METRICS=${ENABLE_GPU_METRICS:-false}
 ENABLED_GPU_METRICS=${ENABLED_GPU_METRICS,,}
 ENABLE_VBOOST=${ENABLE_VBOOST:-false}
 ENABLE_VBOOST=${ENABLE_VBOOST,,}
-PROFILE_START_STEP=${PROFILE_START_STEP:-45}
-PROFILE_STOP_STEP=${PROFILE_STOP_STEP:-50}
+PROFILE_START_STEP=${PROFILE_START_STEP:-995}
+PROFILE_STOP_STEP=${PROFILE_STOP_STEP:-1000}
 MLPERF_DATA=${MLPERF_DATA:-mock}
 MLPERF_DATA=${MLPERF_DATA,,}
 CONFIG_OVERRIDES=""
 
 JOB_TOTAL_GPUS=${JOB_TOTAL_GPUS:?JOB_TOTAL_GPUS is a required variable.}
-
-if [[ $JOB_TOTAL_GPUS == 8 ]]; then
-    DEFAULT_CONFIG_VARIANT="v1"
-elif [[ $JOB_TOTAL_GPUS == 72 ]]; then
-    DEFAULT_CONFIG_VARIANT="v2"
-else
-    echo "Error: Invalid JOB_TOTAL_GPUS '$JOB_TOTAL_GPUS'. Supported values: 8, 72" >&2
-    exit 1
-fi
 
 # Handle additional SLURM parameters from environment variable
 ADDITIONAL_SLURM_PARAMS=${ADDITIONAL_SLURM_PARAMS:-""}
@@ -83,7 +52,7 @@ fi
 CONTAINER_MOUNTS=""
 export HF_HOME="$LLMB_INSTALL/.cache/huggingface"
 CONTAINER_MOUNTS="$HF_HOME"
-CONTAINER_MOUNTS+=",$LLMB_INSTALL/llmb_repo/llama3.1/pretrain/mlperf/custom_communicator_cta.yaml:/workspace/custom_communicator_cta.yaml"
+CONTAINER_MOUNTS+=",$LLMB_RECIPE_ROOT/custom_communicator_cta.yaml:/workspace/custom_communicator_cta.yaml"
 
 # Mount Mbridge llama recipe not in container yet
 CONTAINER_MOUNTS+=",$LLMB_WORKLOAD/Megatron-Bridge/src/megatron/bridge/recipes/llama:/opt/Megatron-Bridge/src/megatron/bridge/recipes/llama"
@@ -103,7 +72,7 @@ if [[ -n ${CONTAINER_MOUNTS} ]]; then
 fi
 
 TIME_LIMIT=${TIME_LIMIT:-"00:30:00"}
-MAX_STEPS=${MAX_STEPS:-50}
+MAX_STEPS=${MAX_STEPS:-1000}
 CPU_PER_TASK_PINNING=${CPU_PER_TASK_PINNING:-0}
 
 DTYPE_EXTRA_ENVS=""
@@ -151,7 +120,7 @@ if [[ $PROFILE_ENABLED == "true" ]]; then
     CONFIG_OVERRIDES+=" --enable_nsys "
     CONFIG_OVERRIDES+=" --profiling_start_step=$PROFILE_START_STEP "
     CONFIG_OVERRIDES+=" --profiling_stop_step=$PROFILE_STOP_STEP "
-    PROFILE_RANKS=$(seq -s, 0 $((JOB_TOTAL_GPUS - 1)))
+    PROFILE_RANKS=$(seq -s, 0 $((JOB_TOTAL_GPUS - 1)) | sed 's/,$//')
     CONFIG_OVERRIDES+=" --profiling_ranks=$PROFILE_RANKS"
     CONFIG_OVERRIDES+=" --nsys_trace=cuda,nvtx "
     CONFIG_OVERRIDES+=" --nsys_extra_args=--nvtx-domain-include=NCCL "
@@ -181,8 +150,6 @@ elif [[ $DTYPE == "nvfp4" ]]; then
     DTYPE_EXTRA_ENVS+="NVTE_NVFP4_DISABLE_STOCHASTIC_ROUNDING=0,"
     DTYPE_EXTRA_ENVS+="USE_TE_OPS=True,"
 fi
-
-CONFIG_VARIANT=${CONFIG_VARIANT:-$DEFAULT_CONFIG_VARIANT}
 
 CONFIG_OVERRIDES+=" --compute_dtype $DTYPE "
 
@@ -230,7 +197,6 @@ python scripts/performance/setup_experiment.py \
     --container_image $IMAGE \
     --num_gpus $JOB_TOTAL_GPUS \
     --gpus_per_node $GPUS_PER_NODE \
-    --config_variant $CONFIG_VARIANT \
     --enable_vboost $ENABLE_VBOOST \
     --offline \
     $CONFIG_OVERRIDES \

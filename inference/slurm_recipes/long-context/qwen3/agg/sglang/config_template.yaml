@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
+# SPDX-License-Identifier: Apache-2.0
+
 # srt-slurm recipe template for the agentic qwen3 long-context benchmark.
 # launch.sh renders one config per concurrency with envsubst
 # and runs each with `srtctl apply -f`

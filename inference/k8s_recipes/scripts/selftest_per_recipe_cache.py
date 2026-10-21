@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -107,7 +89,7 @@ check(
     str(rwx),
 )
 
-rwo = install.derive_recipe_cache(_cell("qwen3-kvbm", {"size": "20Gi", "access_mode": "rwo"}), PROF)
+rwo = install.derive_recipe_cache(_cell("small-model", {"size": "20Gi", "access_mode": "rwo"}), PROF)
 check("RWO recipe → MODEL_CACHE_RWO_CLASS", rwo["storage_class"] == "ebs", str(rwo))
 check("RWO recipe → ReadWriteOnce", rwo["access_mode"] == "ReadWriteOnce", str(rwo))
 check("RWO recipe → 20Gi", rwo["size"] == "20Gi", str(rwo))
@@ -273,7 +255,7 @@ check("empty class → no storageClassName line", "storageClassName" not in nocl
 # ---------------------------------------------------------------------------
 cells = [
     _cell("glm5-fp8", {"size": "1200Gi", "access_mode": "rwx"}, path="recipes/a"),
-    _cell("qwen3-kvbm", {"size": "20Gi", "access_mode": "rwo"}, path="recipes/b"),
+    _cell("small-model", {"size": "20Gi", "access_mode": "rwo"}, path="recipes/b"),
     _cell("nemotron-ultra-3", {"size": "500Gi", "access_mode": "rwx"}, path="recipes/c"),
     # a 4th recipe reusing the SAME model as the 3rd → shares one cache (dedup)
     _cell("nemotron-ultra-3", {"size": "500Gi", "access_mode": "rwx"}, path="recipes/d"),
@@ -290,7 +272,7 @@ def _ap(manifest, ns):
 PROF_MULTI = {
     **PROF,
     "MODEL_CACHE_PVC_GLM5_FP8": "glm5-fp8-model-cache",
-    "MODEL_CACHE_PVC_QWEN3_KVBM": "qwen3-kvbm-model-cache",
+    "MODEL_CACHE_PVC_SMALL_MODEL": "small-model-cache",
     "MODEL_CACHE_PVC_NEMOTRON_ULTRA_3": "nemotron-ultra-3-model-cache",
 }
 res = install.ensure_recipe_cache_pvcs(cells, PROF_MULTI, applier=_ap, probe=False, plan_only=False)
@@ -301,7 +283,7 @@ check(
     == [
         "glm5-fp8-model-cache",
         "nemotron-ultra-3-model-cache",
-        "qwen3-kvbm-model-cache",
+        "small-model-cache",
     ],
     str(names),
 )
@@ -356,10 +338,9 @@ check(
     str(fi.get("requires_gpu")),
 )
 
-# A real on-disk cell fingerprints identically with vs without a requires.cache block. The migrated
-# glm5-9600 cell that carried a real cache block was pruned in the consolidation, so we inject a synthetic
+# A real on-disk cell fingerprints identically with vs without a requires.cache block. Inject a synthetic
 # cache block onto a surviving cell's recipe dict (never written to disk) — the fingerprint MUST ignore it.
-CELL = ROOT / "recipes/llm-perf/kvbm/qwen3-0-6b-b200-vllm-agg-kvbm-pareto"
+CELL = ROOT / "recipes/llm-perf/Glm5/B200_k8s/Agg/1k_1k/glm5-fp8-b200-sglang15-agg-c4-1024"
 if (CELL / "recipe.yaml").exists():
     import yaml as _yaml
 
@@ -416,7 +397,7 @@ check(
 # Same, resolved from a REAL on-disk cell that declares NO requires.cache (the exact retained large-model cell).
 QA_CELL = _cell(
     "nemotron-ultra-3",
-    path="recipes/llm-perf/nemotron_ultra_disagg/sglang_dynamo/50k2k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-50k2k-1p1d",
+    path="recipes/llm-perf/nemotron_ultra_disagg/B200_k8s/Disagg/sglang_dynamo/50k2k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-50k2k-1p1d",
 )
 if (ROOT / QA_CELL["_path"] / "recipe.yaml").exists():
     qa = install.derive_recipe_cache(QA_CELL, PROF)
@@ -432,7 +413,7 @@ PROF_SHARED = {**PROF, "MODEL_CACHE_PVC": "shared-cache"}
 share_cells = [
     _cell(
         "nemotron-ultra-3",
-        path="recipes/llm-perf/nemotron_ultra_disagg/sglang_dynamo/50k2k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-50k2k-1p1d",
+        path="recipes/llm-perf/nemotron_ultra_disagg/B200_k8s/Disagg/sglang_dynamo/50k2k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-50k2k-1p1d",
     ),
     _cell("glm5-fp8", path="recipes/llm-perf/glm5-9600/glm5-fp8-b200-sglang-1p1d"),
 ]
@@ -465,7 +446,7 @@ check(
 
 # A legitimately small model with an explicit small declaration is honored (not bumped to the 100Gi floor).
 small = install.derive_recipe_cache(
-    _cell("qwen3-kvbm", {"size": "20Gi", "access_mode": "rwo"}),
+    _cell("small-model", {"size": "20Gi", "access_mode": "rwo"}),
     PROF,
     model_sizes_gib=[None],
 )
@@ -524,9 +505,7 @@ PROF_LEGACY = {"NAMESPACE": "bench", "MODEL_CACHE_PVC": "model-cache"}
 # resolution (serving.model_repo → GiB), not the catalog. Pointing at a path that no longer exists
 # silently fell back to the 100Gi floor -- which the assertions then read as "large-model cache defaults
 # to RWO/ebs", i.e. a wrong PASS-shaped failure.
-NEM_PATH = (
-    "recipes/llm-perf/nemotron_ultra_disagg/sglang_dynamo/50k2k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-50k2k-1p1d"
-)
+NEM_PATH = "recipes/llm-perf/nemotron_ultra_disagg/B200_k8s/Disagg/sglang_dynamo/50k2k/nemotron-ultra-nvfp4-b200-sglang-dynamo14-50k2k-1p1d"
 GLM_PATH = "recipes/llm-perf/Glm5/B200_k8s/Disagg/sglang_dynamo/1k_1k/glm5-fp8-b200-sglang-dynamo14-1k1k-hightpt-c2576-1p1d"  # glm5-fp8
 
 # THE QA-HIT CASE: migrated nemotron cell + MODEL_CACHE_PVC=model-cache → name == 'model-cache' (what the
@@ -631,7 +610,7 @@ PROF_FAST = {
     "MODEL_CACHE_RWX_CLASS": "fsx-lustre",
     "MODEL_CACHE_RWO_CLASS": "ebs",
 }
-KVBM_PATH = "recipes/llm-perf/kvbm/qwen3-0-6b-b200-vllm-agg-kvbm-pareto"  # ~0.6B model → SMALL
+SMALL_PATH = "recipes/example-small-model"
 
 # LARGE model (nemotron ~400GB), unmigrated → RWX on the FSx class, NOT ebs.
 d_def = install.derive_recipe_cache(_cell("nemotron-ultra-3", path=NEM_PATH), PROF_FAST)
@@ -646,15 +625,14 @@ check(
     str(d_def),
 )
 
-# SMALL model (KVBM qwen3-0.6B ≈1.2GB, unmigrated, colocated) → EBS RWO AUTOMATICALLY (no requires.cache edit,
+# SMALL model (Qwen3-0.6B ≈1.2GB, aggregated) → EBS RWO AUTOMATICALLY (no requires.cache edit,
 # no hash move). This is the size-aware resolution of the tiny-model FSx-over-provision flag.
-if (ROOT / KVBM_PATH / "recipe.yaml").exists():
-    d_small = install.derive_recipe_cache(_cell("qwen3-0-6b", path=KVBM_PATH), PROF_FAST)
-    check(
-        "SMALL-model cache DEFAULTS to EBS RWO (not FSx — no min-filesystem waste)",
-        d_small["access_mode"] == "ReadWriteOnce" and d_small["storage_class"] == "ebs",
-        str(d_small),
-    )
+d_small = install.derive_recipe_cache(_cell("qwen3-0-6b", path=SMALL_PATH), PROF_FAST)
+check(
+    "SMALL-model cache DEFAULTS to EBS RWO (not FSx — no min-filesystem waste)",
+    d_small["access_mode"] == "ReadWriteOnce" and d_small["storage_class"] == "ebs",
+    str(d_small),
+)
 
 # UNKNOWN model size is treated as SMALL → EBS RWO (a genuinely-large model should declare its size/mode).
 d_unk = install.derive_recipe_cache(_cell("mystery", path="recipes/x/y"), PROF_FAST)

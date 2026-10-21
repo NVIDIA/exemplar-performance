@@ -1,28 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
-if [ ${BASH_VERSION:0:1} -lt 4 ] || [ ${BASH_VERSION:0:1} -eq 4 ] && [ ${BASH_VERSION:2:1} -lt 2 ]; then
-    printf "Unsupported %s version: %s\n" "${BASH}" "${BASH_VERSION}" >&2
-    echo "Requires Bash 4.2 or greater." >&2
+if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 2))); then
+    printf 'Requires Bash 4.2 or greater (running: %s).\n' "${BASH_VERSION:-not Bash}" >&2
     exit 1
 fi
 
@@ -30,7 +11,15 @@ set -eu -o pipefail
 
 export WORKLOAD_TYPE=pretrain
 export MODEL_NAME=llama3.1
-export FW_VERSION=26.06.01
+
+GPU_TYPE=${GPU_TYPE:?GPU_TYPE is a required variable.}
+GPU_TYPE=${GPU_TYPE,,}
+
+if [[ $GPU_TYPE == "h100" ]]; then
+    export FW_VERSION=26.06.01
+else
+    export FW_VERSION=26.08.01
+fi
 
 export IMAGE=${RUN_CONF_IMAGE:-$LLMB_INSTALL/images/nvidia+nemo+$FW_VERSION.sqsh}
 
@@ -62,8 +51,6 @@ ENABLE_PCT_BINDING=${ENABLE_PCT_BINDING,,}
 PROFILE_START_STEP=${PROFILE_START_STEP:-45}
 PROFILE_STOP_STEP=${PROFILE_STOP_STEP:-50}
 
-GPU_TYPE=${GPU_TYPE:?GPU_TYPE is a required variable.}
-GPU_TYPE=${GPU_TYPE,,}
 JOB_TOTAL_GPUS=${JOB_TOTAL_GPUS:?JOB_TOTAL_GPUS is a required variable.}
 
 # Handle additional SLURM parameters from environment variable
@@ -87,7 +74,7 @@ fi
 
 CONFIG_OVERRIDES=""
 
-# Time limit: 30 min for 8B/70B, 2 hr for 405B (override with TIME_LIMIT env)
+# Time limit: 30 min for 70B, 2 hr for 405B (override with TIME_LIMIT env)
 if [[ -z ${TIME_LIMIT:-} ]]; then
     if [[ $MODEL_SIZE == 405b ]]; then
         TIME_LIMIT="02:00:00"
@@ -134,31 +121,33 @@ if [[ -n ${GBS-} ]]; then
     CONFIG_OVERRIDES+="-gb $GBS "
 fi
 
-if [[ $CLUSTER_TYPE != "slurm" ]]; then
-    echo "Only SLURM is supported for this workload"
-    exit 1
-fi
-
 # Set model family and recipe names based on model size
 MODEL_FAMILY_NAME="llama"
 if [[ $MODEL_SIZE == 405b ]]; then
     MODEL_RECIPE_NAME="llama31_405b"
 elif [[ $MODEL_SIZE == 70b ]]; then
     MODEL_RECIPE_NAME="llama3_70b"
-elif [[ $MODEL_SIZE == 8b ]]; then
-    MODEL_RECIPE_NAME="llama3_8b"
 else
     echo "Error: Unsupported MODEL_SIZE: $MODEL_SIZE"
     exit 1
 fi
 
+# H100 runs the older nemo:26.06.01 stack, where checkpointing has not been validated.
+if { [[ $ENABLE_CHECKPOINT == true ]] || [[ -n ${LOAD_CHECKPOINT_PATH-} ]]; } \
+    && [[ $GPU_TYPE != gb300 && $GPU_TYPE != gb200 && $GPU_TYPE != b300 && $GPU_TYPE != b200 ]]; then
+    echo "Error: Checkpoint save and load are supported only on GB300, GB200, B300 and B200 (GPU_TYPE=$GPU_TYPE)." >&2
+    exit 1
+fi
+
+# On GB200, the 70B FP8 fsdp_dtensor checkpoint save runs out of host memory below 128 GPUs.
+if { [[ $ENABLE_CHECKPOINT == true ]] || [[ -n ${LOAD_CHECKPOINT_PATH-} ]]; } \
+    && [[ $GPU_TYPE == gb200 && $MODEL_SIZE == 70b && $DTYPE == fp8 ]] && [[ $JOB_TOTAL_GPUS -lt 128 ]]; then
+    echo "Error: Checkpoint save/load for Llama 3.1 70B FP8 on GB200 requires at least 128 GPUs (the fsdp_dtensor save runs out of host memory at 64 GPUs)." >&2
+    exit 1
+fi
+
 # Checkpoint configuration
 if [[ $ENABLE_CHECKPOINT == true ]]; then
-    # Disallow checkpointing for 70B and 405B (known NCCL error during checkpoint save).
-    if [[ $MODEL_SIZE == 70b ]] || [[ $MODEL_SIZE == 405b ]]; then
-        echo "Error: Checkpointing is not supported for 70B or 405B due to a known NCCL error during checkpoint save." >&2
-        exit 1
-    fi
     # Set checkpoint directory if specified (defaults to experiment dir)
     if [[ -n ${CHECKPOINT_DIR-} ]]; then
         CONFIG_OVERRIDES+=" --save_dir=$CHECKPOINT_DIR "
@@ -168,14 +157,31 @@ if [[ $ENABLE_CHECKPOINT == true ]]; then
     CONFIG_OVERRIDES+=" --save_interval=$CHECKPOINT_INTERVAL "
 fi
 
-# Checkpoint load: only supported for 8B (same restriction as checkpoint save)
+# Checkpoint load: loads model weights from LOAD_CHECKPOINT_PATH and trains for one step
 if [[ -n ${LOAD_CHECKPOINT_PATH-} ]]; then
-    if [[ $MODEL_SIZE != 8b ]]; then
-        echo "Error: Checkpoint load is only supported for 8B. Current MODEL_SIZE=$MODEL_SIZE." >&2
+    if [[ $LOAD_CHECKPOINT_PATH != /* ]] || [[ ! -d $LOAD_CHECKPOINT_PATH ]]; then
+        echo "Error: LOAD_CHECKPOINT_PATH must be an absolute path to an existing directory: $LOAD_CHECKPOINT_PATH" >&2
         exit 1
     fi
     MAX_STEPS=1
-    CONFIG_OVERRIDES+=" --load_dir=$LOAD_CHECKPOINT_PATH "
+    # finetune resets the iteration and consumed samples to 0 so max_steps=1 trains one step.
+    # It loads model weights only, not optimizer, LR scheduler or RNG state.
+    CONFIG_OVERRIDES+=" --load_dir=$LOAD_CHECKPOINT_PATH checkpoint.finetune=true "
+    # The job only mounts its own experiment directory, so the checkpoint needs its own mount.
+    if [[ ",${CONTAINER_MOUNTS}," != *",${LOAD_CHECKPOINT_PATH},"* ]]; then
+        CONTAINER_MOUNTS+=",${LOAD_CHECKPOINT_PATH}"
+    fi
+fi
+
+# Megatron-FSDP recipes only accept the fsdp_dtensor checkpoint format for save/load.
+# Override with CKPT_FORMAT if the recipe set changes.
+if [[ $ENABLE_CHECKPOINT == true ]] || [[ -n ${LOAD_CHECKPOINT_PATH-} ]]; then
+    if [[ -z ${CKPT_FORMAT:-} ]] && [[ $MODEL_SIZE == 70b ]] && [[ $DTYPE == fp8 && $FP8_RECIPE == cs ]]; then
+        CKPT_FORMAT=fsdp_dtensor
+    fi
+    if [[ -n ${CKPT_FORMAT:-} ]]; then
+        CONFIG_OVERRIDES+=" checkpoint.ckpt_format=$CKPT_FORMAT "
+    fi
 fi
 
 # Pass MAX_STEPS to training configuration (must be after checkpoint section which may set MAX_STEPS=1)
@@ -191,10 +197,14 @@ if [[ $PROFILE_ENABLED == "true" ]] && [[ $PYTORCH_PROFILE_ENABLED == "true" ]];
 fi
 
 if [[ $PROFILE_ENABLED == "true" ]]; then
-    PROFILE_RANKS=${PROFILE_RANKS:-$(seq -s, 0 $((JOB_TOTAL_GPUS - 1)))}
+    PROFILE_RANKS=${PROFILE_RANKS:-$(seq -s, 0 $((JOB_TOTAL_GPUS - 1)) | sed 's/,$//')}
     CONFIG_OVERRIDES+=" --enable_nsys --profiling_start_step=$PROFILE_START_STEP --profiling_stop_step=$PROFILE_STOP_STEP --profiling_ranks $PROFILE_RANKS "
     CONFIG_OVERRIDES+=" --nsys_trace=cuda,nvtx "
-    CONFIG_OVERRIDES+=" --nsys_extra_args=--nvtx-domain-include=NCCL "
+    if [[ $GPU_TYPE == "h100" ]]; then
+        CONFIG_OVERRIDES+=" --nsys_extra_args=--nvtx-domain-include=NCCL "
+    else
+        CONFIG_OVERRIDES+=" --nsys_extra_args=--nvtx-domain-include=NCCL,--discard-environment=true "
+    fi
     if [[ $ENABLED_GPU_METRICS == true ]]; then
         CONFIG_OVERRIDES+=" --profiling_gpu_metrics "
     fi
@@ -242,10 +252,30 @@ else
     GPUS_PER_NODE=8
 fi
 
+# Build executor-specific arguments: nvcre flags for kubernetes, slurm flags otherwise.
+EXECUTOR_ARGS=()
+if [[ $CLUSTER_TYPE == "kubernetes" ]]; then
+    EXECUTOR_ARGS=(--nvcre_namespace "${NVCRE_NAMESPACE:?NVCRE_NAMESPACE required for kubernetes}")
+    [[ -n ${NVCRE_IMAGE_PULL_SECRET:-} ]] && EXECUTOR_ARGS+=(--nvcre_image_pull_secret "$NVCRE_IMAGE_PULL_SECRET")
+    [[ -n ${NVCRE_WORKDIR_PVC:-} ]] && EXECUTOR_ARGS+=(--nvcre_workdir_pvc "$NVCRE_WORKDIR_PVC")
+    [[ -n ${NVCRE_NODE_SELECTOR_JSON:-} ]] && EXECUTOR_ARGS+=(--nvcre_node_selector_json "$NVCRE_NODE_SELECTOR_JSON")
+    EXECUTOR_ARGS+=(--nvcre_timeout_per_job "${NVCRE_TIMEOUT_PER_JOB:-12h}")
+    [[ -n ${NVCRE_GANG_SCHEDULER_NAME:-} ]] && EXECUTOR_ARGS+=(--nvcre_gang_scheduler_name "$NVCRE_GANG_SCHEDULER_NAME")
+    # Run this checkout's Megatron-Bridge commit in the pods instead of the image's copy.
+    EXECUTOR_ARGS+=(--nvcre_use_mbridge_commit)
+    [[ -n ${NVCRE_HF_TOKEN_SECRET_NAME:-} ]] && EXECUTOR_ARGS+=(--nvcre_hf_token_secret_name "$NVCRE_HF_TOKEN_SECRET_NAME" --nvcre_hf_token_secret_key "${NVCRE_HF_TOKEN_SECRET_KEY:-token}")
+elif [[ $CLUSTER_TYPE == "slurm" ]]; then
+    read -ra SLURM_ARG_WORDS <<< "$SLURM_ARGS"
+    EXECUTOR_ARGS=(--account "$SBATCH_ACCOUNT" --partition "$SBATCH_PARTITION" --time_limit "$TIME_LIMIT" ${SLURM_ARG_WORDS[@]+"${SLURM_ARG_WORDS[@]}"})
+else
+    echo "Unsupported CLUSTER_TYPE=${CLUSTER_TYPE}. Aborting"
+    exit 1
+fi
+
 #run command
 pushd $LLMB_WORKLOAD/Megatron-Bridge
 
-python scripts/performance/setup_experiment.py \
+python3 scripts/performance/setup_experiment.py \
     --model_family_name $MODEL_FAMILY_NAME \
     --model_recipe_name $MODEL_RECIPE_NAME \
     --gpu $GPU_TYPE \
@@ -254,12 +284,9 @@ python scripts/performance/setup_experiment.py \
     --gpus_per_node $GPUS_PER_NODE \
     --offline \
     $CONFIG_OVERRIDES \
-    --account $SBATCH_ACCOUNT \
-    --partition $SBATCH_PARTITION \
     --log_dir $NEMORUN_HOME \
-    --time_limit $TIME_LIMIT \
     --packager none \
-    $SLURM_ARGS \
+    "${EXECUTOR_ARGS[@]}" \
     ${LLMB_MBRIDGE_EXTRA_ARGS:-}
 
 popd

@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Setup
+general:
+  workload: nemotron_3
+  display_name: nemotron_3_rl
+  workload_type: rl
+  framework: nemo-rl
+
+container:
+  images: 
+    - 'nvcr.io#nvidia/nemo-rl:v0.5.0.nemotron_3_super'
+
+downloads:
+  huggingface:
+    repos:
+      - repo_id: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16
+        repo_type: model
+        name: NVIDIA-Nemotron-3-Super-120B-A12B-BF16
+      - repo_id: nvidia/Nemotron-RL-Super-Training-Blends
+        repo_type: dataset
+        name: Nemotron-RL-Super-Training-Blends
+
+repositories:
+  nemo-rl:
+    url: "https://github.com/NVIDIA/NeMo-RL.git"
+    commit: "79bca546d2e306c554335ad29c5a8f440bd2f8ee"
+    submodules: true
+
+setup:
+  venv_req: true
+  dependencies:
+    git:
+      nemo-rl:
+        repo_key: nemo-rl
+        install_method:
+          type: clone
+  tasks:
+    - name: dataset_preparation
+      cmd: './dataset_preparation.sh'
+      job_type: sbatch
+      requires_gpus: false
+
+run:
+  launcher_type: 'configured_sbatch'
+  launch_script: 'launch.sh'
+
+  gpu_configs:
+    gb200:
+      model_configs:
+        - model_size: '120b'
+          dtypes:
+            bf16: [72]
+
+    b200:
+      model_configs:
+        - model_size: '120b'
+          dtypes:
+            bf16: [72]

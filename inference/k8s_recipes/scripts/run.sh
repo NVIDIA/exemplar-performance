@@ -1,24 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # shellcheck disable=SC1003,SC1090,SC2012,SC2015,SC2016,SC2034,SC2116,SC2207,SC2221,SC2222,SC2295,SC2317
 
@@ -382,6 +364,8 @@ trap _on_exit EXIT
 # stage/bench scripts a cell uses never diverge between the two entry points.
 STAGE_SCRIPT="$(python3 "$ROOT/scripts/lane.py" "$CELL" stage)" || exit 1
 BENCH_SCRIPT="$(python3 "$ROOT/scripts/lane.py" "$CELL" bench)" || exit 1
+# `deploy` (llm-perf) or `none` (agentic: no server to deploy, wait for or guard).
+SERVER_KIND="$(python3 "$ROOT/scripts/lane.py" "$CELL" server 2> /dev/null || echo deploy)"
 
 T0=$(date -u +%s)
 # Phase log at a stable, RUN_ID-named path so `llmb-k8s watch` can find it
@@ -576,6 +560,7 @@ if grep -qlE 'RDMA_UCX_(TLS|NET_DEVICES|IB_ADDR_TYPE|MAX_RNDV_RAILS)' "$CELL/ren
     export RDMA_UCX_NET_DEVICES="${RDMA_UCX_NET_DEVICES:-all}"
     export RDMA_UCX_IB_ADDR_TYPE="${RDMA_UCX_IB_ADDR_TYPE:-}"
     export RDMA_UCX_MAX_RNDV_RAILS="${RDMA_UCX_MAX_RNDV_RAILS:-4}"
+    export RDMA_UCX_IB_GPU_DIRECT_RDMA="${RDMA_UCX_IB_GPU_DIRECT_RDMA:-try}"
     # UCX_TLS moved out of the 27 recipes into the profile. The default is the exact InfiniBand list
     # those recipes baked, so a profile that predates RDMA_UCX_TLS deploys byte-identically to before.
     # It is IB-oriented on purpose (that is what it replaces) — a RoCE cluster MUST set RDMA_UCX_TLS in
@@ -671,7 +656,9 @@ fi
 
 # ──── 4. server ───────────────────────────────────────────────────────────────
 phase "4/8  server deploy"
-if [ "$SKIP_SERVER" = 1 ]; then
+if [ "$SERVER_KIND" = none ]; then
+    skip "server deploy (this lane runs no model server — the benchmark Job is the whole workload)"
+elif [ "$SKIP_SERVER" = 1 ]; then
     skip "server deploy (--skip-server)"
     # --skip-server reuses a server that is ALREADY up, so the override never reaches a container. Say so
     # loudly — a builder who thinks they ran a variant and actually re-measured the pinned config is exactly
@@ -904,28 +891,34 @@ EOF
 fi
 
 # ──── 5. wait-ready ───────────────────────────────────────────────────────────
-phase "5/8  wait-ready  (timeout: ${STARTUP_TIMEOUT_S}s; crash-loop fail-fast: restarts>=${CRASHLOOP_MAX_RESTARTS} or CrashLoopBackOff>=${CRASHLOOP_WINDOW_MIN}m)"
-STEP="wait-ready"
-# Wait for aggregate or disaggregated serving pods and fail fast on sustained crash loops.
-# On abort, the EXIT trap releases GPU resources and prints recovery guidance.
-bash "$ROOT/scripts/wait_server_ready.sh" "$CELL" "$PROFILE" \
-    --timeout "$STARTUP_TIMEOUT_S" \
-    --max-restarts "$CRASHLOOP_MAX_RESTARTS" \
-    --window-min "$CRASHLOOP_WINDOW_MIN"
-ok "server ready ($SERVER_DEPLOY)"
-# Weights are resident → free the model-load slot so a queued run can start loading while WE benchmark.
-if [ "${LOAD_GATE_HELD:-0}" = "1" ]; then
-    bash "$ROOT/scripts/model_load_gate.sh" release "$CELL" "$PROFILE" "$RUN_ID" \
-        --run-owner "${RUN_OWNER_NAME:-}" 2>&1 | sed 's/^/  /' || true
-    LOAD_GATE_HELD=0
-fi
+if [ "$SERVER_KIND" = none ]; then
+    phase "5/8  wait-ready"
+    skip "wait-ready (no model server in this lane)"
+else
+    phase "5/8  wait-ready  (timeout: ${STARTUP_TIMEOUT_S}s; crash-loop fail-fast: restarts>=${CRASHLOOP_MAX_RESTARTS} or CrashLoopBackOff>=${CRASHLOOP_WINDOW_MIN}m)"
+    STEP="wait-ready"
+    # Wait for aggregate or disaggregated serving pods and fail fast on sustained crash loops.
+    # On abort, the EXIT trap releases GPU resources and prints recovery guidance.
+    bash "$ROOT/scripts/wait_server_ready.sh" "$CELL" "$PROFILE" \
+        --timeout "$STARTUP_TIMEOUT_S" \
+        --max-restarts "$CRASHLOOP_MAX_RESTARTS" \
+        --window-min "$CRASHLOOP_WINDOW_MIN"
+    ok "server ready ($SERVER_DEPLOY)"
+    # Weights are resident → free the model-load slot so a queued run can start loading while WE benchmark.
+    if [ "${LOAD_GATE_HELD:-0}" = "1" ]; then
+        bash "$ROOT/scripts/model_load_gate.sh" release "$CELL" "$PROFILE" "$RUN_ID" \
+            --run-owner "${RUN_OWNER_NAME:-}" 2>&1 | sed 's/^/  /' || true
+        LOAD_GATE_HELD=0
+    fi
+fi # SERVER_KIND
 
 # ──── idle-guard (optional) ───────────────────────────────────────────────────
 # Background watchdog: kills the run's Job if the server generates no new tokens for IDLE_MIN minutes (a genuine
 # hang would otherwise block sweep.sh forever). --keep-server: run.sh owns teardown below, so the guard only
 # unblocks a hang; it does not scale the server itself. Cleaned up on exit.
 GUARD_PID=""
-if [ "$IDLE_GUARD" = 1 ] || [ "$SMOKE_ONLY" = 1 ]; then
+# The idle-guard watches a model server; server-less lanes have none.
+if [ "$SERVER_KIND" != none ] && { [ "$IDLE_GUARD" = 1 ] || [ "$SMOKE_ONLY" = 1 ]; }; then
     _GUARD_ARGS=(--keep-server)
     _GUARD_MSG=""
     [ "$IDLE_GUARD" = 1 ] && {
@@ -947,16 +940,23 @@ fi
 # ──── 6. benchmark (sweep / replay) ───────────────────────────────────────────
 phase "6/8  benchmark  (→ $BENCH_SCRIPT)"
 STEP="benchmark"
-[ "$BENCH_SCRIPT" = "sweep.sh" ] || die "unsupported benchmark script in external package: $BENCH_SCRIPT"
+case "$BENCH_SCRIPT" in
+    sweep.sh | tasktrace.sh) ;;
+    *) die "unsupported benchmark script in external package: $BENCH_SCRIPT" ;;
+esac
 SWEEP_EXTRA=()
-if [ "$SMOKE_ONLY" = 1 ]; then
-    SWEEP_EXTRA+=(--rungs "1")
-    echo "  smoke-only mode: concurrency=1, wall-capped at ${SMOKE_WALL}s (proves the path; not a publishable result)"
-elif [ -n "$RUNGS_OVERRIDE" ]; then
-    SWEEP_EXTRA+=(--rungs "$RUNGS_OVERRIDE")
-    echo "  rungs override: $RUNGS_OVERRIDE"
+if [ "$BENCH_SCRIPT" = "sweep.sh" ]; then
+    if [ "$SMOKE_ONLY" = 1 ]; then
+        SWEEP_EXTRA+=(--rungs "1")
+        echo "  smoke-only mode: concurrency=1, wall-capped at ${SMOKE_WALL}s (proves the path; not a publishable result)"
+    elif [ -n "$RUNGS_OVERRIDE" ]; then
+        SWEEP_EXTRA+=(--rungs "$RUNGS_OVERRIDE")
+        echo "  rungs override: $RUNGS_OVERRIDE"
+    fi
+elif [ "$SMOKE_ONLY" = 1 ] || [ -n "$RUNGS_OVERRIDE" ]; then
+    echo "  note: $BENCH_SCRIPT runs a single fixed replay — --smoke-only/--rungs have no effect on it"
 fi
-bash "$ROOT/scripts/sweep.sh" "$CELL" "$PROFILE" "$RUN_ID" "${SWEEP_EXTRA[@]+"${SWEEP_EXTRA[@]}"}"
+bash "$ROOT/scripts/$BENCH_SCRIPT" "$CELL" "$PROFILE" "$RUN_ID" "${SWEEP_EXTRA[@]+"${SWEEP_EXTRA[@]}"}"
 ok "benchmark complete ($BENCH_SCRIPT)"
 STEP="done" # past here, a non-zero exit (fetch/teardown) isn't a run failure — trap stays quiet
 

@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -515,34 +497,42 @@ check(
     out,
 )
 
-# Namespace singletons / deliberately-surviving objects must NOT be dragged into the cascade.
-for _kind in (
-    "ConfigMap",
-    "PersistentVolumeClaim",
-    "ServiceAccount",
-    "Role",
-    "RoleBinding",
-):
+# Server-stack ConfigMaps are run-scoped and must be collected with the serving stack.
+out = _merge(
+    "kind: ConfigMap\nmetadata:\n  name: foo-server-config\n",
+    RUN_OWNER_NAME="foo-runowner-r1",
+    RUN_OWNER_UID="uid-abc",
+)
+check(
+    "merge: a server-stack ConfigMap is owned and cannot leak after teardown",
+    "ownerReferences" in out and "uid: uid-abc" in out and "controller: true" in out,
+    out,
+)
+
+# Shared and durable namespace objects intentionally outlive one run.
+for _kind in ("PersistentVolumeClaim", "ServiceAccount", "Role", "RoleBinding"):
     out = _merge(
         f"kind: {_kind}\nmetadata:\n  name: foo-thing\n",
         RUN_OWNER_NAME="foo-runowner-r1",
         RUN_OWNER_UID="uid-abc",
     )
     check(
-        f"merge: {_kind} is left untouched (singleton / deliberately outlives the run)",
+        f"merge: {_kind} is left untouched (shared or deliberately durable)",
         "ownerReferences" not in out,
         out,
     )
 
-# The purpose: one apply stream, Deployment AND Service, both bound to the same owner.
+# One apply stream binds the Deployment, Service and server ConfigMap to the same owner.
 out = _merge(
-    DEP + "---\nkind: Service\nmetadata:\n  name: foo-server\n",
+    DEP
+    + "---\nkind: Service\nmetadata:\n  name: foo-server\n"
+    + "---\nkind: ConfigMap\nmetadata:\n  name: foo-server-config\n",
     RUN_OWNER_NAME="foo-runowner-r1",
     RUN_OWNER_UID="uid-abc",
 )
 check(
-    "merge: a server stream stamps BOTH the Deployment and its Service (one GC cascade frees both)",
-    out.count("uid: uid-abc") == 2,
+    "merge: a server stream stamps Deployment, Service and ConfigMap",
+    out.count("uid: uid-abc") == 3,
     out,
 )
 

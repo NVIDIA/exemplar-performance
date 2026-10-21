@@ -1,0 +1,32 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Privileged optional companion for replay_transcript.py --cgroup-cpu.
+ *
+ * Replace @CGROUP_PATH@ with the path written by --cgroup-ready-file, then:
+ *
+ *   sudo bpftrace /tmp/sched_runtime_by_cpu.bt
+ *
+ * Stop with Ctrl-C once the replay completes. Validate that the summed runtime
+ * is close to replay_report.json's cgroup_cpu.usage_sec before treating a
+ * kernel/bpftrace-version combination as production measurement.
+ */
+
+BEGIN
+{
+  printf("Recording scheduler runtime for @CGROUP_PATH@ by logical CPU. Ctrl-C to stop.\n");
+}
+
+tracepoint:sched:sched_stat_runtime
+/cgroup == cgroupid("@CGROUP_PATH@")/
+{
+  @runtime_ns_by_cpu[cpu] = sum(args.runtime);
+  @runtime_total_ns = sum(args.runtime);
+}
+
+END
+{
+  print(@runtime_ns_by_cpu);
+  print(@runtime_total_ns);
+}

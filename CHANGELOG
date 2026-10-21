@@ -1,20 +1,56 @@
-## [v26.08.01] - 2026-08-25
+## [v26.10.00] - 2026-10-21
 
 ### Added
 
-- Kubernetes LLM inference recipes for B200 (`inference/k8s_recipes/`):
-  - GLM-5 FP8
-  - Nemotron Ultra NVFP4
-  - Qwen3 0.6B KVBM
+- Nemotron 3.5 Lightning 30B pretrain recipe in BF16 and FP8 on GB300, GB200, B300, and B200, and in BF16 on H100.
+- DeepSeek V4 Flash 284B pretrain recipe in FP8 on GB300, GB200, B300, and B200.
+- NVFP4 support for Qwen3 235B pretrain on GB300, GB200, B300, and B200.
+- Nemotron 3 Ultra 550B pretrain recipe in FP8 on GB300 and GB200.
+- NVFP4 support for DeepSeek V3 pretrain on B200.
+- FP8 support for GPT-OSS 120B pretrain on GB300 and GB200.
+- FP8 support for Nemotron 3 Super 120B pretrain on GB200.
+- Kubernetes inference recipes for GB300: GLM-5 FP8 and Nemotron 3 Ultra NVFP4 (`inference/k8s_recipes/recipes/`).
+- Kubernetes (nvcre) execution target for Megatron-Bridge pretrain recipes, including GPT-OSS 120B, DeepSeek V4 Flash, Llama 3.1, Qwen3, Nemotron 3 Super, and Nemotron 3.5 Lightning, with `llmb-install` and `llmb-run` support. H100 recipes remain Slurm-only.
+- TaskTrace agentic recipes for SWE-bench Verified: replay of a shipped Nemotron 3 Ultra trajectory, and live capture + replay, on Grace CPUs. Slurm on GB300 and GB200 (`inference/slurm_recipes/agentic/`) and Kubernetes on GB300 (`inference/k8s_recipes/recipes/agentic/`).
+- GPU variants of the TaskTrace agentic recipes: a vLLM server for Nemotron 3 Ultra NVFP4 on the node's GPUs, with the trajectory's LLM calls replayed against it beside its tool calls. Slurm on GB300 and GB200 (`inference/slurm_recipes/agentic/`) and Kubernetes on GB300 (`inference/k8s_recipes/recipes/agentic/`).
+- TaskTrace trajectories can be recorded without their measured timings (`tasktrace-capture --trajectory-timings omit`; `RUN_CONF_CAPTURE_TRAJECTORY_TIMINGS=omit` in the Slurm capture recipes, `capture.trajectory_timings: omit` on Kubernetes). The shipped trajectories are recorded this way, and the GPU recipes replay such a trajectory in the agent loop's recorded order.
 
 ### Changed
 
-- Reorganized inference recipes into a unified `inference/` structure: Slurm serving recipes under `inference/slurm_recipes/` and Helm charts under `inference/tools/single_node_helm/`.
+- Updated recipes to NeMo 26.08.01 and the Megatron-Bridge `llmb-r0.6.0` branch on GB300, GB200, B300, and B200, including DeepSeek V3, GPT-OSS 120B, Llama 3.1, Llama 3 LoRA finetune, Nemotron 3, and Qwen3. H100 recipes remain on NeMo 26.06.01, except the new Nemotron 3.5 Lightning recipe, which uses NeMo 26.08.01.
+- Updated the pinned Nsight Systems version to `2026.5.1.161` for NeMo 26.08.01 recipes, except B300 DeepSeek V3, DeepSeek V4 Flash, and GPT-OSS, which remain on `2025.5.1.121`.
+- Relicensed the project from MIT to Apache-2.0, now uses DCO sign-off for contributions.
 
-### Fixed
+### Removed
 
-- DeepSeek V3 nsys profiling on B200 now uses the 26.06.01 container default instead of the pinned version.
+- Deprecated Llama 3.1 8B Megatron-Bridge pretrain, Nemotron 3 Nano 30B pretrain, Kimi-K2 pretrain, DeepSeek V3 TorchTitan, and Nemotron-H recipes.
+- The Qwen3 0.6B KVBM Kubernetes inference recipe and its dataset.
 
+### Known Issues
+
+- Megatron-Bridge workloads can hang in the first training step when a PyTorch Inductor compile worker deadlocks on Python < 3.12.8 or 3.13.0 ([pytorch/pytorch#200848](https://github.com/pytorch/pytorch/issues/200848)). Submit with `--env TORCHINDUCTOR_COMPILE_THREADS=1` to work around it. See the Known Issues section of the README for details.
+
+### End of Support
+
+- LLMB `v26.06.x` and earlier are no longer supported as of `v26.10.00`. These release lines will not receive further updates, fixes, or support.
+
+## [v26.08.01] - 2026-08-25
+ 
+ ### Added
+ 
+ - Kubernetes LLM inference recipes for B200 (`inference/k8s_recipes/`):
+   - GLM-5 FP8
+   - Nemotron Ultra NVFP4
+   - Qwen3 0.6B KVBM
+ 
+ ### Changed
+ 
+ - Reorganized inference recipes into a unified `inference/` structure: Slurm serving recipes under `inference/slurm_recipes/` and Helm charts under `inference/tools/single_node_helm/`.
+ 
+ ### Fixed
+ 
+ - DeepSeek V3 nsys profiling on B200 now uses the 26.06.01 container default instead of the pinned version.
+ 
 ## [v26.08.00] - 2026-08-18
 
 ### Added

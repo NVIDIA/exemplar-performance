@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
+# SPDX-License-Identifier: Apache-2.0
+
 # Extract specific (Metric, column) pairs from per-job aiperf CSV files.
 #
 # Usage:

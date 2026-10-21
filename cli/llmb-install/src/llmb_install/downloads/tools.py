@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 
 """Tool management for LLMB installation.
@@ -27,19 +9,18 @@ workload-specific tools like nsys with GPU-conditional versioning.
 """
 
 import os
+import re
 import shutil
 import subprocess
-import sys
 import tarfile
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, NamedTuple, Set, Tuple
 
 from llmb_install.constants import (
     CUDA_CUPTI_BASE_URL,
     CUDA_CUPTI_FILENAME_PATTERNS,
-    NSYS_BASE_URL,
-    NSYS_FILENAME_PATTERNS,
+    NSYS_SOURCES,
     SUPPORTED_TOOLS,
 )
 from llmb_install.utils.download import download_file
@@ -167,6 +148,48 @@ def _install_tool(
         raise ValueError(f"Unsupported tool: {tool_name}")
 
 
+class NsysDownloadSpec(NamedTuple):
+    """Resolved download location and TLS policy for an NSys version."""
+
+    url: str
+    cache_name: str
+    verify_tls: bool
+
+
+def _nsys_download_spec(version: str, arch: str) -> NsysDownloadSpec:
+    """Resolve the download source, URL and cache name for an NSys version.
+
+    Selects the first source in NSYS_SOURCES whose 'version_pattern' matches the
+    pinned version, and formats its URL/cache templates for `arch`.
+
+    Args:
+        version: NSys version string with build (e.g., '2025.5.1.121-3638078')
+        arch: Architecture ('x86_64' or 'aarch64')
+
+    Returns:
+        NsysDownloadSpec with the download URL, cache file name and whether to
+        verify TLS for the server.
+
+    Raises:
+        ValueError: If no source matches the version, or the selected source
+            has no filename pattern for `arch`.
+    """
+    for source in NSYS_SOURCES:
+        if re.search(source.version_pattern, version):
+            if arch not in source.filenames:
+                raise ValueError(
+                    f"Unsupported architecture for nsys {version} from source with pattern"
+                    f" '{source.version_pattern}': {arch}"
+                )
+            filename = source.filenames[arch].format(version=version)
+            return NsysDownloadSpec(
+                url=source.url_template.format(base_url=source.base_url, version=version, filename=filename),
+                cache_name=source.cache_name_template.format(version=version, filename=filename),
+                verify_tls=source.verify_tls,
+            )
+    raise ValueError(f"No NSys download source matches version '{version}'. Check NSYS_SOURCES in constants.py.")
+
+
 def _install_nsys(
     version: str,
     install_dir: str,
@@ -181,8 +204,6 @@ def _install_nsys(
         install_path: Base installation directory ($LLMB_INSTALL)
         arch: Architecture ('x86_64' or 'aarch64')
     """
-    if arch not in NSYS_FILENAME_PATTERNS:
-        raise ValueError(f"Unsupported architecture for nsys: {arch}")
 
     # Get cache directory for downloaded installers
     cache_dir = Path(install_path) / '.cache' / 'tools' / 'nsys'
@@ -190,9 +211,9 @@ def _install_nsys(
     logger.debug(f"Using cache directory: {cache_dir}")
 
     # Construct download URL and cached file path
-    filename = NSYS_FILENAME_PATTERNS[arch].format(version=version)
-    download_url = f"{NSYS_BASE_URL}/{filename}"
-    cached_installer = str(cache_dir / filename)
+    spec = _nsys_download_spec(version, arch)
+    download_url = spec.url
+    cached_installer = str(cache_dir / spec.cache_name)
 
     logger.debug(f"nsys installer URL: {download_url}")
 
@@ -203,11 +224,17 @@ def _install_nsys(
         print("  Using cached installer")
     else:
         print(f"  Downloading from: {download_url}")
+        if not spec.verify_tls:
+            # Console logging runs at INFO by default, so logger.warning() reaches the user;
+            # do not also print it or it appears twice.
+            logger.warning(
+                f"Downloading NSys {version} from {download_url} with TLS certificate verification disabled."
+            )
         logger.debug(f"Downloading to cache: {cached_installer}")
         # Download to temp file first, then move to final location on success
         temp_download = cached_installer + '.tmp'
         try:
-            download_file(download_url, temp_download)
+            download_file(download_url, temp_download, verify=spec.verify_tls)
             os.rename(temp_download, cached_installer)
             os.chmod(cached_installer, 0o755)
             logger.debug("Download complete")
@@ -250,15 +277,7 @@ def _install_nsys(
         logger.debug(f"Installation verified: {nsys_binary}")
 
     except subprocess.CalledProcessError as e:
-        # Print captured output to help user understand what went wrong
-        error_msg = f"nsys installer failed with exit code {e.returncode}"
-        if e.stdout:
-            print("Installer output:", file=sys.stderr)
-            print(e.stdout, file=sys.stderr)
-        if e.stderr:
-            print(f"\n{error_msg}. Error output:", file=sys.stderr)
-            print(e.stderr, file=sys.stderr)
-        logger.error(f"{error_msg}: {e.stderr if e.stderr else str(e)}")
+        e.add_note("nsys installer failed.")
         raise
     except Exception as e:
         logger.error(f"Unexpected error during nsys installation: {e}")

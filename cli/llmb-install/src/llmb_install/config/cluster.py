@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 
 """Cluster configuration management for LLMB installer."""
@@ -110,9 +92,12 @@ def create_cluster_config(
     venv_type: str,
     workload_venvs: Dict[str, str],
     node_architecture: str = 'x86_64',
-    install_method: str = 'local',
+    image_download_method: str = 'local',
     image_folder: Optional[str] = None,
+    nvl_domain: Optional[int] = None,
+    nvl_block_sizes: Optional[List[int]] = None,
     existing_cluster_config: Optional[Dict[str, Any]] = None,
+    kubernetes_info: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Create or update cluster_config.yaml file with all installation configuration.
 
@@ -120,15 +105,19 @@ def create_cluster_config(
         install_path: Base installation directory
         root_dir: Path to the LLMB repository root
         selected_workloads: List of selected workload keys
-        slurm_info: SLURM configuration dictionary
+        slurm_info: SLURM configuration dictionary (unused for Kubernetes installs)
         env_vars: Environment variables dictionary
         gpu_type: Selected GPU type
         venv_type: Type of virtual environment used ('venv' or 'conda')
         workload_venvs: Dictionary mapping workload keys to their venv paths
         node_architecture: Node architecture (e.g., 'x86_64', 'arm64')
-        install_method: Installation method ('local' or 'slurm')
+        image_download_method: Where image/dataset downloads run for Slurm installs:
+            'local' = on the current node, 'slurm' = submitted to a Slurm CPU partition.
+            Not applicable for Kubernetes installs (downloads are skipped entirely).
         image_folder: Optional path to container image folder
         existing_cluster_config: Optional existing config for incremental updates
+        kubernetes_info: Kubernetes settings. Recognized keys: 'namespace' (str),
+            'kubeconfig' (str), 'image_pull_secrets' (list).
     """
     # If updating, merge with existing workloads
     if existing_cluster_config:
@@ -171,7 +160,7 @@ def create_cluster_config(
         install_section = existing_cluster_config.get('install', {}).copy()
         # Update with new values (these should match existing for incremental, but update anyway)
         install_section['venv_type'] = venv_type
-        install_section['method'] = install_method
+        install_section['image_download_method'] = image_download_method
         install_section['node_architecture'] = node_architecture
         # Update image_folder if explicitly provided (allows override via -i flag)
         if image_folder is not None:
@@ -181,21 +170,60 @@ def create_cluster_config(
         # New installation - create fresh install section
         install_section = {
             'venv_type': venv_type,
-            'method': install_method,
+            'image_download_method': image_download_method,
             'node_architecture': node_architecture,  # Canonical location
         }
         if image_folder:
             install_section['image_folder'] = image_folder
+
+    if existing_cluster_config:
+        if nvl_domain is None:
+            nvl_domain = existing_cluster_config.get('nvl_domain')
+        if nvl_block_sizes is None:
+            nvl_block_sizes = existing_cluster_config.get('nvl_block_sizes')
 
     cluster_config = {
         'schema_version': 2,
         'llmb_repo': root_dir,
         'llmb_install': install_path,
         'gpu_type': gpu_type,
+        'execution_target': 'kubernetes' if kubernetes_info is not None else 'slurm',
+        **({'nvl_domain': nvl_domain} if nvl_domain is not None else {}),
+        **({'nvl_block_sizes': nvl_block_sizes} if nvl_block_sizes is not None else {}),
         **({'cluster_name': cluster_name} if cluster_name else {}),
         'install': install_section,
         'environment': env_vars,
-        'slurm': {
+    }
+
+    # Orchestration target: a Kubernetes install writes a `kubernetes` block and
+    # omits `slurm` entirely (llmb-run treats a missing `slurm` section as a
+    # SLURM-free cluster). Every other install keeps the existing `slurm` block.
+    if kubernetes_info is not None:
+        # Preserve an existing kubernetes block on incremental installs, then
+        # overlay any freshly provided settings.
+        k8s = dict((existing_cluster_config or {}).get('kubernetes', {}) or {})
+        # Unset values (None/empty) must not erase what an earlier install recorded.
+        k8s.update({k: v for k, v in (kubernetes_info or {}).items() if v not in (None, '', [])})
+        kube_block: Dict[str, Any] = {'namespace': k8s.get('namespace') or 'default'}
+        if k8s.get('kubeconfig'):
+            kube_block['kubeconfig'] = k8s['kubeconfig']
+        if k8s.get('image_pull_secrets'):
+            kube_block['image_pull_secrets'] = list(k8s['image_pull_secrets'])
+        # Launcher settings NVCreLauncher reads at run time.
+        if k8s.get('workdir_pvc'):
+            kube_block['workdir_pvc'] = k8s['workdir_pvc']
+        if k8s.get('node_selector_json'):
+            kube_block['node_selector_json'] = k8s['node_selector_json']
+        if k8s.get('timeout_per_job'):
+            kube_block['timeout_per_job'] = k8s['timeout_per_job']
+        if k8s.get('gang_scheduler_name'):
+            kube_block['gang_scheduler_name'] = k8s['gang_scheduler_name']
+        if k8s.get('hf_token_secret_name'):
+            kube_block['hf_token_secret_name'] = k8s['hf_token_secret_name']
+            kube_block['hf_token_secret_key'] = k8s.get('hf_token_secret_key', 'hf-token')
+        cluster_config['kubernetes'] = kube_block
+    else:
+        cluster_config['slurm'] = {
             'account': slurm_info['slurm']['account'],
             'gpu': {
                 'partition': slurm_info['slurm']['gpu_partition'],
@@ -205,9 +233,9 @@ def create_cluster_config(
                 'partition': slurm_info['slurm']['cpu_partition'],
                 'gres': slurm_info['slurm'].get('cpu_partition_gres'),
             },
-        },
-        'workloads': {'installed': all_workloads, 'config': merged_workload_venvs},
-    }
+        }
+
+    cluster_config['workloads'] = {'installed': all_workloads, 'config': merged_workload_venvs}
 
     # Write the cluster config file
     config_path = os.path.join(install_path, "cluster_config.yaml")

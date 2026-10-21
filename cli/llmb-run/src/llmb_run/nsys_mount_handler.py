@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 """NSys mount handler for llmb-run.
 
@@ -52,6 +34,12 @@ CONTAINER_NSYS_INSTALL_DIRS: Dict[str, str] = {
     'nvcr.io#nvidia/nemo:26.04.00': '/usr/local/cuda-13.1/NsightSystems-cli-2026.1.1/',
     'nvcr.io#nvidia/nemo:26.04.01': '/usr/local/cuda-13.1/NsightSystems-cli-2026.1.1/',
     'nvcr.io#nvidia/nemo:26.06.01': '/usr/local/cuda-13.2/NsightSystems-cli-2026.2.1',
+    'nvcr.io#nvidia/nemo:26.08.01': '/opt/nvidia/nsight-systems-cli/2026.5.1',
+    # Internal Rubin bring-up images (VR NVL72, Grace/sbsa). Temporary:
+    # remove these entries once Rubin-capable public containers ship.
+    'nvcr.io#nvidian/nemo:rubin-devel-nightly-2026-08-30': '/usr/local/cuda-13.5/NsightSystems-cli-2026.5.2',
+    'nvcr.io#nvidian/nemo:rubin-devel-nightly-2026-09-02': '/usr/local/cuda-13.5/NsightSystems-cli-2026.5.2',
+    'nvcr.io#nvidian/nemo:rubin-devel-nightly-2026-09-09': '/usr/local/cuda-13.5/NsightSystems-cli-2026.5.2',
 }
 
 # Container image to CUPTI library path lookup table
@@ -90,6 +78,18 @@ CONTAINER_CUPTI_PATHS: Dict[Tuple[str, str], str] = {
         'nvcr.io#nvidia/nemo:26.02.01',
         'aarch64',
     ): '/usr/local/cuda-13.0/NsightSystems-cli-2026.1.0/target-linux-sbsa-armv8/libcupti-sbsa.so.13.0',
+    (
+        'nvcr.io#nvidian/nemo:rubin-devel-nightly-2026-08-30',
+        'aarch64',
+    ): '/usr/local/cuda-13.5/NsightSystems-cli-2026.5.2/target-linux-sbsa-armv8/libcupti-sbsa.so.13.0',
+    (
+        'nvcr.io#nvidian/nemo:rubin-devel-nightly-2026-09-02',
+        'aarch64',
+    ): '/usr/local/cuda-13.5/NsightSystems-cli-2026.5.2/target-linux-sbsa-armv8/libcupti-sbsa.so.13.5',
+    (
+        'nvcr.io#nvidian/nemo:rubin-devel-nightly-2026-09-09',
+        'aarch64',
+    ): '/usr/local/cuda-13.5/NsightSystems-cli-2026.5.2/target-linux-sbsa-armv8/libcupti-sbsa.so.13.0',
     # Add entries for other containers as needed
 }
 
@@ -432,11 +432,16 @@ def _get_container_nsys_install_dir(container_image: str) -> Optional[str]:
     if container_image in CONTAINER_NSYS_INSTALL_DIRS:
         return CONTAINER_NSYS_INSTALL_DIRS[container_image]
 
-    # Try to extract just the image part without potential tags/variants
-    # Handle cases like 'nvcr.io#nvidia/nemo:25.07.01-something'
+    # Tag variants frequently move nsys between CUDA directories, so an inherited path is
+    # a guess. It must not be silent: a path the image lacks makes the bind mount a no-op,
+    # the container's own nsys keeps running, and the caller still logs a successful mount.
     for known_image, install_dir in CONTAINER_NSYS_INSTALL_DIRS.items():
         if known_image in container_image:
-            logger.debug(f"Partial match: '{container_image}' matches '{known_image}'")
+            logger.warning(
+                f"No exact nsys entry for '{container_image}'; inheriting the "
+                f"'{known_image}' entry ({install_dir}). Verify this path exists in the "
+                f"image and add an explicit entry."
+            )
             return install_dir
 
     # No match found

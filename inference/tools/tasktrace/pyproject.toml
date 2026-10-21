@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "tasktrace"
+version = "0.1.0"
+description = "Replay recorded tool-side workloads and measure their CPU and memory demand."
+license = {text = "Apache-2.0"}
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7", "PyYAML>=6"]
+
+[tool.pytest.ini_options]
+testpaths = ["offline_replayer/tests"]
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "Cargo.toml"
+python-packages = ["offline_replayer"]

@@ -1,28 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
-if [ ${BASH_VERSION:0:1} -lt 4 ] || [ ${BASH_VERSION:0:1} -eq 4 ] && [ ${BASH_VERSION:2:1} -lt 2 ]; then
-    printf "Unsupported %s version: %s\n" "${BASH}" "${BASH_VERSION}" >&2
-    echo "Requires Bash 4.2 or greater." >&2
+if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 2))); then
+    printf 'Requires Bash 4.2 or greater (running: %s).\n' "${BASH_VERSION:-not Bash}" >&2
     exit 1
 fi
 
@@ -31,14 +12,26 @@ set -eu -o pipefail
 # Configuration
 readonly MIN_PYTHON_VERSION="3.12"
 readonly RECOMMENDED_PYTHON_VERSION="3.12"
-readonly PINNED_UV_VERSION="0.9.28"
+# Optional uv version cap. Leave empty to install the latest uv and accept any installed version.
+# Set (e.g. "0.9.28") when a recipe dependency breaks with newer uv releases.
+readonly PINNED_UV_VERSION=""
+readonly UV_VERSION_LABEL="${PINNED_UV_VERSION:-latest}"
+
+# llmb-install applies the managed-python default to its own subprocesses.
+case "${LLMB_DISABLE_MANAGED_PYTHON:-}" in
+    1 | [Tt][Rr][Uu][Ee] | [Yy][Ee][Ss])
+        echo "WARNING: LLMB_DISABLE_MANAGED_PYTHON is deprecated; set UV_NO_MANAGED_PYTHON=1 instead."
+        unset UV_MANAGED_PYTHON UV_PYTHON_PREFERENCE LLMB_DISABLE_MANAGED_PYTHON
+        export UV_NO_MANAGED_PYTHON=1
+        ;;
+esac
 
 # Welcome banner
 echo "════════════════════════════════════════════════════════════════════"
 echo "🚀 Exemplar Performance - Quick Setup"
 echo "════════════════════════════════════════════════════════════════════"
 echo "This script will:"
-echo "  • Install uv $PINNED_UV_VERSION if not already present"
+echo "  • Install uv ($UV_VERSION_LABEL) if not already present"
 echo "  • Set up a Python $RECOMMENDED_PYTHON_VERSION virtual environment (if needed)"
 echo "  • Install essential tools (llmb-run, llmb-install)"
 echo "  • Launch the main installer for benchmark configurations"
@@ -80,6 +73,15 @@ ensure_local_uv_path() {
 # Get uv version string (e.g., 0.9.28)
 get_uv_version() {
     uv --version 2> /dev/null | awk '{print $2}'
+}
+
+# Installer URL for the pinned uv version, or the latest release when unpinned.
+uv_install_url() {
+    if [[ -n $PINNED_UV_VERSION ]]; then
+        echo "https://astral.sh/uv/${PINNED_UV_VERSION}/install.sh"
+    else
+        echo "https://astral.sh/uv/install.sh"
+    fi
 }
 
 # Returns success (0) if version A is greater than version B.
@@ -213,15 +215,15 @@ show_uv_install_error() {
     echo "❌ uv installation failed and uv is required."
     echo ""
     echo "   Install uv manually:"
-    echo "     curl -LsSf https://astral.sh/uv/${PINNED_UV_VERSION}/install.sh | sh"
+    echo "     curl -LsSf $(uv_install_url) | sh"
     echo ""
     echo "   Re-run this script after installing uv."
     exit 1
 }
 
-# Install pinned uv version required by recipes in this release
+# Install uv (pinned version when PINNED_UV_VERSION is set, otherwise latest)
 install_uv() {
-    if ! curl -LsSf "https://astral.sh/uv/${PINNED_UV_VERSION}/install.sh" | sh; then
+    if ! curl -LsSf "$(uv_install_url)" | sh; then
         echo "❌ uv installation failed"
         return 1
     fi
@@ -229,24 +231,24 @@ install_uv() {
     ensure_local_uv_path
     hash -d uv 2> /dev/null || true
 
-    # Check if uv is now available and matches the pinned version
+    # Check if uv is now available and matches the pinned version (if any)
     if command_exists uv; then
         local uv_version
         uv_version=$(get_uv_version || true)
-        if [[ $uv_version == "$PINNED_UV_VERSION" ]]; then
-            echo "✅ uv $PINNED_UV_VERSION installed"
+        if [[ -n $uv_version && (-z $PINNED_UV_VERSION || $uv_version == "$PINNED_UV_VERSION") ]]; then
+            echo "✅ uv $uv_version installed"
             UV_INSTALLED_NOW=true
             warn_if_multiple_uv_installs
             return 0
         fi
     fi
 
-    echo "❌ uv installation failed: expected $PINNED_UV_VERSION, found $(get_uv_version || echo unknown)"
+    echo "❌ uv installation failed: expected $UV_VERSION_LABEL, found $(get_uv_version || echo unknown)"
     return 1
 }
 
 # Ensure uv is compatible for this release.
-# We only correct versions newer than the known-compatible target.
+# When pinned, we only correct versions newer than the known-compatible target.
 ensure_compatible_uv() {
     ensure_local_uv_path
 
@@ -257,12 +259,12 @@ ensure_compatible_uv() {
     local uv_version
     uv_version=$(get_uv_version || true)
     if [[ -z $uv_version ]]; then
-        echo "⚠️  Unable to determine uv version. Installing uv $PINNED_UV_VERSION..."
+        echo "⚠️  Unable to determine uv version. Installing uv ($UV_VERSION_LABEL)..."
         install_uv
         return $?
     fi
 
-    if version_gt "$uv_version" "$PINNED_UV_VERSION"; then
+    if [[ -n $PINNED_UV_VERSION ]] && version_gt "$uv_version" "$PINNED_UV_VERSION"; then
         echo "⚠️  Detected uv $uv_version, but this release supports up to uv $PINNED_UV_VERSION."
         echo "   Installing uv $PINNED_UV_VERSION for compatibility..."
         install_uv
@@ -284,7 +286,7 @@ setup_environment() {
             exit 1
         fi
     else
-        echo "Installing uv $PINNED_UV_VERSION (required)..."
+        echo "Installing uv ($UV_VERSION_LABEL, required)..."
         if ! install_uv; then
             show_uv_install_error
         fi
@@ -320,7 +322,11 @@ create_venv_with_uv() {
     VENV_DIR="$(realpath "$SCRIPT_DIR/../llmb_venv")"
 
     echo "Creating virtual environment with uv..."
-    if ! uv venv --clear -p "$RECOMMENDED_PYTHON_VERSION" "$VENV_DIR"; then
+    local -a python_pref=()
+    if [[ -z ${UV_MANAGED_PYTHON:-}${UV_NO_MANAGED_PYTHON:-}${UV_PYTHON_PREFERENCE:-} ]]; then
+        python_pref=(--managed-python)
+    fi
+    if ! uv venv --clear "${python_pref[@]}" -p "$RECOMMENDED_PYTHON_VERSION" "$VENV_DIR"; then
         echo "❌ Failed to create venv with uv"
         exit 1
     fi
@@ -396,7 +402,7 @@ print_postinstall_summary() {
         echo ""
     elif [[ $UV_INSTALLED_NOW == true ]]; then
         echo "⚡ uv Installed"
-        echo "   uv $PINNED_UV_VERSION is installed and ready."
+        echo "   uv $(get_uv_version || echo "$UV_VERSION_LABEL") is installed and ready."
         echo ""
     fi
 
@@ -425,16 +431,30 @@ install_package() {
 
     pushd "$package_dir" > /dev/null
     echo "  • Installing $package_name..."
-    uv pip install --quiet .
+    if ! uv pip install --quiet .; then
+        echo ""
+        echo "❌ Failed to install $package_name."
+        echo "   If the error above is about finding a version of a dependency, check that"
+        echo "   you can reach the package index it comes from. See ${package_dir%/}/README.md"
+        echo "   for what that index requires."
+        echo "   To install everything else without $package_name, remove or rename"
+        echo "   ${package_dir%/} so this loop skips it, then rerun ./install.sh."
+        exit 1
+    fi
     popd > /dev/null
 }
 
 echo ""
 echo "📦 Installing core tools..."
 
-# Install runner and installer dependencies
-install_package "llmb-run" "cli/llmb-run"
-install_package "llmb-install" "cli/llmb-install"
+# Some checkouts carry packages under cli/ that a release does not, so install
+# whatever this one contains rather than naming each package here. Each is
+# installed from its own directory, which is also where uv picks up any package
+# index that package declares for itself.
+for package_dir in cli/*/; do
+    [[ -f "${package_dir}pyproject.toml" ]] || continue
+    install_package "$(basename "$package_dir")" "$package_dir"
+done
 
 echo "✅ Core tools installed successfully"
 

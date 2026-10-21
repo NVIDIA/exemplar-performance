@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 config:
   scale: 512
   repeats: 1
@@ -26,77 +8,67 @@ workloads:
   gb300:
   - pretrain_deepseek-v3_671b:
       dtypes: [bf16, fp8, nvfp4]
-  - pretrain_gpt_oss_120b:
-      dtypes: [bf16]
-  - pretrain_kimi-k2_1t:
+  - pretrain_deepseek-v4_284b:
       dtypes: [fp8]
+  - pretrain_gpt_oss_120b:
+      dtypes: [bf16, fp8]
   - pretrain_llama3.1_405b:
       dtypes: [fp8, nvfp4]
   - pretrain_llama3.1_70b:
       dtypes: [fp8, nvfp4]
-  - pretrain_nemotron-h_56b:
-      dtypes: [fp8]
   - pretrain_nemotron_3_120b:
       dtypes: [bf16, fp8]
   - pretrain_qwen3_235b:
-      dtypes: [bf16, fp8]
+      dtypes: [bf16, fp8, nvfp4]
   gb200:
   - pretrain_deepseek-v3_671b:
       dtypes: [bf16, fp8, nvfp4]
-  - pretrain_gpt_oss_120b:
-      dtypes: [bf16]
-  - pretrain_kimi-k2_1t:
+  - pretrain_deepseek-v4_284b:
       dtypes: [fp8]
+  - pretrain_gpt_oss_120b:
+      dtypes: [bf16, fp8]
   - pretrain_llama3.1_405b:
       dtypes: [fp8, nvfp4]
   - pretrain_llama3.1_70b:
       dtypes: [fp8, nvfp4]
-  - pretrain_nemotron-h_56b:
-      dtypes: [fp8]
   - pretrain_nemotron_3_120b:
-      dtypes: [bf16]
-  - pretrain_qwen3_235b:
       dtypes: [bf16, fp8]
+  - pretrain_qwen3_235b:
+      dtypes: [bf16, fp8, nvfp4]
   b300:
   - pretrain_deepseek-v3_671b:
       dtypes: [bf16, fp8, nvfp4]
+  - pretrain_deepseek-v4_284b:
+      dtypes: [fp8]
   - pretrain_gpt_oss_120b:
       dtypes: [bf16]
-  - pretrain_kimi-k2_1t:
-      dtypes: [fp8]
   - pretrain_llama3.1_405b:
       dtypes: [fp8, nvfp4]
   - pretrain_llama3.1_70b:
       dtypes: [fp8, nvfp4]
-  - pretrain_nemotron-h_56b:
-      dtypes: [fp8]
   - pretrain_nemotron_3_120b:
       dtypes: [bf16]
   - pretrain_qwen3_235b:
-      dtypes: [bf16, fp8]
+      dtypes: [bf16, fp8, nvfp4]
   b200:
   - pretrain_deepseek-v3_671b:
-      dtypes: [bf16, fp8]
+      dtypes: [bf16, fp8, nvfp4]
+  - pretrain_deepseek-v4_284b:
+      dtypes: [fp8]
   - pretrain_gpt_oss_120b:
       dtypes: [bf16]
-  - pretrain_kimi-k2_1t:
-      dtypes: [fp8]
   - pretrain_llama3.1_405b:
       dtypes: [fp8, nvfp4]
   - pretrain_llama3.1_70b:
       dtypes: [fp8, nvfp4]
-  - pretrain_nemotron-h_56b:
-      dtypes: [fp8]
   - pretrain_nemotron_3_120b:
       dtypes: [bf16]
   - pretrain_qwen3_235b:
-      dtypes: [bf16, fp8]
+      dtypes: [bf16, fp8, nvfp4]
   h100:
   - pretrain_gpt_oss_120b:
       dtypes: [bf16]
   - pretrain_llama3.1_70b:
       dtypes: [bf16, fp8]
-  - pretrain_nemotron-h_56b:
-      dtypes: [fp8]
   - pretrain_qwen3_235b:
       dtypes: [bf16]

@@ -1,24 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # shellcheck disable=SC1003,SC1090,SC2012,SC2015,SC2016,SC2034,SC2116,SC2207,SC2221,SC2222,SC2295,SC2317
 
@@ -99,10 +81,11 @@ export RUN_ID="dryrun-$(date -u +%Y%m%d-%H%M%S)"
 : "${BENCH_NODE_SELECTOR:=}" "${BENCH_CPU_REQUEST:=16}"
 : "${NO_INTERNET_DNS_IP:=}" "${NO_INTERNET_KUBE_API_IP:=}"                                    # live no-internet policy
 : "${RDMA_UCX_NET_DEVICES:=all}" "${RDMA_UCX_IB_ADDR_TYPE:=}" "${RDMA_UCX_MAX_RNDV_RAILS:=4}" # disagg fabric
+: "${RDMA_UCX_IB_GPU_DIRECT_RDMA:=try}"
 # Default to InfiniBand transports; RoCE profiles must override this value.
 : "${RDMA_UCX_TLS:=rc,rc_x,dc,dc_x,cuda_copy}"
 export OWNER CACHE_BUST DCGM_EXPORTER_URL BENCH_NODE_SELECTOR BENCH_CPU_REQUEST NO_INTERNET_DNS_IP NO_INTERNET_KUBE_API_IP
-export RDMA_UCX_NET_DEVICES RDMA_UCX_IB_ADDR_TYPE RDMA_UCX_MAX_RNDV_RAILS RDMA_UCX_TLS
+export RDMA_UCX_NET_DEVICES RDMA_UCX_IB_ADDR_TYPE RDMA_UCX_MAX_RNDV_RAILS RDMA_UCX_TLS RDMA_UCX_IB_GPU_DIRECT_RDMA
 
 NAME="$(sed -n 's/^  name: \(.*\)/\1/p' "$CELL/recipe.yaml" | head -1)"
 [ -n "$NAME" ] || {
@@ -157,8 +140,13 @@ if [ -f "$CELL/rendered/bench-job.yaml" ]; then
     envsubst "$WL_BENCH" < "$CELL/rendered/bench-job.yaml" > "$TMPD/bench-job.yaml"
 fi
 
-# Additional driver-job.yaml paths (if any overlay driver exists). Whitelist covers every bracketed var
-# in the rendered driver — all cluster vars (no embedded-runner placeholders), so any leftover is a real gap.
+# Other rendered manifests (e.g. tasktrace-job.yaml): any leftover ${UPPER} token is a real gap; in-pod shell refs
+# use $lower forms, which this check ignores.
+for f in "$CELL"/rendered/*.yaml; do
+    [ -f "$f" ] || continue
+    case "$(basename "$f")" in server.yaml | bench-job.yaml) continue ;; esac
+    render_auto "$f" "$TMPD/$(basename "$f")"
+done
 
 # ──── kubeconform validation ──────────────────────────────────────────────────
 if command -v kubeconform > /dev/null 2>&1; then
@@ -248,5 +236,9 @@ if [ "$ERRORS" -gt 0 ]; then
     exit 1
 fi
 echo "DRY RUN OK"
-echo "  deploy:  scripts/deploy.sh $CELL $PROFILE"
-echo "  sweep:   scripts/sweep.sh  $CELL $PROFILE [run-id]"
+if [ "$(python3 "$ROOT/scripts/lane.py" "$CELL" server 2> /dev/null || echo deploy)" = "none" ]; then
+    echo "  run:     scripts/llmb-k8s run $CELL $PROFILE   (no model server in this lane: the benchmark Job is the whole workload)"
+else
+    echo "  deploy:  scripts/deploy.sh $CELL $PROFILE"
+    echo "  sweep:   scripts/sweep.sh  $CELL $PROFILE [run-id]"
+fi

@@ -1,20 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 """Internal pretraining log parsers for llmb-run."""
 
@@ -38,6 +23,10 @@ _NEMO_TFLOPS_RE = re.compile(rf"TFLOPS_per_GPU:\s*{_NUMBER}")
 _MBRIDGE_TIME_RE = re.compile(rf"elapsed time per iteration \(ms\):\s*{_NUMBER}")
 _MBRIDGE_TFLOPS_RE = re.compile(rf"{_NUMBER}\s*(?:MODEL_TFLOP/s/GPU|TFLOP/s/GPU)")
 _MBRIDGE_NAN_GRAD_NORM_RE = re.compile(r"\bgrad[ _]norm\s*:\s*nan\b", re.IGNORECASE)
+# nvcre/Kubernetes pod logs emit a combined step-time+TFLOPS line and a
+# separate iteration-count line in a different format than Slurm Megatron-Bridge.
+_NVCRE_STEP_RE = re.compile(rf"Step Time\s*:\s*{_NUMBER}s\s+GPU utilization:\s*{_NUMBER}MODEL_TFLOP/s/GPU")
+_NVCRE_ITER_RE = re.compile(r"\(after\s+(\d+)\s+iterations?\)")
 
 
 class PretrainLogParseStatus(str, Enum):
@@ -207,6 +196,23 @@ def _parse_nemo_log(
     )
 
 
+def _is_nvcre_pod_log(log_path: pathlib.Path) -> bool:
+    """Detect genuine nvcre/Kubernetes pod logs vs. Slurm Megatron-Bridge logs.
+
+    Both emit the same "Step Time : Xs GPU utilization: YMODEL_TFLOP/s/GPU" line,
+    but Slurm logs also emit a standard "iteration X/Y ... elapsed time per
+    iteration (ms): Z" line alongside it, while nvcre pod logs never do. Treat
+    a log as nvcre only when no such standard iteration/timing line appears
+    anywhere in the file, so the Step Time line isn't double-counted against the
+    real iteration marker.
+    """
+    with log_path.open("r", errors="replace") as f:
+        for line in f:
+            if _iteration_marker_from_line(line) is not None and _MBRIDGE_TIME_RE.search(line):
+                return False
+    return True
+
+
 def _parse_megatron_bridge_log(
     log_path: pathlib.Path, framework: str, min_iteration: int, max_iteration: int
 ) -> PretrainLogParseResult:
@@ -218,9 +224,27 @@ def _parse_megatron_bridge_log(
     tflops_samples: list[float] = []
     invalid_grad_norm_iteration: int | None = None
     final_iteration_seen = False
+    is_nvcre = _is_nvcre_pod_log(log_path)
+    # Counter for nvcre pod-log format: each "Step Time" line is one iteration.
+    # Memory reporting "(after N iterations)" only appears for a few early steps
+    # so we cannot rely on it for pairing; use a sequential counter instead.
+    _nvcre_iteration: int = 0
 
     with log_path.open("r", errors="replace") as f:
         for line in f:
+            # nvcre format: "Step Time : 8.39s GPU utilization: 718.8MODEL_TFLOP/s/GPU"
+            nvcre_step = _NVCRE_STEP_RE.search(line) if is_nvcre else None
+            if nvcre_step:
+                _nvcre_iteration += 1
+                time_s = float(nvcre_step.group(1))
+                tflops_val = float(nvcre_step.group(2))
+                timing_samples.append((_nvcre_iteration, time_s))
+                tflops_samples.append(tflops_val)
+                # nvcre logs have no "iteration X/X" completion marker;
+                # any step data is sufficient to treat training as complete.
+                final_iteration_seen = True
+                continue
+
             tflops_match = _MBRIDGE_TFLOPS_RE.search(line)
             if tflops_match:
                 tflops_samples.append(float(tflops_match.group(1)))

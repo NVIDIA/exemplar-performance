@@ -1,0 +1,61 @@
+{
+  "schema_version": "ATIF-v1.5",
+  "session_id": "swebenchpro-malformed-call-fixture",
+  "agent": {
+    "name": "codex",
+    "version": "0.133.0",
+    "model_name": "fixture",
+    "extra": {
+      "originator": "codex_exec",
+      "cwd": "/app"
+    }
+  },
+  "fixture_provenance": {
+    "dataset": "SWE-bench Pro",
+    "curation": "Preserves the malformed exec_command argument shape observed in three source trajectories."
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-05-24T19:56:19.772Z",
+      "tool_calls": [
+        {
+          "tool_call_id": "malformed-command",
+          "function_name": "exec_command",
+          "arguments": {
+            "printf should-not-run > malformed.txt": "cmd"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "malformed-command",
+            "content": "failed to parse function arguments: missing field `cmd` at line 1 column 64"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-05-24T19:56:20.772Z",
+      "tool_calls": [
+        {
+          "tool_call_id": "valid-command",
+          "function_name": "exec_command",
+          "arguments": {
+            "cmd": "printf continued > valid.txt"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "valid-command",
+            "content": "Process exited with code 0"
+          }
+        ]
+      }
+    }
+  ]
+}

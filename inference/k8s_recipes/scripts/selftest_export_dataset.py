@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -59,12 +41,12 @@ cells = ed.on_pipeline_cells(ROOT)
 # SYNTHESIZED PUBLISHED CELL (fallback). The checks below assert that a PUBLISHED cell exports correctly —
 # image_digest, served identity, ep from --enable-expert-parallel, kv_cache_dtype, a resolved
 # launch_command. Those are real guarantees. But the committed corpus can legitimately have ZERO published
-# cells for a stretch (right now every cell is `wip` while the KVBM numbers are re-baselined), which
-# would leave only two bad options: delete the checks, or weaken them into vacuous truth.
-# Instead, give them a published cell: copy the LIVE cell dir (for its REAL recipe.yaml + rendered/, which
-# is where launch_command and the served identity are derived from) and add the committed record.json +
-# runs/index.jsonl fixture to make it published. The assertions run UNCHANGED, and because the fixture is
-# paired with the live recipe it cannot drift into fiction. A real published cell always takes precedence.
+# cells for a stretch, which would leave only two bad options: delete the checks, or weaken them into
+# vacuous truth. Instead, give them a published cell: copy the LIVE cell dir (for its REAL recipe.yaml
+# + rendered/, which is where launch_command and the served identity are derived from) and add the committed
+# record.json + runs/index.jsonl fixture to make it published. The assertions run UNCHANGED, and because
+# the fixture is paired with the live recipe it cannot drift into fiction. A real published cell always
+# takes precedence.
 _FIXTURE = ROOT / "scripts" / "fixtures" / "published_cell"
 _SYNTH_SRC = ROOT / "scripts/fixtures/sample_cells/nemotron-ultra-3-gb300-vllm-agg-pareto-c16"
 
@@ -116,7 +98,7 @@ all_rows = [r for c in cells for r in ed._cell_rows(c)]
 # cells. Whether such a cell happens to be PUBLISHED right now is unrelated to whether the extraction
 # works, so pin the assertions to a corpus that always contains one: the real published cells PLUS the
 # synthesized nemotron fixture. Without this the checks silently evaporate whenever the published set
-# happens to hold only (say) a KVBM cell — which is exactly how they broke.
+# contains no such cell.
 _feat_tmp = _build_synth_cell() if _synth_tmp is None else None
 _feat_cells = list(cells) + (ed.on_pipeline_cells(_feat_tmp) if _feat_tmp else [])
 feat_rows = _rows(ed._render_csv([r for c in _feat_cells for r in ed._cell_rows(c)], ed.SUPERSET))
@@ -206,8 +188,7 @@ check(
 )
 
 # ── per-lane metric population + derived columns ───────────────────────────────────────────────────────
-# WIP-TOLERANT: there may be NO on-pipeline llm-perf cell right now — both KVBM cells were withdrawn to
-# `wip` under the whole-node policy (their numbers were measured while sharing a node), and GLM-5 is parked.
+# WIP-TOLERANT: there may be NO on-pipeline llm-perf cell right now
 # So assert the lane SCHEMA unconditionally (columns can't silently disappear) plus the CONTRACT for every
 # llm-perf row that does exist. These re-arm automatically on the next publish.
 llm = [r for r in rows if r["scenario"] == "llm-perf" and r["goal"] == "pareto"]

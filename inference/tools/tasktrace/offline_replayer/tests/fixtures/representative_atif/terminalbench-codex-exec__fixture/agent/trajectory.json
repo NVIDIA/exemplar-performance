@@ -1,0 +1,61 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "session_id": "terminalbench-codex-exec-fixture",
+  "agent": {
+    "name": "codex",
+    "version": "fixture",
+    "model_name": "fixture",
+    "extra": {
+      "originator": "codex_exec",
+      "cwd": "/app"
+    }
+  },
+  "fixture_provenance": {
+    "dataset": "Terminal-Bench 2.0",
+    "curation": "Hermetic representative derived from a captured Codex Code Mode ATIF trajectory. Commands and patch content were minimized; the abstract exec envelope, pragma, literal arguments, const patch binding, ordering, and observation forms were retained."
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-08-12T18:00:00.000Z",
+      "tool_calls": [{
+        "tool_call_id": "codex-exec-create",
+        "function_name": "exec",
+        "arguments": {
+          "input": "// @exec: {\"yield_time_ms\": 10000}\nconst created = await tools.exec_command({cmd: \"printf 'seed\\n' > state.txt\"});\ntext(created.output);"
+        }
+      }],
+      "observation": {
+        "content": "Chunk ID: fixture\nWall time: 0.001 seconds\nProcess exited with code 0\nOutput:\n"
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-08-12T18:00:01.000Z",
+      "tool_calls": [{
+        "tool_call_id": "codex-exec-patch",
+        "function_name": "exec",
+        "arguments": {
+          "input": "const patch = `*** Begin Patch\n*** Update File: state.txt\n@@\n-seed\n+ready\n*** End Patch`;\ntext(await tools.apply_patch(patch));"
+        }
+      }],
+      "observation": {
+        "content": "Success. Updated the following files:\nM state.txt\n"
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-08-12T18:00:02.000Z",
+      "tool_calls": [{
+        "tool_call_id": "codex-exec-verify",
+        "function_name": "exec",
+        "arguments": {
+          "input": "const checked = await tools.exec_command({cmd: \"test \\\"$(cat state.txt)\\\" = ready && printf 'verified\\n'\"});\ntext(checked.output);"
+        }
+      }],
+      "observation": {
+        "content": "Chunk ID: fixture\nWall time: 0.001 seconds\nProcess exited with code 0\nOutput:\nverified\n"
+      }
+    }
+  ]
+}

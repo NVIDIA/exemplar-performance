@@ -1,5 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # NCCL Test Configuration
-description = "Allreduce, Allgather, ReduceScatter: NCCL Algo/Proto sweep. Alltoall, Sendrecv: NCCL_NCHANNELS_PER_NET_PEER sweep."
+# Platform srun/env (cpu-bind, NCCL_NET, IB SL, plugin) live in systems.toml.
+description = "NCCL 2.32.3 size-sweep tests: Legacy (-R0 -G10), Symmetric (-R2 -G10), CE (-R2 -x2); -b8 -e16G."
 library_name = "nccl"
 testset_iterations = 1
 test_iterations = 1
@@ -7,11 +11,13 @@ test_iterations = 1
 [common]
 path = "${NCCL_TEST_PATH}"
 
+# NCCL_DEBUG_FILE is required for per-rank debug logs. Without it the launcher
+# never redirects NCCL output into the LOG_* rank directories, so those folders
+# look empty. INFO (not WARN) is what actually fills nccl_debug_file.*.
 [common.sweep_envs]
 NCCL_DEBUG = "INFO"
 NCCL_DEBUG_FILE = "nccl_debug_file.%h.%p.txt"
-NCCL_DEBUG_SUBSYS="Graph,Init,Env"
-
+NCCL_DEBUG_SUBSYS = "INIT,ENV,GRAPH,TUNING,NET"
 
 [common.sweep_args]
 -t = 1
@@ -23,55 +29,110 @@ NCCL_DEBUG_SUBSYS="Graph,Init,Env"
 -e = "16G"
 -d = "float"
 -R = 0
--c = 1
 
+
+# --- Legacy kernels: 8B-16G, -R0, CUDA graphs (-G10) ---
 
 [[test]]
-name = "all_reduce"
+name = "all_reduce_legacy"
 binary = "all_reduce_perf"
 envs_merge_strategy = "override"
 args_merge_strategy = "override"
-[test.sweep_envs]
-NCCL_NVLS_ENABLE = ["0", "1"]
 [test.sweep_args]
--G = ["None", "2", "4"]
+-G = 10
 
 [[test]]
-name = "all_gather"
+name = "all_gather_legacy"
 binary = "all_gather_perf"
 envs_merge_strategy = "override"
 args_merge_strategy = "override"
 [test.sweep_args]
--G = ["None", "2", "4"]
-
+-G = 10
 
 [[test]]
-name = "reduce_scatter"
+name = "reduce_scatter_legacy"
 binary = "reduce_scatter_perf"
 envs_merge_strategy = "override"
 args_merge_strategy = "override"
 [test.sweep_args]
--G = ["None", "2", "4"]
-
+-G = 10
 
 [[test]]
-name = "alltoall"
+name = "alltoall_legacy"
+binary = "alltoall_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+[test.sweep_args]
+-d = "uint8"
+-G = 10
+
+[[test]]
+name = "sendrecv_legacy"
+binary = "sendrecv_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+[test.sweep_args]
+-d = "uint8"
+-G = 10
+
+
+# --- Symmetric kernels: 8B-16G, -R2, CUDA graphs (-G10) ---
+
+[[test]]
+name = "all_reduce_symmetric"
+binary = "all_reduce_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+[test.sweep_args]
+-R = 2
+-G = 10
+
+[[test]]
+name = "all_gather_symmetric"
+binary = "all_gather_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+[test.sweep_envs]
+NCCL_SYM_CE_THRESHOLD = "17179869184"
+[test.sweep_args]
+-R = 2
+-G = 10
+
+[[test]]
+name = "reduce_scatter_symmetric"
+binary = "reduce_scatter_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+[test.sweep_args]
+-R = 2
+-G = 10
+
+
+# --- CE kernels: 8B-16G, -R2, CE mode (-x2), no CUDA graphs ---
+
+[[test]]
+name = "all_gather_ce"
+binary = "all_gather_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+[test.sweep_envs]
+NCCL_DEBUG = "INFO"
+NCCL_DEBUG_FILE = "nccl_debug_file.%h.%p.txt"
+NCCL_DEBUG_SUBSYS = "INIT,ENV,GRAPH,TUNING,NET"
+[test.sweep_args]
+-R = 2
+-x = 2
+
+[[test]]
+name = "alltoall_ce"
 binary = "alltoall_perf"
 envs_merge_strategy = "override"
 args_merge_strategy = "override"
 [test.sweep_envs]
-NCCL_NCHANNELS_PER_NET_PEER = ["1", "2"]
+NCCL_DEBUG = "INFO"
+NCCL_DEBUG_FILE = "nccl_debug_file.%h.%p.txt"
+NCCL_DEBUG_SUBSYS = "INIT,ENV,GRAPH,TUNING,NET"
 [test.sweep_args]
 -d = "uint8"
--G = ["None", "2", "4"]
-
-[[test]]
-name = "sendrecv"
-binary = "sendrecv_perf"
-envs_merge_strategy = "override"
-args_merge_strategy = "override"
-[test.sweep_envs]
-NCCL_NCHANNELS_PER_NET_PEER = ["2", "4"]
-[test.sweep_args]
--d = "uint8"
--G = ["None", "2", "4"]
+-R = 2
+-x = 2

@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -141,13 +123,33 @@ _SLA_ONLY = [
     "sla_pass",
 ]  # max-concurrency-sla ONLY (the ceiling itself = cell_value)
 
+_AGENTIC_METRICS = [  # agentic · replay-fidelity: one row per (rung, container) TaskTrace replay
+    "container",
+    "verdict",
+    "fidelity",
+    "replay_tool_time_ratio",
+    "replay_to_live_tool_ratio",
+    "replay_tool_busy_sec",
+    "live_tool_busy_sec",
+    "actions_executed",
+    "actions_recorded",
+    "source_outcome_mismatch_count",
+    "cpu_usage_sec",
+    "cpu_wall_sec",
+    "cpu_average_logical_cores_used",
+    "cpu_utilization_percent_of_allocation",
+    "cpu_regime",
+    "image_identity_match",
+    "rung_wall_seconds",
+]
 # one distinct extension per (scenario, goal).
 EXT = {
     ("llm-perf", "pareto"): _LLM_METRICS,
     ("llm-perf", "max-concurrency-sla"): _LLM_METRICS + _SLA_ONLY,
+    ("agentic", "replay-fidelity"): _AGENTIC_METRICS,
 }
 # the superset of every column any lane can emit (rows are built full, then projected onto a lane's schema).
-SUPERSET = list(dict.fromkeys(CORE + _LLM_METRICS + _SLA_ONLY + CORE_JSON))
+SUPERSET = list(dict.fromkeys(CORE + _LLM_METRICS + _SLA_ONLY + _AGENTIC_METRICS + CORE_JSON))
 
 
 def lane_columns(scenario, goal) -> list:
@@ -165,6 +167,7 @@ def lane_key(scenario, goal) -> str:
 _RUNG_PASSTHROUGH = {
     "concurrency",
     *_LLM_METRICS,
+    *_AGENTIC_METRICS,
 }
 
 
@@ -331,7 +334,7 @@ def _serving_fields(cell: Path, serving: dict, launcher: dict, launch_argv: list
         "dp": dp if dp not in (None, "") else "",
         "pp": pp if pp is not None else "",
         # "" vs "engine-default" is a REAL distinction, not cosmetics. Blank used to mean both "nobody set
-        # this" and "we never looked", which is exactly how a KVBM export could ship with no quant/kv info
+        # this" and "we never looked", which is exactly how an export could ship with no quant/kv info
         # and read as normal. Now: a value ⇒ explicitly set; "engine-default" ⇒ we parsed the resolved
         # server argv and it set nothing (so the engine default applies); "" ⇒ we could not resolve the
         # launch command at all, i.e. genuinely UNKNOWN.
@@ -342,9 +345,9 @@ def _serving_fields(cell: Path, serving: dict, launcher: dict, launch_argv: list
 
 
 # A server launch line is EITHER an explicit `exec …` OR a bare invocation of a known model-server
-# entrypoint. The `exec `-only rule silently missed every Dynamo/KVBM cell, whose server.yaml launches
-# `python3 -m dynamo.vllm \` with no exec prefix — so launch_command came out "" on the one recipe whose
-# purpose is the KV connector flags. Keep this list additive: an unknown launcher must surface as
+# entrypoint. The `exec `-only rule silently missed some Dynamo cells, whose server.yaml launches
+# `python3 -m dynamo.x \` with no exec prefix — so launch_command came out "".
+# Keep this list additive: an unknown launcher must surface as
 # UNRESOLVED (see _launch_command), never as a blank column.
 _SERVER_ENTRYPOINTS = (
     "-m dynamo.",  # dynamo.vllm / dynamo.frontend / dynamo.sglang
@@ -401,8 +404,7 @@ def _launch_command(cell: Path) -> str:
     ABSENCE IS NEVER SILENT. Three distinct outcomes, three distinct values:
       ""                          — no rendered/ committed: nothing was ever claimed, honestly empty.
       {"_unresolved": {...}}      — rendered/ EXISTS but no launch line was recognised. A blank here used
-                                    to be indistinguishable from "no manifests", which is how the KVBM
-                                    cells shipped exports with no launch command and nobody noticed.
+                                    to be indistinguishable from "no manifests", but that is not always true.
       {"<file>.yaml": [argv, …]}  — resolved.
     """
     rd = cell / "rendered"

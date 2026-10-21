@@ -69,6 +69,6 @@ Once the sweep finishes, render the summary table (concurrency, p50 request
 latency, effective total throughput) with the bundled helper:
 
 ```bash
-export LLMB_WORKLOAD=$LLMB_INSTALL/workloads/inference_qwen3_long
-./report.sh
+export LLMB_WORKLOAD="$LLMB_INSTALL/workloads/inference_qwen3_long"
+"$LLMB_WORKLOAD/report.sh"
 ```

@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -51,9 +33,8 @@ recipe_hash moves — ownerReferences are runtime metadata, correctly excluded f
 discipline to merge_imex_claim.py / merge_rdma_selector.py). Exit 0 always; any failure → passthrough so a
 deploy is never blocked.
 
-Deployment, Job and Service kinds are stamped (the run-scoped objects); ServiceAccounts, Roles, PVCs and
-ConfigMaps in the same stream are left untouched — they are namespace singletons or deliberately outlive the
-run. A Job whose name marks it as a run-owner (…-runowner-…) is skipped so the owner never accidentally owns
+Deployment, Job, Service and server-stack ConfigMap kinds are stamped. PersistentVolumeClaims and RBAC
+objects remain independent because they are shared or intentionally outlive a run. A Job whose name marks it as a run-owner (…-runowner-…) is skipped so the owner never accidentally owns
 itself.
 
 WHY SERVICE. A cell's Service is applied in this same stream, beside its server Deployment, and is named
@@ -74,7 +55,7 @@ except ImportError:  # no PyYAML → never block a deploy
     sys.stdout.write(sys.stdin.read())
     sys.exit(0)
 
-_STAMP_KINDS = {"Deployment", "Job", "Service"}
+_STAMP_KINDS = {"Deployment", "Job", "Service", "ConfigMap"}
 
 
 def _owner_ref(name: str, uid: str) -> dict:

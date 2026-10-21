@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+general:
+  workload: dsv4f_sglang_gb300
+  display_name: DeepSeek-V4-Flash-0731 SGLang Dynamo GB300
+  workload_type: inference
+  framework: sglang-dynamo
+  model: DeepSeek-V4-Flash-0731
+
+container:
+  images:
+    - url: 'nvcr.io#nvidia/ai-dynamo/sglang-runtime:1.5.1'
+      name: 'dynamo-sglang-1.5.1'
+    - url: 'nginx@sha256:846993cfd1ec2f814d7f3cfdc8df7aa67ecfe6ab233fd990c82d34eea47beb8e'
+      name: 'nginx-1.27.4'
+    - url: 'nvcr.io#nvidia/ai-dynamo/aiperf:0.12.0'
+      name: 'aiperf-0.12.0'
+
+downloads:
+  huggingface:
+    repos:
+      - repo_id: 'deepseek-ai/DeepSeek-V4-Flash-0731'
+        revision: '7872f01b1d1fe23eabc4c98b48bffcef5a386062'
+        repo_type: model
+        target: workload
+        name: 'deepseek-v4-flash-0731'
+      - repo_id: 'nv-camilom/agentic_coding'
+        revision: 'd01c4538f8b74f6e45635da1c06cb013902f3a6d'
+        repo_type: dataset
+        target: workload
+        name: 'dataset'
+
+repositories:
+  srt_slurm:
+    url: 'https://github.com/NVIDIA/srt-slurm.git'
+    commit: 'c180328b98c3793ca84a1e24a030f90545eb7d5d'
+
+setup:
+  venv_req: true
+  dependencies:
+    pip:
+      - package: srtctl
+        repo_key: srt_slurm
+        editable: true
+  tasks:
+    - name: setup_srtslurm
+      cmd: 'bash setup_srtslurm.sh'
+      job_type: local
+    - name: prepare_dataset_recipe
+      cmd: 'python3 ../../../prepare_dataset_recipe.py'
+      job_type: local
+
+run:
+  launcher_type: srt_slurm
+  srt_slurm:
+    recipe: recipes/dsv4f-sgl-disagg-gb300-1p1d-dep4-tp4-mtp-hicache.yaml
+    recipe_env: RUN_CONF_DSV4F_RECIPE
+    selector: override_validated
+  gpu_configs:
+    gb300:
+      model_configs:
+        - model_size: '304b'
+          dtypes: ['mxfp4']
+          scales: [8]
+          exact_scales: true

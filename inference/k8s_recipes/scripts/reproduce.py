@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -225,23 +207,76 @@ def group_members(cell: Path, root: Path = ROOT) -> list[Path]:
     return fam if len(fam) >= 2 else []
 
 
+def requires_node_cache(cell: Path) -> bool:
+    """Whether this cell needs an operator-prepared, versioned node-local model cache. PURE."""
+    serving = recipe(cell).get("serving") or {}
+    staging = serving.get("model_cache_staging") or {}
+    return staging.get("mode") == "node-local-versioned-hostpath"
+
+
+def is_agentic(cell: Path) -> bool:
+    """An agentic (TaskTrace) cell. PURE."""
+    return envelope(cell).get("scenario") == "agentic"
+
+
+def agentic_server(cell: Path) -> bool:
+    """An agentic cell with its own model server (the -gpu cells): GPUs and weights, unlike the CPU cells. PURE."""
+    return is_agentic(cell) and bool(recipe(cell).get("serving"))
+
+
+def capture_api_key_secret(cell: Path) -> str | None:
+    """The cluster-profile variable naming the live capture's endpoint API-key Secret, if the cell has one. PURE."""
+    return ((recipe(cell).get("tasktrace") or {}).get("capture") or {}).get("api_key_secret")
+
+
 # ── rendering ───────────────────────────────────────────────────────────────────────────────────────
 
 
 def three_steps(cell: Path, root: Path = ROOT) -> list[str]:
-    """The canonical three commands for THIS cell. PURE."""
-    return [
+    """The canonical commands for THIS cell. PURE."""
+    if agentic_server(cell):
+        provisions = "weights + staged TaskTrace tools"
+    elif is_agentic(cell):
+        provisions = "staged TaskTrace tools"
+    else:
+        provisions = "weights"
+    steps = [
         "```bash",
         "# 1 · pick your cluster → writes cluster-profiles/<profile>.env  (one-time, per cluster)",
         "scripts/llmb-k8s init",
         "",
-        "# 2 · install THIS recipe: namespace + secrets + model-cache PVC + weights  (safe to re-run)",
+        f"# 2 · install THIS recipe: namespace + secrets + model-cache PVC + {provisions}  (safe to re-run)",
         f"scripts/llmb-k8s install <profile> --recipes {cell_slug(cell)}",
         "",
-        "# 3 · run it: preflight → serve → sweep → results (GPUs freed on the way out)",
+    ]
+    if requires_node_cache(cell):
+        stack = (recipe(cell).get("serving") or {}).get("stack")
+        steps += [
+            "# 3 · prepare the versioned node-local cache once, then wait for its DaemonSet rollout",
+            f"#     follow serving/{stack}/node-cache/README.md",
+            "",
+            "# 4 · run it: preflight → serve → sweep → results (GPUs freed on the way out)",
+        ]
+    elif is_agentic(cell) and capture_api_key_secret(cell):
+        steps += [
+            f"# 3 · once: create the endpoint API-key Secret the profile's {capture_api_key_secret(cell)} names",
+            "#     (data key `api_key`); until it exists, install reports this cell blocked",
+            "#     and preflight prints the command that creates it",
+            "",
+            "# 4 · run it: preflight → stage → capture → replay → results",
+        ]
+    elif agentic_server(cell):
+        capture = "capture → " if envelope(cell).get("mode") == "tasktrace-capture-replay" else ""
+        steps += [f"# 3 · run it: preflight → stage → serve → {capture}replay → results (GPUs freed on the way out)"]
+    elif is_agentic(cell):
+        steps += ["# 3 · run it: preflight → stage → replay → results"]
+    else:
+        steps += ["# 3 · run it: preflight → serve → sweep → results (GPUs freed on the way out)"]
+    steps += [
         f"scripts/llmb-k8s run {cell_rel(cell, root)} <profile> {RUN_FLAGS}",
         "```",
     ]
+    return steps
 
 
 def group_block(cell: Path, root: Path = ROOT) -> list[str]:
@@ -293,12 +328,25 @@ def group_block(cell: Path, root: Path = ROOT) -> list[str]:
         "# 2 · install every member at once (one model cache, shared)",
         f"scripts/llmb-k8s install <profile> --recipes {slugs}",
         "",
-        "# 3 · run them ONE AT A TIME — a benchmark never shares a node (whole-node exclusivity)",
+        *(
+            [
+                "# 3 · prepare the versioned node-local cache once, then wait for its DaemonSet rollout",
+                f"#     follow serving/{(recipe(cell).get('serving') or {}).get('stack')}/node-cache/README.md",
+                "",
+                "# 4 · run them ONE AT A TIME — a benchmark never shares a node (whole-node exclusivity)",
+            ]
+            if requires_node_cache(cell)
+            else ["# 3 · run them ONE AT A TIME — a benchmark never shares a node (whole-node exclusivity)"]
+        ),
         f"for CELL in {paths}; do",
         f"  scripts/llmb-k8s run $CELL <profile> {RUN_FLAGS}",
         "done",
         "",
-        "# 4 · read the family as one frontier, once the members are published",
+        (
+            "# 5 · read the family as one frontier, once the members are published"
+            if requires_node_cache(cell)
+            else "# 4 · read the family as one frontier, once the members are published"
+        ),
         f"scripts/llmb-k8s compare {paths}",
         "```",
     ]
@@ -317,11 +365,38 @@ def reproduce_md(cell: Path, root: Path = ROOT) -> str:
             "instead, from `inference/k8s_recipes/`:"
         ]
     else:
-        out += [
-            "Three steps, run from `inference/k8s_recipes/`. Nothing else is needed — "
-            "`install` provisions the cluster side and `run` drives the whole lifecycle.",
-            "",
-        ]
+        if requires_node_cache(cell):
+            out += [
+                "Run these steps from `inference/k8s_recipes/`. This cell uses a versioned node-local model "
+                "cache, so prepare that cache once before the first run.",
+                "",
+            ]
+        elif is_agentic(cell) and capture_api_key_secret(cell):
+            out += [
+                "Run these steps from `inference/k8s_recipes/`. The live capture calls an external endpoint, so "
+                "create its API-key Secret once; `install` provisions the rest of the cluster side and `run` "
+                "drives the whole lifecycle.",
+                "",
+            ]
+        elif agentic_server(cell):
+            out += [
+                "Three steps, run from `inference/k8s_recipes/`. Nothing else is needed — `install` provisions "
+                "the cluster side, downloads the weights and stages the TaskTrace tools, and `run` drives the "
+                "whole lifecycle.",
+                "",
+            ]
+        elif is_agentic(cell):
+            out += [
+                "Three steps, run from `inference/k8s_recipes/`. Nothing else is needed — `install` provisions "
+                "the cluster side and stages the TaskTrace tools, and `run` drives the whole lifecycle.",
+                "",
+            ]
+        else:
+            out += [
+                "Three steps, run from `inference/k8s_recipes/`. Nothing else is needed — "
+                "`install` provisions the cluster side and `run` drives the whole lifecycle.",
+                "",
+            ]
         out += three_steps(cell, root)
     out += group_block(cell, root)
     up = "../" * len(cell_rel(cell, root).split("/"))  # cell dir → collection root

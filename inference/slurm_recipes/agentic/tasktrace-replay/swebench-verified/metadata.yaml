@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# TaskTrace agent replay: re-execute the tool-side (CPU) half of a recorded
+# agentic coding run inside the original task container and check that every
+# recorded command reproduces its recorded outcome. No model, no GPU work.
+# Front-door: llmb-install + llmb-run. Backend: the `tasktrace` CLI from
+# riptide-agent-replay, cross-compiled from source for the compute nodes' CPU architecture during
+# install.
+
+general:
+  workload: tasktrace_replay
+  workload_type: inference   # Auto-skipped by llmb-run's post-processing pipeline
+                             # (UNSUPPORTED_PP_WORKLOAD_TYPES); the recipe writes
+                             # its own summary.json under $LLMB_EXPERIMENT_DIR.
+  framework: tasktrace
+  display_name: tasktrace-replay-swebench-verified
+
+# The task container is a public GHCR image (anonymous pull). Declaring it here
+# lets llmb-install import it to $LLMB_INSTALL/images/ with enroot on the CPU
+# partition, skip it when already present, and honor a shared images folder
+# (`install.sh -i`). Filename follows the installer rule
+# <parent>+<name>+<tag>.sqsh, which launch.sh reproduces. One entry per shipped
+# trajectory; arm64 images. gb300 and gb200 are the SKU keys we ship; see the agentic
+# README for other Arm clusters.
+container:
+  images:
+    by_gpu:
+      gb300:
+        - 'ghcr.io#epoch-research/swe-bench.eval.arm64.django__django-11490:sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78'
+      gb200:
+        - 'ghcr.io#epoch-research/swe-bench.eval.arm64.django__django-11490:sha256:58f9edb89a621c2121dc3132ce311130d61d8a3a8075e250231f2a9d757b9a78'
+
+setup:
+  # The tool is a static Rust binary; no Python venv is needed.
+  venv_req: false
+
+  tasks:
+    # Build a static musl `tasktrace` from the vendored in-tree source
+    #    (inference/tools/tasktrace) on the install host, once per
+    #    $LLMB_INSTALL (shared with the capture recipe), cached by source
+    #    hash + target. The binary is
+    #    mounted into the task container at replay time and must match the
+    #    compute nodes' CPU architecture, so the script cross-compiles for LLMB_NODE_ARCHITECTURE;
+    #    the pure-Rust dependency graph needs no C cross toolchain and no
+    #    allocation. Shared with the capture + replay recipe (../../common/).
+    - name: install_tasktrace_replay
+      cmd: '../../common/install_tasktrace_replay.sh'
+      job_type: local
+
+run:
+  # configured_sbatch: the framework injects --job-name, --output and the
+  # experiment directory (LLMB_EXPERIMENT_DIR). launch.sh declares only
+  # #SBATCH --time.
+  launcher_type: 'configured_sbatch'
+  launch_script: 'launch.sh'
+
+  # scales: [1] is one node replaying one trace. The workload itself uses no
+  # GPUs: llmb-run submits it to cluster_config's slurm.cpu partition when one
+  # is configured and to the GPU partition otherwise. launch.sh refuses a node
+  # whose architecture differs from the task image.
+  requires_gpus: false
+  #
+  # model_size is the trace selector (`llmb-run submit -s <model_size>`):
+  # <model>_<agent-harness>_<task>, one entry per shipped trajectory. launch.sh
+  # maps it onto inference/trajectories/<model>/<agent-harness>/<dataset>/<task>/.
+  # dtypes must be a schema enum value; nvfp4 is the precision of the model
+  # that produced the trace. Replay does not load a model.
+  gpu_configs:
+    gb300:
+      model_configs:
+        - model_size: 'nemotron-3-ultra_miniswe_django-11490'
+          dtypes: ['nvfp4']
+          scales: [1]
+          exact_scales: true
+    gb200:
+      model_configs:
+        - model_size: 'nemotron-3-ultra_miniswe_django-11490'
+          dtypes: ['nvfp4']
+          scales: [1]
+          exact_scales: true

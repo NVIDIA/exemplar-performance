@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -78,12 +60,18 @@ except AssertionError as e:
 check("startup assertion: a KNOWN_METRICS metric with no handler raises", raised2)
 
 check(
-    "registry covers exactly the 2 (scenario, goal) combos",
+    "registry covers exactly the 3 (scenario, goal) combos",
     set(gh.REGISTRY.keys())
     == {
         ("llm-perf", "max-concurrency-sla"),
         ("llm-perf", "pareto"),
+        ("agentic", "replay-fidelity"),
     },
+)
+check(
+    "resolve agentic·replay-fidelity → AgenticReplayFidelityHandler (also the scenario default)",
+    type(gh.resolve("agentic", "replay-fidelity")).__name__ == "AgenticReplayFidelityHandler"
+    and gh.resolve("agentic", None) is gh.resolve("agentic", "replay-fidelity"),
 )
 
 # ── B. resolution (incl. the scenario-default lane) ─────────────────────────────────────────────────────

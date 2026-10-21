@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+general:
+  workload: kimi2.6
+  display_name: Kimi-K2.6 TRT-LLM Dynamo
+  workload_type: inference
+  framework: trt-llm-dynamo
+  model: Kimi-K2.6
+
+container:
+  images:
+    - url: 'nvcr.io#nvidia/ai-dynamo/tensorrtllm-runtime:1.1.0-dev.2'
+      name: 'trtllm-runtime-1.1.0-dev.2'
+
+downloads:
+  huggingface:
+    repos:
+      - repo_id: 'nvidia/Kimi-K2.6-NVFP4'
+        repo_type: model
+        revision: '2fd3a800dedd098b8327eb49e93ebc75f85da19f'
+        target: workload
+        name: 'kimi26-nvfp4'
+
+repositories:
+  srt_slurm:
+    url: 'https://github.com/NVIDIA/srt-slurm.git'
+    commit: 'c180328b98c3793ca84a1e24a030f90545eb7d5d'
+
+setup:
+  venv_req: true
+  dependencies:
+    pip:
+      - package: srtctl
+        repo_key: srt_slurm
+        editable: true
+  tasks:
+    - name: setup_srtslurm
+      cmd: './setup_srtslurm.sh'
+      job_type: local
+
+run:
+  launcher_type: srt_slurm
+  srt_slurm:
+    recipe: recipes/gb200_nvfp4/ISL8K_OSL1K/low_latency_conc_1_4_16_32_64.yaml
+    recipe_env: RUN_CONF_KIMI26_RECIPE
+  gpu_configs:
+    gb200:
+      model_configs:
+        - model_size: '1t'
+          dtypes: ['nvfp4']
+          scales: [24, 28, 40, 48]
+          exact_scales: true

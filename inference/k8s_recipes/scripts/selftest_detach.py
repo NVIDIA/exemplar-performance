@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -80,7 +62,7 @@ for s in ("run.sh", "parallel_repro.sh", "submit.sh"):
 # (+ real pure helpers lane.py/run_id.py) beside 1-line STUBS for every heavy sub-script. A fake `kubectl` on
 # PATH answers the handful of queries the detached path makes. This is a genuine end-to-end drive of run.sh,
 # no cluster.
-LLM_PERF_CELL = ROOT / "recipes/llm-perf/kvbm/qwen3-0-6b-b200-vllm-agg-kvbm-pareto"
+LLM_PERF_CELL = ROOT / "recipes/llm-perf/Glm5/B200_k8s/Agg/1k_1k/glm5-fp8-b200-sglang15-agg-c4-1024"
 
 FAKE_KUBECTL = r"""#!/usr/bin/env bash
 # Fake kubectl for the detached run.sh drive. Logs every call; answers the few reads run.sh makes.
@@ -397,9 +379,9 @@ with tempfile.TemporaryDirectory() as td:
         "cell": str(LLM_PERF_CELL),
         "profile": "testprof",
         "namespace": "testns",
-        "recipe": "qwen3-0-6b-b200-vllm-agg-kvbm-pareto",
-        "job_name": "qwen3-0-6b-b200-vllm-agg-kvbm-pareto-bench-rperf9",
-        "artifacts_pvc": "qwen3-0-6b-b200-vllm-agg-kvbm-pareto-artifacts",
+        "recipe": "glm5-fp8-b200-sglang15-agg-c4-1024",
+        "job_name": "glm5-fp8-b200-sglang15-agg-c4-1024-bench-rperf9",
+        "artifacts_pvc": "glm5-fp8-b200-sglang15-agg-c4-1024-artifacts",
         "lane": "bench",
     }
     (rs.SUBMITS_DIR / "rperf9.json").write_text(json.dumps(rec))
@@ -458,7 +440,7 @@ with tempfile.TemporaryDirectory() as td:
         "cell": str(LLM_PERF_CELL),
         "profile": "testprof",
         "namespace": "testns",
-        "recipe": "qwen3-0-6b-b200-vllm-agg-kvbm-pareto",
+        "recipe": "glm5-fp8-b200-sglang15-agg-c4-1024",
         "mode": "parallel-detached",
         "run_ids": ["rperf9"],
         "legs": [{"run_id": "rperf9", "scratch_cell": str(LLM_PERF_CELL)}],

@@ -6,6 +6,8 @@ compute node. It complements, rather than replaces, the diagnostic checks in
 
 ## Run
 
+### Slurm
+
 Install LLMB with the compute-node architecture selected, then run:
 
 ```bash
@@ -15,6 +17,10 @@ llmb-run submit -w microbenchmark_llmb_collector --scale 1
 
 The report is written to `llmb-collector.json` in the experiment directory
 created by `llmb-run`.
+
+### Kubernetes
+
+No Kubernetes support is provided yet.
 
 ## Source snapshots
 
@@ -47,7 +53,7 @@ $LLMB_INSTALL/bin/$(uname -m)/uvx
 ```
 
 `uvx` puts ephemeral tool environments and downloaded dependencies in the uv
-cache. The launcher defaults `UV_CACHE_DIR` to `$LLMB_INSTALL/.cache/uv` and
-`UV_PYTHON_INSTALL_DIR` to a subdirectory there so neither package data nor a
-uv-managed Python installation is written under the user's home directory. A
-future `llmb-run` change can centralize these defaults for every workload.
+cache. The launcher defaults `UV_CACHE_DIR` to `$LLMB_INSTALL/.cache/uv` so
+package data is not written under the user's home directory; uv-managed Python
+installations stay in uv's default, shared location (`uv python dir`). A future
+`llmb-run` change can centralize this default for every workload.

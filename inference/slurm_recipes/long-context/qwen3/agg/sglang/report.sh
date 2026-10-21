@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
+# SPDX-License-Identifier: Apache-2.0
+
 # Grab concurrency, request latency, and effective throughput from each run in
 # the sweep and show them as a table. Convenience helper — run by hand after a
 # `llmb-run submit` sweep finishes. NOT invoked by llmb (workload_type:inference

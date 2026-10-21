@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -225,10 +207,8 @@ CRITICAL_PROFILE_VARS = {
 # pod's requests are competing for ONE node's capacity, and the existing WHOLE_NODE_* checks — each of
 # which validates a single value in isolation — all pass on a combination that can never schedule.
 #
-# Observed: WHOLE_NODE_CPU=180 on a 192-cpu node, BENCH_CPU_REQUEST=16. Both individually valid. The
-# server came up 3/3 Running and looked healthy; the bench pod sat FailedScheduling for 11 minutes on
-# "0/11 nodes are available: 1 node(s) didn't match pod affinity rules, 10 Insufficient cpu". preflight
-# had passed. The reservation left ~9.7 cpu free against a 16 cpu request.
+# Preflight therefore evaluates the combined reservation before launch, so a colocated bench pod has
+# schedulable CPU and memory alongside its server.
 
 _SAME_HOST_TOPOLOGY = "kubernetes.io/hostname"
 
@@ -239,11 +219,12 @@ _UNSET_TOKEN = "__llmb_unset__"
 # actually be rendered. BENCH_CPU_REQUEST is an OPTIONAL profile var — it is not in CRITICAL_PROFILE_VARS,
 # profile_init writes it but a hand-written profile need not — and sweep.sh:83, submit.sh:95 and dryrun.sh:83
 # all default it with `: "${BENCH_CPU_REQUEST:=16}"` before envsubst. Substituting from the profile ALONE
-# left it UNKNOWN on every profile that omits it, which silently switched the co-scheduling CPU comparison
-# off (see _coschedule_verdict) — the exact 180+16 > 192 case the gate exists for — and printed the raw
-# _UNSET_TOKEN inside a PASS line. selftest_preflight_gates asserts this table against those three scripts,
-# so the default cannot drift away from the one the launcher uses.
+# must use the launcher's default here; otherwise the co-scheduling comparison is skipped. The
+# selftest_preflight_gates suite asserts this table against those three scripts, so the default cannot
+# drift away from the one the launcher uses.
 _RUNTIME_DEFAULTS = {"BENCH_CPU_REQUEST": "16"}
+# The data key a profile-named Secret's consumer reads, for the create-secret hint (default `token`).
+_SECRET_DATA_KEYS = {"TASKTRACE_API_KEY_SECRET": "api_key"}
 
 
 def _subst_profile_vars(text: str, prof: dict) -> str:
@@ -273,8 +254,7 @@ def bench_coschedule_demand(cell, prof) -> dict:
     elsewhere. Reads the RENDERED manifests, i.e. exactly what will be applied.
 
     Returns {} unless the bench pod carries a REQUIRED (not preferred) podAffinity on
-    kubernetes.io/hostname — the check must not fire for cells whose bench can land anywhere, which is
-    every cell but the KVBM one today.
+    kubernetes.io/hostname — the check must not fire for cells whose bench can land anywhere.
 
     Otherwise: {"manifest", "cpu_m", "mem_gib", "cpu_raw", "mem_raw"}. Values are read after profile
     substitution because the two numbers come from different places: cpu is ${BENCH_CPU_REQUEST} (profile)
@@ -863,6 +843,84 @@ def pick_single_node(schedulable, want):
     return next(([nm, fr] for nm, fr in schedulable if fr >= want), None)
 
 
+def disagg_placements(disagg):
+    """Expand a disaggregated topology into the GPU request for every worker pod."""
+    placements = []
+    for role in ("prefill", "decode"):
+        cfg = (disagg or {}).get(role) or {}
+        if not cfg:
+            continue
+        replicas = int(cfg.get("replicas", 1) or 1)
+        nodes = int(cfg.get("nodes_per_worker", 1) or 1)
+        tp = int(cfg.get("tp", 0) or 0)
+        if replicas < 1 or nodes < 1 or tp < 1 or tp % nodes:
+            raise ValueError(f"invalid {role} topology: replicas={replicas}, nodes_per_worker={nodes}, tp={tp}")
+        pod_gpus = tp // nodes
+        total_pods = replicas * nodes
+        for pod_idx in range(total_pods):
+            label = role if total_pods == 1 else f"{role}[{pod_idx + 1}/{total_pods}]"
+            placements.append((label, pod_gpus))
+    return placements
+
+
+def node_local_cache_rollout_issue(daemonsets, model: str, revision: str) -> str | None:
+    """Return why a node-local model cache is unsafe to schedule against, or ``None``.
+
+    A worker pod is not pinned to preflight's advisory GPU placement. Therefore checking only the
+    nodes selected by that calculation would leave a race: the scheduler could choose a different
+    eligible GPU node whose local cache is still copying. Require the DaemonSet for the recipe's exact
+    model revision to be fully rolled out instead; its nodeSelector is the authoritative worker pool.
+    """
+    matches = [
+        ds
+        for ds in (daemonsets or [])
+        if (ds.get("metadata", {}).get("labels", {}) or {}).get("llmb.nvidia.com/model") == model
+        and (ds.get("metadata", {}).get("labels", {}) or {}).get("llmb.nvidia.com/model-revision") == revision
+    ]
+    if len(matches) != 1:
+        return (
+            f"expected exactly one node-cache DaemonSet labelled model={model!r}, revision={revision!r}; "
+            f"found {len(matches)}"
+        )
+    status = matches[0].get("status") or {}
+    desired = int(status.get("desiredNumberScheduled", 0) or 0)
+    current = int(status.get("currentNumberScheduled", 0) or 0)
+    updated = int(status.get("updatedNumberScheduled", 0) or 0)
+    ready = int(status.get("numberReady", 0) or 0)
+    available = int(status.get("numberAvailable", 0) or 0)
+    unavailable = int(status.get("numberUnavailable", 0) or 0)
+    if not desired:
+        return "node-cache DaemonSet has no scheduled cache pods"
+    if current != desired or updated != desired or ready != desired or available != desired or unavailable:
+        return (
+            "node-cache rollout incomplete "
+            f"(desired={desired}, current={current}, updated={updated}, ready={ready}, "
+            f"available={available}, unavailable={unavailable})"
+        )
+    return None
+
+
+def check_node_local_cache_rollout(ns: str, recipe: dict) -> tuple[bool, str]:
+    """LIVE guard for node-local-versioned-hostpath recipes; no-op for every other cache mode."""
+    serving = recipe.get("serving") or {}
+    staging = serving.get("model_cache_staging") or {}
+    if staging.get("mode") != "node-local-versioned-hostpath":
+        return True, "not a node-local cache recipe"
+    model = str((recipe.get("envelope") or {}).get("model") or "").strip()
+    revision = str(serving.get("model_revision") or "").strip()
+    if not model or not revision:
+        return False, "node-local cache recipe is missing envelope.model or serving.model_revision"
+    selector = f"llmb.nvidia.com/model={model},llmb.nvidia.com/model-revision={revision}"
+    code, output, err = krun(["-n", ns, "get", "daemonsets", "-l", selector, "-o", "json"])
+    if code != 0:
+        return False, f"could not read node-cache DaemonSet ({err.strip() or 'kubectl failed'})"
+    try:
+        issue = node_local_cache_rollout_issue(json.loads(output or "{}").get("items", []), model, revision)
+    except json.JSONDecodeError as exc:
+        return False, f"could not parse node-cache DaemonSet status ({exc})"
+    return (issue is None, "fully ready" if issue is None else issue)
+
+
 def place_disagg(schedulable, placements):
     """PURE — greedy biggest-free-first placement of disagg role→need pairs across nodes. Returns the
     list of 'role:node(need)' assignments if every role placed, else None. (Mutates a local copy only.)
@@ -1208,12 +1266,12 @@ def main() -> int:
             # data-parallelism knob in this stack, not an additional Kubernetes GPU-placement multiplier.
             disagg = serving.get("disagg")
             if disagg:
-                placements = []
-                for role in ("prefill", "decode"):
-                    r = disagg.get(role) or {}
-                    if r:
-                        placements.append((role, int(r.get("tp", 0))))
-                assigned = place_disagg(schedulable, placements)  # greedy biggest-free-first
+                try:
+                    placements = disagg_placements(disagg)
+                except ValueError as exc:
+                    line("FAIL", f"GPU: {exc}")
+                    placements = []
+                assigned = place_disagg(schedulable, placements) if placements else None
                 # 0.6: --wait-on-resources polls until the placement fits (insufficient FREE GPUs only)
                 if assigned is None and wait_on_resources:
                     try:
@@ -1490,6 +1548,20 @@ def main() -> int:
                 "(needs DCGM/pod); deploy fails fast if a device has less free memory",
             )
 
+    # A node-local cache is created by a DaemonSet, while workers remain free to schedule on any
+    # matching GPU node. Never launch workers while that DaemonSet is still copying or verifying: the
+    # worker's init check would otherwise crash-loop after GPUs have already been reserved.
+    if ns_ok and (serving.get("model_cache_staging") or {}).get("mode") == "node-local-versioned-hostpath":
+        ok, detail = check_node_local_cache_rollout(ns, recipe)
+        line(
+            "PASS" if ok else "FAIL",
+            f"node-local model cache rollout {'fully ready' if ok else 'NOT ready'} — {detail}",
+            fix=(
+                "wait for the matching node-cache DaemonSet to finish on every eligible node, then re-run "
+                "preflight (do not launch GPU workers while it is still copying)"
+            ),
+        )
+
     # --- disagg RDMA capability (PROACTIVE FAILURE) ---
     if is_disagg(serving):
         section("RDMA fabric")
@@ -1697,12 +1769,13 @@ def main() -> int:
             )
             continue
         sec = prof.get(var, "")
+        data_key = _SECRET_DATA_KEYS.get(var, "token")
         rc, out, _ = krun(["-n", ns, "get", "secret", sec, "-o", "json"]) if sec else (1, "", "")
         if rc != 0:
             line(
                 "FAIL",
                 f"secret {var}={sec or '?'}: MISSING",
-                fix=f"kubectl -n {ns} create secret generic {sec or '<name>'} --from-literal=token=<VALUE>   "
+                fix=f"kubectl -n {ns} create secret generic {sec or '<name>'} --from-literal={data_key}=<VALUE>   "
                 f"(or point {var} at an existing secret in cluster-profiles/{profile}.env)",
             )
             continue
@@ -1714,7 +1787,7 @@ def main() -> int:
             "FAIL" if issue else "PASS",
             (f"secret {var}={sec}: {issue}" if issue else f"secret {var}={sec}: present + non-empty"),
             fix=f"recreate with a non-empty value: kubectl -n {ns} delete secret {sec} && "
-            f"kubectl -n {ns} create secret generic {sec} --from-literal=token=<VALUE>",
+            f"kubectl -n {ns} create secret generic {sec} --from-literal={data_key}=<VALUE>",
         )
 
     section("operators & network")
@@ -1800,12 +1873,9 @@ def main() -> int:
                 if _live and str(_live.get("state", "")).lower() == "unknown" and _live.get("error"):
                     print(f"  · nvlink-p2p live probe inconclusive — {_live['error']}")
             for _g in _cap.evaluate(recipe, _facts, registry=_reg):
-                # This section only SURFACES the gap (WARN, recoverable). The actual crash-killer is the
-                # apply-time strip in the deploy.sh pipeline: scripts/merge_imex_strip.py removes the forced
-                # FLASHINFER env when NVLINK_MULTICAST_IMEX is not provisioned, so a forced-fusion recipe on
-                # an IMEX-less cluster runs correct-but-slower instead of CrashLooping on cuMulticastCreate
-                # code=800. no-internet-ips FAILs only when the IPs weren't auto-written (profile
-                # init/validate normally resolves them).
+                # A GB300 recipe that explicitly enables IMEX/MNNVL fails closed when the required claim is
+                # not provisioned. merge_imex_strip.py remains a defensive apply-time safeguard for a manually
+                # bypassed preflight, never a supported benchmark fallback.
                 line(_g.level, _g.message, fix=_g.fix)  # line() prints the fix hint only on FAIL
     except Exception as _e:  # never let the registry break a preflight
         print(f"  · cluster-capability registry skipped ({_e})")

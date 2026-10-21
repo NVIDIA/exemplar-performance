@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 [common]
 
 [common.run_params]
@@ -11,8 +14,7 @@ sbatch = [
 
 srun = [
     "-N ${SLURM_JOB_NUM_NODES}",
-    "--mpi=pmix",
-    "--cpu-bind=none"
+    "--mpi=pmix"
 ]
 
 openmpi = [
@@ -23,8 +25,10 @@ openmpi = [
     "--mca btl tcp,self",
     "--mca btl_tcp_if_include $TCP_IF_INCLUDE",
     "--mca coll_hcoll_enable 0",
+    "--mca coll_ucc_enable ${OMPI_MCA_coll_ucc_enable:-1}",
     "-x LD_LIBRARY_PATH",
-    "-x UCX_TLS=rc,sm",
+    "-x UCX_TLS=${UCX_TLS:-rc,sm}",
+    "-x OMPI_MCA_coll_ucc_enable=${OMPI_MCA_coll_ucc_enable:-1}",
     "-x UCX_NET_DEVICES=$UCX_NET_DEVICE",
     "--bind-to none"
 ]
@@ -44,10 +48,17 @@ gpu_type = "b300"
 sbatch = [
     "--ntasks-per-node=4"
 ]
-
+srun = [
+    "--cpu-bind=mask_cpu:0x000000000000000000000000000FFFFFFFFF,0x000000000000000000FFFFFFFFF000000000,0x000000000FFFFFFFFF000000000000000000,0xFFFFFFFFF000000000000000000000000000"
+]
 nccl = [
     "NCCL_DEBUG=WARN",
-    "NCCL_IB_SL=1"
+    "NCCL_DEBUG_SUBSYS=INIT,ENV,GRAPH,TUNING,NET",
+    "NCCL_NET=IB",
+    "NCCL_IB_SL=1",
+    "NCCL_NET_PLUGIN=none",
+    "UCX_TLS=${UCX_TLS:-self,tcp}",
+    "OMPI_MCA_coll_ucc_enable=${OMPI_MCA_coll_ucc_enable:-1}"
 ]
 
 [gb200]
@@ -63,10 +74,17 @@ gpu_type = "b200"
 sbatch = [
     "--ntasks-per-node=4"
 ]
-
+srun = [
+    "--cpu-bind=mask_cpu:0x000000000000000000000000000FFFFFFFFF,0x000000000000000000FFFFFFFFF000000000,0x000000000FFFFFFFFF000000000000000000,0xFFFFFFFFF000000000000000000000000000"
+]
 nccl = [
     "NCCL_DEBUG=WARN",
-    "NCCL_IB_SL=1"
+    "NCCL_DEBUG_SUBSYS=INIT,ENV,GRAPH,TUNING,NET",
+    "NCCL_NET=IB",
+    "NCCL_IB_SL=1",
+    "NCCL_NET_PLUGIN=none",
+    "UCX_TLS=${UCX_TLS:-self,tcp}",
+    "OMPI_MCA_coll_ucc_enable=${OMPI_MCA_coll_ucc_enable:-1}"
 ]
 
 [b300]
@@ -82,14 +100,19 @@ gpu_type = "b300"
 sbatch = [
     "--ntasks-per-node=8"
 ]
+srun = [
+    "--cpu-bind=none"
+]
 openmpi = [
-    "UCX_TLS=tcp",
+    "UCX_TLS=${UCX_TLS:-tcp}",
     "UCX_NET_DEVICE=$TCP_DEVICE",
     "TCP_IF_INCLUDE=$TCP_DEVICE"
 ]
 nccl = [
     "NCCL_DEBUG=WARN",
-    "NCCL_NET=IB"
+    "NCCL_NET=IB",
+    "UCX_TLS=${UCX_TLS:-self,tcp}",
+    "OMPI_MCA_coll_ucc_enable=${OMPI_MCA_coll_ucc_enable:-1}"
 ]
 
 [b200]
@@ -105,14 +128,19 @@ gpu_type = "b200"
 sbatch = [
     "--ntasks-per-node=8"
 ]
+srun = [
+    "--cpu-bind=none"
+]
 openmpi = [
-    "UCX_TLS=tcp",
+    "UCX_TLS=${UCX_TLS:-tcp}",
     "UCX_NET_DEVICE=$TCP_DEVICE",
     "TCP_IF_INCLUDE=$TCP_DEVICE"
 ]
 nccl = [
     "NCCL_DEBUG=WARN",
-    "NCCL_NET=IB"
+    "NCCL_NET=IB",
+    "UCX_TLS=${UCX_TLS:-self,tcp}",
+    "OMPI_MCA_coll_ucc_enable=${OMPI_MCA_coll_ucc_enable:-1}"
 ]
 
 [h100]
@@ -128,10 +156,20 @@ gpu_type = "h100-DGX"
 sbatch = [
     "--ntasks-per-node=8"
 ]
+srun = [
+    "--cpu-bind=none"
+]
 openmpi = [
-    "UCX_NET_DEVICE=mlx5_0:1"
+    "UCX_NET_DEVICE=mlx5_0:1",
+    "UCX_TLS=${UCX_TLS:-^ucc}",
+    "OMPI_MCA_coll=${OMPI_MCA_coll:-^ucc}",
+    "OMPI_MCA_coll_ucc_enable=${OMPI_MCA_coll_ucc_enable:-0}"
 ]
 nccl = [
     "NCCL_DEBUG=WARN",
-    "NCCL_NET=IB"
+    "NCCL_DEBUG_SUBSYS=GRAPH,TUNING",
+    "NCCL_NET=IB",
+    "UCX_TLS=${UCX_TLS:-^ucc}",
+    "OMPI_MCA_coll=${OMPI_MCA_coll:-^ucc}",
+    "OMPI_MCA_coll_ucc_enable=${OMPI_MCA_coll_ucc_enable:-0}"
 ]

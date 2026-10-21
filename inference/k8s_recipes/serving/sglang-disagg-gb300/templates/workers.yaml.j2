@@ -1,0 +1,299 @@
+{#
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+#}
+# GB300 Dynamo + SGLang disaggregated workers.
+# Supports both single-node and distributed workers.
+{% set _req = (envelope.get('requires') or {}) %}
+{% set _tols = _req.get('tolerations') %}
+{% set _ucx = serving.disagg.get('ucx') or {} %}
+{% set _deepep = serving.disagg.get('deepep_config') %}
+{% set _cache_stage = serving.get('model_cache_staging') or {} %}
+{% set _stage_local = _cache_stage.get('mode') == 'node-local-emptydir' %}
+{% set _stage_host = _cache_stage.get('mode') == 'node-local-versioned-hostpath' %}
+{% set _stage_size = _cache_stage.get('size_limit', '1Ti') %}
+{% set _stage_host_path = _cache_stage.get('host_path', '') %}
+{% if _deepep %}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ envelope.name }}-deepep-config
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/recipe: {{ envelope.name }} }
+data:
+  deepep_config.json: |
+{{ _deepep | tojson(indent=2) | indent(4, true) }}
+{% endif %}
+{% set roles = [
+  {"name": "prefill", "cfg": serving.disagg.prefill, "bootstrap": true},
+  {"name": "decode",  "cfg": serving.disagg.decode,  "bootstrap": false}
+] %}
+{% for role in roles %}
+{% set nodes = role.cfg.get('nodes_per_worker', 1) %}
+{% set pod_gpus = role.cfg.tp // nodes %}
+{% if nodes > 1 %}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ envelope.name }}-{{ role.name }}-r0
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/role: {{ role.name }} }
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: { app: {{ envelope.name }}-{{ role.name }}-r0 }
+  ports: [{ port: 29500, targetPort: 29500, name: dist, protocol: TCP }]
+{% endif %}
+{% for rank in range(nodes) %}
+{% set rank_suffix = ('-r' ~ rank) if nodes > 1 else '' %}
+{% set base = [
+  "--model-path $SNAPSHOT",
+  "--served-model-name " ~ serving.served_model,
+  "--host 0.0.0.0",
+  "--port 18081",
+  "--disaggregation-mode " ~ role.name
+] %}
+{% if role.bootstrap %}{% set base = base + ["--disaggregation-bootstrap-port 18082"] %}{% endif %}
+{% if nodes > 1 %}{% set base = base + [
+  "--dist-init-addr " ~ envelope.name ~ "-" ~ role.name ~ "-r0:29500",
+  "--nnodes " ~ nodes,
+  "--node-rank " ~ rank
+] %}{% endif %}
+{% set base = base + [
+  "--disaggregation-transfer-backend " ~ serving.disagg.transfer_backend,
+  "--context-length " ~ serving.context_length,
+  "--tensor-parallel-size " ~ role.cfg.tp,
+  "--data-parallel-size " ~ role.cfg.dp,
+  "--expert-parallel-size " ~ role.cfg.ep
+] %}
+{% set allargs = base + (role.cfg.extra_args or []) %}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ envelope.name }}-{{ role.name }}{{ rank_suffix }}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: llmb-recipe
+    llmb.nvidia.com/role: {{ role.name }}
+    llmb.nvidia.com/served-model: {{ serving.served_model }}
+spec:
+  replicas: {{ role.cfg.get('replicas', 1) if nodes == 1 else 1 }}
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: {{ envelope.name }}-{{ role.name }}{{ rank_suffix }} } }
+  template:
+    metadata:
+      labels:
+        app: {{ envelope.name }}-{{ role.name }}{{ rank_suffix }}
+        role: {{ role.name }}
+        llmb.nvidia.com/recipe: {{ envelope.name }}
+    spec:
+      automountServiceAccountToken: false
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      dnsConfig: { options: [{ name: ndots, value: "2" }] }
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 120
+      schedulerName: ${SCHEDULER_NAME}
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      nodeSelector:
+        nvidia.com/gpu.product: ${GPU_PRODUCT}
+{% if _req.get('rdma') %}
+        feature.node.kubernetes.io/rdma.available: "true"
+        feature.node.kubernetes.io/rdma.capable: "true"
+{% endif %}
+{% if _tols %}
+      tolerations:
+{% for t in _tols %}
+        - { key: {{ t }}, operator: Exists }
+{% endfor %}
+{% endif %}
+{% if _stage_local %}
+      initContainers:
+        - name: stage-model-cache
+          image: {{ image_ref }}
+          imagePullPolicy: IfNotPresent
+          securityContext: { runAsUser: 0 }
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              started=$(date +%s)
+              echo "MODEL_STAGE_BEGIN epoch=${started} node=$NODE_NAME pod=$POD_NAME"
+              mkdir -p /local-hf-cache
+              cp -a /fsx-hf-cache/. /local-hf-cache/
+              sync
+              SNAPSHOT=$(python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id='{{ serving.model_repo }}', revision='{{ serving.model_revision }}', cache_dir='/local-hf-cache/hub', local_files_only=True))")
+              test -s "$SNAPSHOT/config.json" || { echo "FATAL: staged pinned snapshot missing at $SNAPSHOT" >&2; exit 64; }
+              finished=$(date +%s)
+              echo "MODEL_STAGE_COMPLETE epoch=${finished} elapsed_seconds=$((finished-started)) snapshot=$SNAPSHOT"
+          env:
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+          resources:
+            requests: { cpu: "16", memory: 32Gi, ephemeral-storage: 800Gi }
+            limits: { cpu: "64", memory: 128Gi, ephemeral-storage: {{ _stage_size }} }
+          volumeMounts:
+            - { mountPath: /fsx-hf-cache, name: model-cache, readOnly: true, subPath: ${MODEL_CACHE_SUBPATH} }
+            - { mountPath: /local-hf-cache, name: local-model-cache }
+{% elif _stage_host %}
+      # The model-preparation DaemonSet owns population of this revision-specific host cache.
+      # Serving is fail-closed: it cannot start until the exact revision and all shards verify.
+      initContainers:
+        - name: verify-node-model-cache
+          image: {{ image_ref }}
+          imagePullPolicy: IfNotPresent
+          securityContext: { runAsUser: 0 }
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              expected='{{ serving.model_repo }}@{{ serving.model_revision }}'
+              actual=$(cat /node-hf-cache/.llmb-cache-ready 2>/dev/null || true)
+              test "$actual" = "$expected" || {
+                echo "FATAL: node cache is not ready for $expected (marker='$actual')" >&2
+                exit 65
+              }
+              SNAPSHOT=$(python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id='{{ serving.model_repo }}', revision='{{ serving.model_revision }}', cache_dir='/node-hf-cache/hub', local_files_only=True))")
+              test -s "$SNAPSHOT/config.json"
+              shards=$(find -L "$SNAPSHOT" -maxdepth 1 -name '*.safetensors' -type f | wc -l)
+              test "$shards" -eq {{ _cache_stage.get("expected_shards", 142) }} || { echo "FATAL: expected {{ _cache_stage.get("expected_shards", 142) }} checkpoint shards, found $shards" >&2; exit 66; }
+              echo "NODE_CACHE_VERIFIED node=$NODE_NAME revision={{ serving.model_revision }} shards=$shards"
+          env:
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+          resources:
+            requests: { cpu: "1", memory: 2Gi }
+            limits: { cpu: "4", memory: 8Gi }
+          volumeMounts:
+            - { mountPath: /node-hf-cache, name: versioned-node-model-cache, readOnly: true }
+{% endif %}
+      containers:
+        - name: sglang
+          image: {{ image_ref }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            capabilities: { add: ["IPC_LOCK", "SYS_RESOURCE"] }
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              ulimit -n 1048576 || true
+              ulimit -l unlimited || true
+              SNAPSHOT=$(python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download(repo_id='{{ serving.model_repo }}', revision='{{ serving.model_revision }}', cache_dir='/data/hf-cache/hub', local_files_only=True))")
+              export SNAPSHOT
+              test -s "$SNAPSHOT/config.json" || { echo "FATAL: pinned model snapshot missing at $SNAPSHOT" >&2; exit 64; }
+              echo "MODEL_RUNTIME_BEGIN epoch=$(date +%s) node=$NODE_NAME pod=$POD_NAME snapshot=$SNAPSHOT"
+              exec python3 -m dynamo.sglang \
+{% for a in allargs %}
+                {{ a }}{{ " \\" if not loop.last else "" }}
+{% endfor %}
+          ports:
+            - { containerPort: 18080, name: system, protocol: TCP }
+            - { containerPort: 18081, name: worker, protocol: TCP }
+{% if role.bootstrap %}
+            - { containerPort: 18082, name: bootstrap, protocol: TCP }
+{% endif %}
+{% if nodes > 1 %}
+            - { containerPort: 29500, name: dist, protocol: TCP }
+{% endif %}
+          startupProbe:
+            httpGet: { path: /live, port: system }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: {{ (serving.get('startup_timeout_s', 14400) // 10) }}
+          livenessProbe:
+            httpGet: { path: /live, port: system }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 8
+          readinessProbe:
+            httpGet: { path: /live, port: system }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          env:
+            - { name: ETCD_ENDPOINTS, value: "http://{{ envelope.name }}-etcd:2379" }
+            - { name: NATS_SERVER, value: "nats://{{ envelope.name }}-nats:4222" }
+            - { name: DYN_SYSTEM_PORT, value: "18080" }
+            - { name: DYN_LOG, value: "info" }
+            - { name: HF_HOME, value: "/data/hf-cache" }
+            - { name: HF_HUB_OFFLINE, value: "1" }
+            - { name: TRANSFORMERS_OFFLINE, value: "1" }
+{% if _req.get('rdma') %}
+            # UCX transport and device identity come from the cluster profile.
+            - { name: UCX_TLS, value: "${RDMA_UCX_TLS}" }
+            - { name: UCX_NET_DEVICES, value: "${RDMA_UCX_NET_DEVICES}" }
+            - { name: UCX_IB_GPU_DIRECT_RDMA, value: "${RDMA_UCX_IB_GPU_DIRECT_RDMA}" }
+            - { name: UCX_IB_ADDR_TYPE, value: "${RDMA_UCX_IB_ADDR_TYPE}" }
+            - { name: UCX_MAX_RNDV_RAILS, value: "${RDMA_UCX_MAX_RNDV_RAILS}" }
+            # Do not force zero-copy rendezvous: clusters without nvidia_peermem cannot register
+            # CUDA memory on an RDMA MD. UCX auto-selects a supported staged path.
+            - { name: UCX_RC_TIMEOUT, value: "18s" }
+{% endif %}
+{% for e in (role.cfg.get('env') or []) %}
+            - { name: {{ e.name | string | tojson }}, value: {{ e.value | string | tojson }} }
+{% endfor %}
+            - name: POD_UID
+              valueFrom: { fieldRef: { fieldPath: metadata.uid } }
+            - name: POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+          resources:
+            requests:
+              cpu: "64"
+              memory: 768Gi
+              ephemeral-storage: {{ '800Gi' if _stage_local else '20Gi' }}
+              nvidia.com/gpu: "{{ pod_gpus }}"
+            limits:
+              cpu: "139"
+              memory: 900Gi
+              ephemeral-storage: {{ _stage_size if _stage_local else '100Gi' }}
+              nvidia.com/gpu: "{{ pod_gpus }}"
+          volumeMounts:
+{% if _stage_local %}
+            - { mountPath: /data/hf-cache, name: local-model-cache, readOnly: true }
+{% elif _stage_host %}
+            - { mountPath: /data/hf-cache, name: versioned-node-model-cache, readOnly: true }
+{% else %}
+            - { mountPath: /data/hf-cache, name: model-cache, readOnly: true, subPath: ${MODEL_CACHE_SUBPATH} }
+{% endif %}
+            - { mountPath: /dev/shm, name: dshm }
+{% if _deepep and role.name == 'decode' %}
+            - { mountPath: /configs/deepep_config.json, name: deepep-config, subPath: deepep_config.json, readOnly: true }
+{% endif %}
+            - { mountPath: /dev/infiniband, name: dev-infiniband }
+            - { mountPath: /sys/class/infiniband, name: sys-class-infiniband, readOnly: true }
+      volumes:
+{% if not _stage_host %}
+        - name: model-cache
+          persistentVolumeClaim: { claimName: ${MODEL_CACHE_PVC} }
+{% endif %}
+{% if _stage_local %}
+        - name: local-model-cache
+          emptyDir: { sizeLimit: {{ _stage_size }} }
+{% elif _stage_host %}
+        - name: versioned-node-model-cache
+          hostPath: { path: {{ _stage_host_path | tojson }}, type: Directory }
+{% endif %}
+{% if _deepep and role.name == 'decode' %}
+        - name: deepep-config
+          configMap: { name: {{ envelope.name }}-deepep-config }
+{% endif %}
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 100Gi }
+        - name: dev-infiniband
+          hostPath: { path: /dev/infiniband, type: Directory }
+        - name: sys-class-infiniband
+          hostPath: { path: /sys/class/infiniband, type: Directory }
+{% endfor %}
+{% endfor %}

@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Disaggregated control-plane services: etcd for discovery and NATS for requests and events.
+# {{ ... }} = recipe truth (baked at render). ${ ... } = cluster truth (envsubst at launch).
+# Each benchmark run gets single-replica, ephemeral services named from the recipe envelope.
+apiVersion: v1
+kind: Service
+metadata:
+  name: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-etcd
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/infra: etcd }
+spec:
+  selector: { app: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-etcd }
+  ports: [{ port: 2379, targetPort: 2379, name: client }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-etcd
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/infra: etcd }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-etcd } }
+  template:
+    metadata: { labels: { app: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-etcd } }
+    spec:
+      schedulerName: ${SCHEDULER_NAME}
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+      containers:
+        - name: etcd
+          image: quay.io/coreos/etcd:v3.5.17
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/etcd"]
+          args:
+            - --name=glm5-gb300-dyn13-16k512-ht-c2800-14p4d-etcd
+            - --data-dir=/etcd-data
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://glm5-gb300-dyn13-16k512-ht-c2800-14p4d-etcd:2379
+          ports: [{ containerPort: 2379, name: client, protocol: TCP }]
+          readinessProbe:
+            tcpSocket: { port: client }
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests: { cpu: "1", memory: 512Mi }
+            limits:   { cpu: "2", memory: 2Gi }
+          volumeMounts:
+            - { mountPath: /etcd-data, name: etcd-data }
+      volumes:
+        - name: etcd-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-nats
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/infra: nats }
+spec:
+  selector: { app: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-nats }
+  ports:
+    - { port: 4222, targetPort: 4222, name: client }
+    - { port: 8222, targetPort: 8222, name: monitor }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-nats
+  namespace: ${NAMESPACE}
+  labels: { app.kubernetes.io/managed-by: llmb-recipe, llmb.nvidia.com/infra: nats }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-nats } }
+  template:
+    metadata: { labels: { app: glm5-gb300-dyn13-16k512-ht-c2800-14p4d-nats } }
+    spec:
+      schedulerName: ${SCHEDULER_NAME}
+      imagePullSecrets: [{ name: ${IMAGE_PULL_SECRET} }]
+      tolerations:
+        - { key: nvidia.com/gpu, operator: Exists }
+      containers:
+        - name: nats
+          image: nats:2.10.22-alpine
+          imagePullPolicy: IfNotPresent
+          # -js: JetStream (dynamo request/event plane). -m 8222: monitoring endpoint (readiness probe).
+          args: ["-js", "-m", "8222"]
+          ports:
+            - { containerPort: 4222, name: client, protocol: TCP }
+            - { containerPort: 8222, name: monitor, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /healthz, port: monitor }
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests: { cpu: "1", memory: 512Mi }
+            limits:   { cpu: "2", memory: 2Gi }

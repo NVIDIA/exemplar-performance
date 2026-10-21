@@ -1,30 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 
 """Environment configuration prompts for LLMB installer."""
 
 import os
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
+from llmb_install.config.models import EnvironmentPrompt
 from llmb_install.environment.detector import is_uv_installed
 from llmb_install.ui.interface import UIInterface
 
@@ -59,96 +42,114 @@ def prompt_environment_type(ui: UIInterface, default: Optional[str] = None) -> s
     return "uv"
 
 
+def _mask(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "********"
+    return f"{value[:10]}..."
+
+
+def _existing_value(env_vars: Dict[str, str], name: str) -> str:
+    """Return a normalized saved value, falling back to the process environment."""
+    saved = (env_vars.get(name) or "").strip()
+    return saved or os.environ.get(name, "").strip()
+
+
+def _prompt_variable(ui: UIInterface, prompt: EnvironmentPrompt, default: str = "") -> Optional[str]:
+    default = default.strip()
+    status = "required" if prompt.required else "optional"
+    ui.log(f"\n{prompt.name} ({status})")
+    if prompt.description:
+        ui.log(prompt.description)
+
+    if default:
+        ui.log(f"Found existing {prompt.name}: {_mask(default)}")
+
+    def _validator(v: str) -> bool | str:
+        if not v.strip() and default:
+            return True
+        if prompt.required and not v.strip():
+            needed = ", ".join(prompt.workloads) or "selected workloads"
+            return f"{prompt.name} is required by {needed}."
+        return True
+
+    existing_hint = ""
+    if default:
+        action = "press Enter to use existing"
+        if not prompt.required:
+            action += ", or type 'clear' to remove"
+        existing_hint = f" ({action})"
+
+    val = ui.prompt_text(
+        f"Enter {prompt.name}{existing_hint}:",
+        default="",
+        validate=_validator,
+    )
+    if val is None:
+        return None
+    val = val.strip()
+    if not val and default:
+        val = default
+    elif not prompt.required and val.lower() in ("none", "clear", "unset"):
+        val = ""
+
+    if not val and not prompt.required:
+        ui.log(f"⚠ No {prompt.name} provided - workloads requiring it will fail.\n", level="warning")
+    return val
+
+
 def prompt_environment_variables(
-    ui: UIInterface, defaults: Optional[Dict[str, str]] = None, express_mode: bool = False
+    ui: UIInterface,
+    defaults: Optional[Dict[str, str]] = None,
+    express_mode: bool = False,
+    prompts: Optional[List[EnvironmentPrompt]] = None,
 ) -> Optional[Dict[str, str]]:
     """Prompt the user for environment variables.
 
-    Currently prompts for HF_TOKEN, but designed to be easily expandable
-    for additional environment variables in the future.
+    Prompts for the supplied environment-variable declarations. Saved values from
+    system config are preserved.
 
     Args:
         ui: UI interface for user interaction
         defaults: Default environment variables from system config (if available)
         express_mode: Whether this is being called from express mode
+        prompts: EnvironmentPrompt declarations from the selected workloads
 
     Returns:
         Dict[str, str]: Dictionary containing the environment variables, or None if cancelled
     """
-    # In express mode, if we have HF_TOKEN in defaults, use it without prompting
-    if express_mode and defaults and 'HF_TOKEN' in defaults and defaults['HF_TOKEN']:
-        ui.log("Using saved HF_TOKEN from system configuration.")
-        return {'HF_TOKEN': defaults['HF_TOKEN']}
+    env_vars = dict(defaults or {})
+    prompts = prompts or []
+
+    # In express mode: prompt only if a required variable has no saved value
+    if express_mode:
+        for prompt in prompts:
+            if value := _existing_value(env_vars, prompt.name):
+                env_vars[prompt.name] = value
+        missing = [p for p in prompts if p.required and not (env_vars.get(p.name) or "").strip()]
+        if not missing:
+            return env_vars
+        for prompt in missing:
+            val = _prompt_variable(ui, prompt, default="")
+            if val is None:
+                return None
+            env_vars[prompt.name] = val
+        return env_vars
 
     ui.log("\nEnvironment Variables")
     ui.log("--------------------")
     ui.log("")
 
-    env_vars = {}
-
-    # HF_TOKEN validation function - now optional
-    def validate_hf_token(token: str) -> bool | str:
-        if not token:
-            return True  # Allow empty token
-        if not token.startswith('hf_'):
-            return "HF_TOKEN must start with 'hf_' if provided."
-        return True
-
-    # Determine default HF_TOKEN (prefer saved config over environment)
-    default_hf_token = ""
-    source_message = ""
-
-    if defaults and 'HF_TOKEN' in defaults and defaults['HF_TOKEN']:
-        default_hf_token = defaults['HF_TOKEN']
-        source_message = f"Found saved HF_TOKEN: {default_hf_token[:10]}..."
-    else:
-        env_hf_token = os.environ.get('HF_TOKEN', '')
-        if env_hf_token:
-            default_hf_token = env_hf_token
-            source_message = f"Found existing HF_TOKEN in environment: {env_hf_token[:10]}..."
-
-    if source_message:
-        # Token found - provide brief context
-        ui.log("=" * 70)
-        ui.log("Hugging Face Token (HF_TOKEN)")
-        ui.log("=" * 70)
-        ui.log("")
-        ui.log("Most workloads require a Hugging Face token to download models and datasets.")
-        ui.log("")
-        ui.log(source_message)
-        ui.log("Press Enter to use this token, or enter a new one below.")
-        ui.log("")
-    else:
-        # No existing token - make it clear this is important
-        ui.log("=" * 70)
-        ui.log("Hugging Face Token (HF_TOKEN)")
-        ui.log("=" * 70)
-        ui.log("")
-        ui.log("Most workloads require a Hugging Face token to download models and datasets.")
-        ui.log("")
-        ui.log("ACTION REQUIRED:")
-        ui.log("  1. Get your token: https://huggingface.co/settings/tokens")
-        ui.log("  2. Enter it below")
-        ui.log("")
-        ui.log("Skip only if you know your workloads don't require Hugging Face access.", level='warning')
-        ui.log("")
-
-    hf_token = ui.prompt_text(
-        f"Enter HF_TOKEN{' (press Enter to use existing)' if default_hf_token else ''}:",
-        default=default_hf_token,
-        validate=validate_hf_token,
-    )
-
-    if hf_token is None:  # User cancelled
-        return None
-
-    if hf_token:
-        env_vars['HF_TOKEN'] = hf_token
-        ui.log("✓ HF_TOKEN configured.", level='success')
-    elif default_hf_token:
-        env_vars['HF_TOKEN'] = default_hf_token
-        ui.log("✓ Using existing HF_TOKEN.", level='success')
-    else:
-        ui.log("⚠ No HF_TOKEN provided - workloads requiring Hugging Face will fail.", level='warning')
+    for prompt in prompts:
+        default_val = _existing_value(env_vars, prompt.name)
+        val = _prompt_variable(ui, prompt, default=default_val)
+        if val is None:
+            return None
+        if val:
+            env_vars[prompt.name] = val
+        elif not prompt.required:
+            env_vars.pop(prompt.name, None)
+            os.environ.pop(prompt.name, None)
 
     return env_vars

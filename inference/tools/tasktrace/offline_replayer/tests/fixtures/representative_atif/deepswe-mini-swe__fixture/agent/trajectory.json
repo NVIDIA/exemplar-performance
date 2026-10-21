@@ -1,0 +1,98 @@
+{
+  "schema_version": "ATIF-v1.2",
+  "session_id": "deepswe-representative-fixture",
+  "agent": {
+    "name": "mini-swe-agent",
+    "version": "2.3.0",
+    "model_name": "fixture",
+    "extra": {
+      "original_format": "mini-swe-agent-1.1"
+    }
+  },
+  "fixture_provenance": {
+    "dataset": "DeepSWE",
+    "curation": "Hermetic commands preserving observed mini-swe ATIF-v1.2 tool and result shapes."
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-06-03T13:08:43.367373+00:00",
+      "tool_calls": [
+        {
+          "tool_call_id": "deep-success",
+          "function_name": "bash",
+          "arguments": {
+            "command": "printf 'deep-stdout\\n'; printf 'deep-stderr\\n' >&2"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "content": "{\"returncode\": 0, \"output\": \"deep-stdout\\ndeep-stderr\\n\"}"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-06-03T13:08:44.367373+00:00",
+      "tool_calls": [
+        {
+          "tool_call_id": "deep-posix-shell",
+          "function_name": "bash",
+          "arguments": {
+            "command": "echo <(true)"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "content": "{\"returncode\": 2, \"output\": \"shell syntax error\"}"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-06-03T13:08:45.367373+00:00",
+      "tool_calls": [
+        {
+          "tool_call_id": "deep-recorded-failure",
+          "function_name": "bash",
+          "arguments": {
+            "command": "printf 'source-failure\\n' >&2; exit 7"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "content": "{\"returncode\": 7, \"output\": \"source-failure\\n\"}"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-06-03T13:08:46.367373+00:00",
+      "tool_calls": [
+        {
+          "tool_call_id": "deep-not-executed",
+          "function_name": "bash",
+          "arguments": {
+            "command": "printf should-not-run > skipped.txt"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "content": "{\"returncode\": -1, \"output\": \"\", \"exception_info\": \"action was not executed\"}"
+          }
+        ]
+      }
+    }
+  ]
+}

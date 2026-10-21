@@ -8,22 +8,11 @@ description = "Cross-package contract for LLMB capability providers and consumer
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-authors = [
-    { name = "Ehud Kaldor", email = "ekaldor@nvidia.com" }
-]
 requires-python = ">=3.11,<3.16"
 # Stdlib only by design: this package is the contract every provider /
 # consumer in the LLMB ecosystem will install. Adding runtime deps here
 # would inflate the install footprint of all of them.
 dependencies = []
-
-# Nothing in this package's dependencies (or dev group) is private, so
-# this index is only ever used explicitly, e.g. by `uv publish --index nv`.
-[[tool.uv.index]]
-name = "nv"
-url = "https://urm.nvidia.com/artifactory/api/pypi/nv-shared-pypi-local/simple"
-publish-url = "https://urm.nvidia.com/artifactory/api/pypi/nv-shared-pypi-local"
-explicit = true
 
 [build-system]
 requires = ["uv_build>=0.9.5,<0.10.0"]

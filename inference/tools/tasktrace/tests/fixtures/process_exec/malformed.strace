@@ -1,0 +1,9 @@
+500 1700000400.000000000 execve("/bin/bash", ["bash"], 0x1) = 0
+500 1700000400.0000000001 chdir("/not-observed") = 0
+500 1700000400.100000000 <... clone resumed>) = 501
+500 1700000400.200000000 clone(child_stack=NULL, flags=SIGCHLD <unfinished ...>
+501 1700000400.300000000 execve("/bin/tool", ["tool", ...], 0x1) = 0
+this is not a pid-prefixed strace line
+501 1700000400.400000000 +++ exited with 1 +++
+500 1700000400.500000000 chdir("/left-open" <unfinished ...>
+500 1700000400.600000000 +++ exited with 0 +++

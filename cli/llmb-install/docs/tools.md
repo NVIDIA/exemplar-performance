@@ -231,7 +231,7 @@ The tool resolution follows this priority:
 1. **Only specify when needed**: If container version works, don't add tools section
 2. **Use `default` carefully**: Only add if you want all unlisted GPUs to download a version
 3. **Version format**: Use exact version strings as they appear in nsys releases (e.g., "2025.1.1", "2025.5.1.120")
-4. **Check supported GPUs**: Use `h100`, `b200`, `gb200`, `gb300`, or `default`
+4. **Check supported GPUs**: Use `vr`, `gb300`, `gb200`, `b300`, `b200`, `h100`, or `default`
 
 ## Troubleshooting
 

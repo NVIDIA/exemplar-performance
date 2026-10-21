@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 
 """Installation configuration prompts for LLMB installer."""
@@ -86,19 +68,47 @@ def prompt_install_location(ui: UIInterface, default: Optional[str] = None) -> O
     return location
 
 
-def prompt_install_method(ui: UIInterface, default: Optional[str] = None, express_mode: bool = False) -> Optional[str]:
-    """Prompt the user to select the installation method (local or slurm).
+def prompt_cluster_type(ui: UIInterface, default_cluster_type: Optional[str] = None) -> Optional[str]:
+    """Prompt the user to choose between Slurm and Kubernetes as the cluster type.
 
     Args:
         ui: UI interface for user interaction
-        default: Default installation method from system config (if available)
-        express_mode: Whether this is being called from express mode (shows default messages)
+        default_cluster_type: Previously saved cluster type ('slurm' or 'kubernetes')
+            used to derive a sensible default.
 
     Returns:
-        Optional[str]: The selected installation method ('local' or 'slurm'), or None if the user cancels.
+        'slurm' or 'kubernetes', or None if cancelled.
     """
-    ui.log("\nInstallation Method")
-    ui.log("--------------------")
+    ui.log("\nCluster Type")
+    ui.log("------------")
+    ui.log(" 'slurm':      Jobs are submitted to a SLURM-managed cluster.")
+    ui.log(" 'kubernetes': Jobs run as Kubernetes WorkloadRun custom resources (nvcre/nvcrectl).")
+
+    default = default_cluster_type or 'slurm'
+    selected = ui.prompt_select("Select cluster type:", choices=['slurm', 'kubernetes'], default=default)
+    return selected
+
+
+def prompt_image_download_method(
+    ui: UIInterface,
+    default: Optional[str] = None,
+    express_mode: bool = False,
+    allow_kubernetes: bool = False,
+) -> Optional[str]:
+    """Prompt the user to select where image/dataset downloads run for Slurm installs.
+
+    Args:
+        ui: UI interface for user interaction
+        default: Default value from system config (if available)
+        express_mode: Whether this is being called from express mode (shows default messages)
+        allow_kubernetes: Unused; retained for call-site compatibility.
+
+    Returns:
+        Optional[str]: 'local' (download on the current node) or 'slurm' (submit as a
+        Slurm CPU-partition job), or None if the user cancels.
+    """
+    ui.log("\nImage Download Method")
+    ui.log("---------------------")
     ui.log(
         "Please select how you would like to perform longer running tasks like container image fetching and dataset downloads."
     )
@@ -133,8 +143,14 @@ def prompt_install_method(ui: UIInterface, default: Optional[str] = None, expres
     if enroot_available:
         options.append("local")
     options.append("slurm")  # SLURM is always available as an option
+    if allow_kubernetes:
+        options.append("kubernetes")
+        ui.log(
+            " 'kubernetes': Workloads run as nvcre WorkloadRun custom resources. No local "
+            "image/dataset/venv setup; assets are provisioned in-cluster."
+        )
 
-    if not enroot_available:
+    if not enroot_available and not allow_kubernetes:
         ui.log("\nNote: Enroot is not available on this system.")
         ui.log("Local installation is not available. Using SLURM method.")
         return "slurm"

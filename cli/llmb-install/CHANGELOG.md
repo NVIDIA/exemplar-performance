@@ -6,6 +6,99 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 This project uses [PEP 440](https://www.python.org/dev/peps/pep-0440/) versioning with semantic versioning semantics:
 **MAJOR.MINOR.PATCH** for feature parity with [SemVer](https://semver.org/).
 
+## [1.19.0] - 2026-10-19
+
+### Added
+
+- Kubernetes (nvcre) install support.
+
+### Changed
+
+- `install_method` is renamed `image_download_method` (`local` or `slurm`); the old playfile key is still accepted.
+
+## [1.18.2] - 2026-10-08
+
+### Fixed
+
+- Tokenizer metadata is no longer regenerated for repos that already ship `tokenizer_config.json` (e.g. Qwen3). The rewrite into the Hugging Face cache failed with `Permission denied` on huggingface-hub 1.32 and later, which stores Xet-backed blobs read-only.
+
+## [1.18.1] - 2026-10-08
+
+### Removed
+
+- An unused NSys download source.
+
+## [1.18.0] - 2026-09-28
+
+### Added
+
+- `download_file` now streams via `urlopen` for all downloads, with a `verify` keyword to disable TLS certificate verification for servers whose CA is not in the default trust store, and raises an error when a connection is cut before `Content-Length` is reached (previously `urlretrieve`'s `ContentTooShortError` behaviour) so truncated downloads can no longer be cached as complete.
+
+### Changed
+
+- Download progress (nsys, CUPTI, uv) is shown as a rich progress bar with size, transfer speed and ETA, replacing the `Progress: N%` line. When stdout is not a terminal (CI, log files) only the final state is printed instead of repeated `\r` updates. Downloads read in 1 MiB chunks (was 8 KiB).
+
+## [1.17.1] - 2026-09-28
+
+### Changed
+
+- A failed install reports its error once, at the end: the final `Error:` line now includes the failed command's captured output (e.g. uv's actual message), instead of the stderr being printed mid-install and the error repeated after the summary. The misleading "You may need to start a fresh installation." hint after a failed resume/edit is gone; re-running the installer resumes.
+
+## [1.17.0] - 2026-09-28
+
+### Added
+
+- Vera Rubin (`vr`) GPU type: NVL72, 4 GPUs per node, aarch64. GPU pickers and tables use the explicit newest-first `GPU_DISPLAY_ORDER` (`vr`, `gb300`, `gb200`, `b300`, `b200`, `h100`) instead of parsing a `<prefix><digits>` name.
+
+## [1.16.0] - 2026-09-22
+
+### Added
+
+- The installer records the cluster's NVLink domain in `cluster_config.yaml` (`nvl_domain`, plus raw Slurm `nvl_block_sizes` when block topology is present). H100/B200/B300 use NVL8; GB200/GB300 are detected from `scontrol show topology`, with prompts for unexpected or unavailable topology. Headless playfiles may set `nvl_domain` and optionally `nvl_block_sizes`.
+
+## [1.15.0] - 2026-09-17
+
+### Added
+
+- Setup tasks receive `LLMB_NODE_ARCHITECTURE` (the compute nodes' CPU architecture, `x86_64` or `aarch64`, from the cluster config) and `LLMB_HOST_ARCHITECTURE` (the installer's node), so a setup script can build binaries for the compute nodes' CPU architecture on the install host and request an allocation only when the two differ.
+- Recipes can declare environment variables under `environment_prompts` (`name`, `description`, `required`). The installer prompts for them, stores them with the other environment variables (system config, playfiles, `cluster_config.yaml`), prompts in express mode only when a required value is missing, carries saved values forward across later installs like `HF_TOKEN`, and rejects headless playfiles that omit a required one.
+
+## [1.14.1] - 2026-09-14
+
+### Changed
+
+- Playfile/interactive `environment_vars` are now applied to the installer's own environment once at the start of the install (as if exported in the shell) instead of being overlaid on each setup-task/dependency subprocess, so downloads, venv creation and all subprocesses see them consistently.
+- Conflicting uv python preference variables (more than one of `UV_MANAGED_PYTHON` / `UV_NO_MANAGED_PYTHON` / `UV_PYTHON_PREFERENCE`, e.g. shell vs playfile) now fail early with an error instead of being silently resolved; `install.sh` no longer exports `UV_MANAGED_PYTHON=1` and passes `--managed-python` to its own venv creation only when no preference variable is set.
+
+## [1.14.0] - 2026-09-11
+
+### Changed
+
+- Managed python is now selected through uv's own environment variables instead of per-command flags. The installer sets `UV_MANAGED_PYTHON=1` unless `UV_MANAGED_PYTHON`, `UV_NO_MANAGED_PYTHON` or `UV_PYTHON_PREFERENCE` is already set, so venv creation, setup tasks and `uvx` all share one interpreter preference.
+
+### Deprecated
+
+- `LLMB_DISABLE_MANAGED_PYTHON`. It is still honoured (mapped to `UV_NO_MANAGED_PYTHON=1`) with a warning; set `UV_NO_MANAGED_PYTHON=1` instead.
+
+## [1.13.6] - 2026-09-10
+
+### Fixed
+
+- Cache Hugging Face chat-template files so tokenizer loading works in offline workloads.
+
+## [1.13.5] - 2026-08-19
+
+### Changed
+
+- Bump minimum Python version to 3.11; Python 3.10 reaches end-of-life in October 2026.
+- Add Python 3.14 to the test matrix.
+
+## [1.13.4] - 2026-08-13
+
+### Removed
+
+- Removed support for the deprecated `downloads.hf_tokenizers` recipe key.
+
 ## [1.13.3] - 2026-07-09
 
 ### Changed

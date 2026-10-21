@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 
 # Setup task 1/4 (job_type:srun, requires_gpus:true).
 #
@@ -35,8 +35,7 @@
 set -eu -o pipefail
 
 if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 2))); then
-    printf "Unsupported %s version: %s\n" "${BASH}" "${BASH_VERSION}" >&2
-    echo "Requires Bash 4.2 or greater." >&2
+    printf 'Requires Bash 4.2 or greater (running: %s).\n' "${BASH_VERSION:-not Bash}" >&2
     exit 1
 fi
 

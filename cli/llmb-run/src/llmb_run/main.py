@@ -1,24 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
+import importlib.util
 import logging
 import os
 import pathlib
@@ -31,20 +14,30 @@ import typer
 import yaml
 
 from llmb_run.archive import run_archive
-from llmb_run.config_manager import ClusterConfig, get_cluster_config
+from llmb_run.config_manager import ClusterConfig, ExecutionTarget, get_cluster_config
 from llmb_run.env_args import parse_cli_env_args, parse_cli_mbridge_args
 from llmb_run.exemplar import generate_exemplar_tasks
 from llmb_run.job_history import (
     format_job_details,
     format_jobs_table,
     get_job,
+    is_terminal_state,
     list_jobs,
+    nvcre_pod_log_candidates,
+    nvcre_rank0_pod,
     rebuild_history,
     refresh_non_terminal_jobs,
     refresh_requested_jobs,
 )
 from llmb_run.job_launcher import run_tests
-from llmb_run.job_logs import active_job_log, find_configured_sbatch_logs, find_job_logs, follow_tail, read_tail
+from llmb_run.job_logs import (
+    active_job_log,
+    find_configured_sbatch_logs,
+    find_job_logs,
+    find_srt_slurm_logs,
+    follow_tail,
+    read_tail,
+)
 from llmb_run.metadata_utils import parse_workload_name
 from llmb_run.slurm_args import build_cli_slurm_args, validate_no_additional_slurm_params_conflict
 from llmb_run.task_generation import TaskGenerationRequest, ValidationError, generate_tasks
@@ -94,6 +87,48 @@ logger.addHandler(console_handler)
 EXIT_SUCCESS = 0
 EXIT_VALIDATION_ERROR = 1
 EXIT_SYSTEM_ERROR = 2
+
+
+def _internal_extensions_available() -> bool:
+    """Whether `llmb_run.internal` ships in this install.
+
+    Decided once at CLI-definition time so external builds — which do not ship
+    `internal/` — never see `--pp-process`/`--pp-upload`/`--upload-env` in `--help`
+    for a capability they do not have. The flags still parse if passed anyway; they
+    just have nothing to act on, the same as any other internal-only capability.
+    """
+    return importlib.util.find_spec("llmb_run.internal") is not None
+
+
+_INTERNAL_PP_HELP_PANEL = 'Post-processing (internal)'
+PpProcessOption = Annotated[
+    bool,
+    typer.Option(
+        '--pp-process',
+        help='Run post-processing (results parsing and upload) after each job. Implies --pp-upload.',
+        rich_help_panel=_INTERNAL_PP_HELP_PANEL,
+        hidden=not _internal_extensions_available(),
+    ),
+]
+PpUploadOption = Annotated[
+    bool,
+    typer.Option(
+        '--pp-upload',
+        help='Upload each job’s results without running results parsing first.',
+        rich_help_panel=_INTERNAL_PP_HELP_PANEL,
+        hidden=not _internal_extensions_available(),
+    ),
+]
+UploadEnvOption = Annotated[
+    Optional[str],
+    typer.Option(
+        '--upload-env',
+        help="LLMB API/Vault environment for the vault_ssa upload backend (default: 'stg'). "
+        "Overrides 'upload.env' in cluster_config.yaml.",
+        rich_help_panel=_INTERNAL_PP_HELP_PANEL,
+        hidden=not _internal_extensions_available(),
+    ),
+]
 
 
 # Create the Typer app
@@ -364,7 +399,7 @@ def _jobs_list_impl(ctx: typer.Context) -> None:
     _, refresh_error = refresh_non_terminal_jobs(app_ctx.cluster_config)
     rows = list_jobs(app_ctx.cluster_config)
     typer.echo(format_jobs_table(rows, _display_workloads(app_ctx)))
-    if refresh_error:
+    if refresh_error and app_ctx.cluster_config.execution_target != ExecutionTarget.KUBERNETES:
         # Print after the table so users notice it even when the table scrolls.
         logger.warning(f"sacct unavailable; status may be stale ({refresh_error}).")
 
@@ -391,20 +426,135 @@ def jobs_list(ctx: typer.Context):
 
 
 @jobs_app.command(name="show")
-def jobs_show(ctx: typer.Context, job_id: Annotated[int, typer.Argument(help='Slurm job ID to show.')]):
-    """Show details for a single job, including its log directory."""
+def jobs_show(ctx: typer.Context, job_id: Annotated[int, typer.Argument(help='Job ID to show.')]):
+    """Show details for a single job, including its log directory.
+
+    For nvcre/Kubernetes jobs, also runs ``nvcrectl workloadrun report``
+    to display the full workload report.
+    """
+    import shutil as _shutil
+    import subprocess as _sp
+
     app_ctx = _ctx_app_context(ctx)
     _, refresh_error = refresh_non_terminal_jobs(app_ctx.cluster_config)
     row = _get_job_or_exit(app_ctx, job_id)
     typer.echo(format_job_details(row, _display_workloads(app_ctx)))
-    if refresh_error:
-        logger.warning(f"sacct unavailable; status may be stale ({refresh_error}).")
+    if refresh_error and app_ctx.cluster_config.execution_target != ExecutionTarget.KUBERNETES:
+        logger.warning(f"Status refresh unavailable; status may be stale ({refresh_error}).")
+
+    # For nvcre jobs, append the nvcrectl workloadrun report output.
+    workloadrun_name = row["workloadrun_name"] if "workloadrun_name" in row.keys() else None
+    namespace = row["namespace"] if "namespace" in row.keys() else None
+    if workloadrun_name and namespace:
+        k8s = app_ctx.cluster_config.extras.get('kubernetes') or {}
+        nvcrectl = k8s.get('nvcrectl_bin', 'nvcrectl')
+        if _shutil.which(nvcrectl):
+            try:
+                result = _sp.run(
+                    [nvcrectl, 'workloadrun', 'report', workloadrun_name, '-n', namespace],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except _sp.TimeoutExpired:
+                logger.warning(f"nvcrectl workloadrun report for {workloadrun_name} timed out; skipping")
+                return
+            if result.returncode == 0:
+                typer.echo(f"\n{'─' * 60}")
+                typer.echo(f"nvcrectl workloadrun report ({workloadrun_name})")
+                typer.echo('─' * 60)
+                typer.echo(result.stdout, nl=False)
+        else:
+            logger.warning("nvcrectl not found on PATH; skipping workloadrun report")
+
+
+def _jobs_log_nvcre(app_ctx, row, *, tail_lines, follow, print_path, list_files):
+    """Pod logs for nvcre/Kubernetes jobs.
+
+    While the job runs, its logs exist only on the cluster: tail or stream the
+    rank-0 pod straight through kubectl. Once the job reaches a terminal state
+    the refresh pulls every pod's full log into <log_dir>/pod_logs/, so after
+    that the local snapshot is used. A stale-looking row is refreshed first,
+    which also snapshots the logs if the job just finished.
+    """
+    import subprocess as _sp
+
+    config = app_ctx.cluster_config
+    k8s = config.extras.get('kubernetes') or {}
+    namespace = row["namespace"] if "namespace" in row.keys() else None
+    namespace = namespace or k8s.get('namespace', 'default')
+    workloadrun_name = row["workloadrun_name"]
+    job_id = int(row["job_id"])
+
+    if not is_terminal_state(row["slurm_state"]):
+        try:
+            refresh_requested_jobs(config, [job_id])
+        except Exception as e:
+            logger.debug(f"nvcre: status refresh failed for job {job_id}: {e}")
+        row = get_job(config, job_id) or row
+
+    if not is_terminal_state(row["slurm_state"]):
+        # Still running: no local log exists yet — stream from the cluster.
+        if print_path or list_files:
+            logger.error(
+                f"Job {job_id} is still running; pod logs are pulled locally once it finishes. "
+                f"Stream them live with `llmb-run jobs log {job_id}` (add --follow to keep streaming)."
+            )
+            raise typer.Exit(code=EXIT_VALIDATION_ERROR)
+        # Show something immediately — the pod lookup and fetch can each take a while.
+        typer.echo(f"Job {job_id} is still running; fetching live logs from the cluster...")
+        pod = nvcre_rank0_pod(namespace, workloadrun_name)
+        if not pod:
+            logger.error(
+                f"No rank-0 pod found yet for WorkloadRun '{workloadrun_name}' (the job may still be pending)."
+            )
+            raise typer.Exit(code=EXIT_SYSTEM_ERROR)
+        cmd = ['kubectl', 'logs', pod, '-n', namespace, '--tail', str(tail_lines)]
+        if follow:
+            # Stream live: kubectl inherits the terminal until the user stops it.
+            cmd.append('-f')
+            raise typer.Exit(code=_sp.run(cmd).returncode)
+        try:
+            result = _sp.run(cmd, capture_output=True, text=True, timeout=60)
+        except _sp.TimeoutExpired:
+            logger.error(f"kubectl logs for pod '{pod}' timed out.")
+            raise typer.Exit(code=EXIT_SYSTEM_ERROR) from None
+        if result.returncode != 0:
+            logger.error(result.stderr.strip() or f"kubectl logs failed for pod '{pod}'.")
+            raise typer.Exit(code=EXIT_SYSTEM_ERROR)
+        typer.echo(result.stdout, nl=False)
+        return
+
+    log_dir = row["log_dir"]
+    candidates = nvcre_pod_log_candidates(log_dir) if log_dir else []
+    if list_files:
+        if not candidates:
+            logger.info(f"No pod log files found for job {job_id} in {log_dir}.")
+            return
+        for index, path in enumerate(candidates):
+            suffix = " (active)" if index == 0 else ""
+            typer.echo(f"{path}{suffix}")
+        return
+    if not candidates:
+        logger.error(f"No pod log files found for job {job_id} in {log_dir}.")
+        raise typer.Exit(code=EXIT_VALIDATION_ERROR)
+    active = candidates[0]
+    if print_path:
+        typer.echo(active)
+        return
+    try:
+        if follow:
+            raise typer.Exit(code=follow_tail(active, tail_lines))
+        typer.echo(read_tail(active, tail_lines))
+    except OSError as e:
+        logger.error(f"Unable to read pod log {active}: {e}")
+        raise typer.Exit(code=EXIT_SYSTEM_ERROR) from e
 
 
 @jobs_app.command(name="log")
 def jobs_log(
     ctx: typer.Context,
-    job_id: Annotated[int, typer.Argument(help='Slurm job ID to inspect.')],
+    job_id: Annotated[int, typer.Argument(help='Job ID to inspect.')],
     tail_lines: Annotated[int, typer.Option('--tail', min=1, help='Number of lines to show.')] = 200,
     follow: Annotated[
         bool, typer.Option('-f', '--follow', help='Follow the active log file after printing the initial tail.')
@@ -438,11 +588,25 @@ def jobs_log(
         typer.echo(log_dir)
         return
 
+    workloadrun_name = row["workloadrun_name"] if "workloadrun_name" in row.keys() else None
+    if workloadrun_name:
+        _jobs_log_nvcre(
+            app_ctx,
+            row,
+            tail_lines=tail_lines,
+            follow=follow,
+            print_path=print_path,
+            list_files=list_files,
+        )
+        return
+
     try:
         if launcher_type in {'nemo', 'megatron_bridge'}:
             logs = find_job_logs(log_dir, job_id)
         elif launcher_type == 'configured_sbatch':
             logs = find_configured_sbatch_logs(log_dir, job_id)
+        elif launcher_type == 'srt_slurm':
+            logs = find_srt_slurm_logs(log_dir, job_id)
         else:
             logger.error(f"Job {job_id} has unsupported launcher type '{launcher_type}'.")
             raise typer.Exit(code=EXIT_VALIDATION_ERROR)
@@ -538,7 +702,15 @@ def _warn_and_clear_unsupported_mbridge_args(tasks: list[WorkloadTask], workload
         logger.warning(f"Ignoring --mbridge-arg for non-Megatron-Bridge workloads: {names}")
 
 
-def _submit_impl(ctx: typer.Context, request: TaskGenerationRequest, dryrun: bool, mode_name: str = "submit"):
+def _submit_impl(
+    ctx: typer.Context,
+    request: TaskGenerationRequest,
+    dryrun: bool,
+    mode_name: str = "submit",
+    pp_process: bool = False,
+    pp_upload: bool = False,
+    upload_env: Optional[str] = None,
+):
     """Shared implementation for all submission commands."""
     app_ctx: AppContext = ctx.obj
 
@@ -594,7 +766,14 @@ def _submit_impl(ctx: typer.Context, request: TaskGenerationRequest, dryrun: boo
         if dryrun:
             logger.info("Dry run enabled. Jobs will not be submitted.")
         else:
-            run_tests(app_ctx.cluster_config, validated_tasks, app_ctx.workloads)
+            run_tests(
+                app_ctx.cluster_config,
+                validated_tasks,
+                app_ctx.workloads,
+                pp_process=pp_process,
+                pp_upload=pp_upload,
+                upload_env=upload_env,
+            )
 
     except ValueError as e:
         logger.error(str(e))
@@ -602,7 +781,8 @@ def _submit_impl(ctx: typer.Context, request: TaskGenerationRequest, dryrun: boo
     except typer.Exit:
         raise
     except Exception as e:
-        logger.error(f"Submission error: {e}")
+        # Name the exception type: str(KeyError(0)) is just "0", which says nothing about the cause.
+        logger.error(f"Submission error: {type(e).__name__}: {e}")
         raise typer.Exit(code=EXIT_SYSTEM_ERROR) from e
 
 
@@ -712,6 +892,9 @@ def submit(
             rich_help_panel='Slurm',
         ),
     ] = None,
+    pp_process: PpProcessOption = False,
+    pp_upload: PpUploadOption = False,
+    upload_env: UploadEnvOption = None,
 ):
     """
     Submit jobs using a unified interface. Supports explicit, discovery, and file-based modes.
@@ -759,7 +942,9 @@ def submit(
         mbridge_args=mbridge_args,
     )
 
-    _submit_impl(ctx, request, dryrun, mode_name="submit")
+    _submit_impl(
+        ctx, request, dryrun, mode_name="submit", pp_process=pp_process, pp_upload=pp_upload, upload_env=upload_env
+    )
 
 
 @app.command(name="list")
@@ -804,6 +989,9 @@ def exemplar(
             help='Number of repeats for each test configuration. If not provided, uses exemplar.yaml config.repeats (fallback: 1).',
         ),
     ] = None,
+    pp_process: PpProcessOption = False,
+    pp_upload: PpUploadOption = False,
+    upload_env: UploadEnvOption = None,
 ):
     """
     Submit exemplar certification jobs from $LLMB_INSTALL/llmb_repo/exemplar.yaml.
@@ -842,7 +1030,14 @@ def exemplar(
         if dry_run:
             logger.info("Dry run enabled. Jobs will not be submitted.")
         else:
-            run_tests(app_ctx.cluster_config, validated_tasks, app_ctx.workloads)
+            run_tests(
+                app_ctx.cluster_config,
+                validated_tasks,
+                app_ctx.workloads,
+                pp_process=pp_process,
+                pp_upload=pp_upload,
+                upload_env=upload_env,
+            )
 
     except ValidationError as e:
         logger.error(str(e))

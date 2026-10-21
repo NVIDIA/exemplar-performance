@@ -89,13 +89,13 @@ slurm:
   cpu_partition: cpu
   gpu_partition_gres: 8            # GPUs per node in gpu_partition
   cpu_partition_gres: null
-gpu_type: h100                     # 'h100', 'b200', 'gb200', 'gb300'
+gpu_type: h100                     # 'vr', 'gb300', 'gb200', 'b300', 'b200', 'h100'
 node_architecture: x86_64
 install_method: slurm              # 'local' or 'slurm'
 selected_workloads:
-  - pretrain_nemotron-h
+  - pretrain_deepseek-v3
   - pretrain_llama3.1
-environment_vars:                  # Optional environment variables
+environment_vars:                  # Optional; exported for the whole install (as if set in your shell) and saved to cluster_config.yaml for llmb-run
   HF_TOKEN: hf_xxxxx
 ```
 
@@ -137,7 +137,7 @@ llmb-install express /work/llmb --workloads all
 llmb-install express --list-workloads
 
 # Specific workloads (comma-separated, no spaces)
-llmb-install express /work/llmb --workloads pretrain_nemotron-h,pretrain_llama3.1
+llmb-install express /work/llmb --workloads pretrain_deepseek-v3,pretrain_llama3.1
 
 # Exemplar Cloud (all pretrain workloads)
 llmb-install express /work/llmb --exemplar
@@ -156,7 +156,7 @@ llmb-install express /work/llmb --exemplar
 Express mode supports three workload selection methods:
 
 - **`--workloads all`**: Install all available workloads for your GPU type
-- **`--workloads <list>`**: Install specific workloads (comma-separated, e.g., `pretrain_nemotron-h,pretrain_llama3.1`)
+- **`--workloads <list>`**: Install specific workloads (comma-separated, e.g., `pretrain_deepseek-v3,pretrain_llama3.1`)
 - **`--exemplar`**: Install only 'pretrain' reference workloads (Exemplar Cloud suite)
 
 ### Typical Workflow
@@ -165,7 +165,7 @@ Express mode supports three workload selection methods:
 2. **Subsequent installations** (express):
    - All workloads: `llmb-install express /new/path --workloads all`
    - Exemplar Cloud only: `llmb-install express /new/path --exemplar`
-   - Specific workloads: `llmb-install express /new/path --workloads pretrain_nemotron-h,pretrain_llama3.1`
+   - Specific workloads: `llmb-install express /new/path --workloads pretrain_deepseek-v3,pretrain_llama3.1`
 
 ## Complete Examples
 
@@ -193,7 +193,7 @@ llmb-install  # Creates ~/.config/llmb/system_config.yaml
 
 # Subsequent: Quick repeat installations
 llmb-install express /work/project1 --workloads all
-llmb-install express /work/project2 --workloads pretrain_nemotron-h,pretrain_llama3.1
+llmb-install express /work/project2 --workloads pretrain_deepseek-v3,pretrain_llama3.1
 llmb-install express /work/exemplar --exemplar  # Pretrain workloads only
 llmb-install express /work/test --workloads test_recipe
 ```
@@ -202,7 +202,7 @@ llmb-install express /work/test --workloads test_recipe
 
 ```bash
 # Verbose, shared images, dev mode
-llmb-install -v -i /shared/containers -d express /work/dev --workloads pretrain_nemotron-h
+llmb-install -v -i /shared/containers -d express /work/dev --workloads pretrain_deepseek-v3
 
 # Express with Exemplar Cloud
 llmb-install -v -i /shared/containers express /work/llmb --exemplar

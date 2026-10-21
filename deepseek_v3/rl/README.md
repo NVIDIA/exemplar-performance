@@ -56,13 +56,13 @@ No special HuggingFace model gate is required beyond basic authentication.
 
 ## Slurm
 
-We reference a number of Slurm commands and parameters in this document. A brief summary is included below. It's important to note these are a guide and might not be applicable to all environments. Please consult with your system administrator for the parameters that are specific to your system.
+This document references several Slurm commands and parameters. A brief summary is included below. Note that these are guidelines and might not apply to all environments. Consult your system administrator for the parameters specific to your system.
 
 **Common parameters:**
 
 - `SBATCH_PARTITION` or `-p` - Partition (or queue) to use.
-- `SBATCH_ACCOUNT` or `-A` - Slurm account to associate with your job, different from your user. Meant for accounting purposes.
-- `SBATCH_GPUS_PER_NODE` or `--gres=gpu:<num gpus>` - If your cluster is configured with GRES this should be set to all GPUs in a node. Ignore if not configured.
+- `SBATCH_ACCOUNT` or `-A` - Slurm account to associate with your job, different from your user. Used for accounting purposes.
+- `SBATCH_GPUS_PER_NODE` or `--gres=gpu:<num gpus>` - If your cluster is configured with GRES, this should be set to all GPUs in a node. Ignore if not configured.
   - Encountering errors such as 'GPUs not found' or 'Cannot submit to this partition without GPU resources' means this setting is required.
 
 These parameters can be set either by exporting the environment variable or using the corresponding `sbatch` flag.
@@ -92,9 +92,21 @@ Prepared assets are stored under the workload directory:
 
 Once the environment has been prepared, run the benchmark using the launch script. The training runs for `MAX_STEPS` steps (default: 10) and then stops. Three Slurm jobs are submitted in a dependency chain. Log files and results are stored under `${LLMB_WORKLOAD}/experiments/` (see [Output Locations](#output-locations)).
 
+## Using llmb-run (Recommended)
+
+The easiest way to run benchmarks is using the llmb-run launcher tool. This method handles configuration automatically and provides a streamlined interface.
+
+```bash
+# Navigate to your installation directory
+cd $LLMB_INSTALL
+
+# Run a benchmark with llmb-run
+llmb-run submit -w rl_deepseek-v3 -s 671b --dtype bf16 --scale 256
+```
+
 ## Direct Method
 
-Run RL training directly using the launch script from the installed recipe directory.
+Alternatively, you can run training directly using the launch script. This method provides more control over individual parameters and environment variables.
 
 **Important:**
 
@@ -104,25 +116,30 @@ Run RL training directly using the launch script from the installed recipe direc
 ### Command Template
 
 ```shell
-LLMB_SKIP_PP=1 llmb-run submit -w rl_deepseek-v3 -s 671b --dtype bf16 --scale 256
+JOB_TOTAL_GPUS=<number> GPU_TYPE=<type> ./launch.sh
 ```
 
 ### Environment Variables
 
 **Required:**
 
-- `HF_TOKEN`: HuggingFace access token
-- `SBATCH_ACCOUNT`: Slurm account for job submission
-- `SBATCH_PARTITION`: Slurm partition to submit jobs to
+- `JOB_TOTAL_GPUS`: Number of GPUs to use
+- `GPU_TYPE`: Type of GPU hardware
+  - `gb200` - NVIDIA GB200 GPUs
 
 **Optional:**
 
-- `JOB_TOTAL_GPUS`: Total number of GPUs (default: `256`)
-- `GPU_TYPE`: GPU hardware type (default: `gb200`)
-- `TIME_LIMIT`: Slurm time limit for the training job (default: `01:00:00`)
 - `MAX_STEPS`: Number of GRPO training steps (default: `10`)
 - `ASYNC_MODE`: Enable async RL training mode (default: `true`)
 - `WANDB_API_KEY`: If set, enables Weights & Biases logging
+
+### Example Commands
+
+Train DeepSeek-V3 on 256 GB200 GPUs:
+
+```shell
+JOB_TOTAL_GPUS=256 GPU_TYPE=gb200 ./launch.sh
+```
 
 # Output Locations
 

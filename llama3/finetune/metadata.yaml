@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # Setup
 general:
@@ -28,8 +10,12 @@ general:
   framework: megatron_bridge
 
 container:
-  images: 
-    - 'nvcr.io#nvidia/nemo:26.06.01'
+  images:
+    by_gpu:
+      default:
+        - 'nvcr.io#nvidia/nemo:26.08.01'
+      h100:
+        - 'nvcr.io#nvidia/nemo:26.06.01'
 
 downloads:
   huggingface:
@@ -45,12 +31,21 @@ downloads:
         name: squad
 
 repositories:
-  megatron_bridge:
-    url: "https://github.com/NVIDIA-NeMo/Megatron-Bridge.git"
-    commit: "b50da4c7404caa41793e74ac40d18798844c7b67"
-  nemo_run:
-    url: "https://github.com/NVIDIA-NeMo/Run.git"
-    commit: "211d4b7439c1b5ee401cfbaba1765454ed438ff5"
+  by_gpu:
+    default:
+      megatron_bridge:
+        url: "https://github.com/NVIDIA-NeMo/Megatron-Bridge.git"
+        commit: "24960ca5238ba5bbb7c10a9e0088f42c26222429"
+      nemo_run:
+        url: "https://github.com/NVIDIA-NeMo/Run.git"
+        commit: "211d4b7439c1b5ee401cfbaba1765454ed438ff5"
+    h100:
+      megatron_bridge:
+        url: "https://github.com/NVIDIA-NeMo/Megatron-Bridge.git"
+        commit: "b50da4c7404caa41793e74ac40d18798844c7b67"
+      nemo_run:
+        url: "https://github.com/NVIDIA-NeMo/Run.git"
+        commit: "211d4b7439c1b5ee401cfbaba1765454ed438ff5"
 
 setup:
   venv_req: true
@@ -63,6 +58,8 @@ setup:
     pip:
       - package: nemo_run
         repo_key: nemo_run
+      # NeMo-Run imports leptonai.api.v1, which leptonai 0.47 removed.
+      - 'leptonai==0.27.3'
   tasks:
     - name: checkpoint_dataset_download
       cmd: './download_ckpt_dataset.sh'
@@ -71,7 +68,10 @@ setup:
 
 
 tools:
-  nsys: "2025.5.1.121-3638078"
+  nsys:
+    by_gpu:
+      default: "2026.5.1.161-3889610"
+      h100: "2025.5.1.121-3638078"
 
 # Run
 run:

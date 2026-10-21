@@ -22,3 +22,6 @@ cluster-profiles/.state/
 .selftest-tmp/
 # Executable shims used by offline tests on hosts where system /tmp is mounted noexec.
 .selftest-runtime/
+
+# stage-tasktrace.sh: local cross-compile root for the tasktrace binary (TASKTRACE_BUILD_ROOT)
+.tasktrace-build/

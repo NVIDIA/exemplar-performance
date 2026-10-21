@@ -1,35 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 
 """GPU detection and configuration utilities for LLMB installer."""
 
 import copy
-import re
 from typing import Any, Dict, List
 
+from llmb_install.config.models import ExecutionTarget, RunConfig
 from llmb_install.constants import (
     ARCHITECTURES,
     DEFAULT_ARCHITECTURE_BY_GPU,
-    GPU_PREFIX_PRIORITY,
+    GPU_DISPLAY_ORDER,
     SUPPORTED_GPU_TYPES,
 )
 
@@ -87,7 +69,7 @@ def _resolve_repositories_for_gpu(repos_field: Any, gpu_type: str) -> Dict[str, 
     for name, entry in selected.items():
         if not isinstance(entry, dict) or 'url' not in entry or 'commit' not in entry:
             raise ValueError(f"Invalid repository entry for '{name}' after GPU resolution")
-        out[name] = {'url': entry['url'], 'commit': entry['commit'], 'submodules': entry.get('submodules', False)}
+        out[name] = {**entry, 'submodules': entry.get('submodules', False)}
     return out
 
 
@@ -188,8 +170,15 @@ def get_supported_gpu_types(workloads: Dict[str, Dict[str, Any]]) -> set[str]:
     return gpu_types
 
 
-def filter_workloads_by_gpu_type(workloads: Dict[str, Dict[str, Any]], gpu_type: str) -> Dict[str, Dict[str, Any]]:
-    """Filter workloads to only include those that support the specified GPU type."""
+def filter_workloads_by_gpu_type(
+    workloads: Dict[str, Dict[str, Any]], gpu_type: str, execution_target: str = ExecutionTarget.SLURM
+) -> Dict[str, Dict[str, Any]]:
+    """Filter workloads to only include those that support the specified GPU type.
+
+    A workload must also declare ``execution_target`` in ``run.execution_targets``
+    (unset means slurm only). A workload whose launch script does not handle
+    CLUSTER_TYPE=kubernetes would fail as soon as it was launched.
+    """
     filtered_workloads = {}
 
     for key, workload_data in workloads.items():
@@ -197,80 +186,41 @@ def filter_workloads_by_gpu_type(workloads: Dict[str, Dict[str, Any]], gpu_type:
         gpu_configs = run_config.get('gpu_configs', {})
 
         # Only include workloads that have configuration for the selected GPU type
-        if gpu_type in gpu_configs:
+        # and whose launch script supports the cluster's execution target.
+        if gpu_type in gpu_configs and RunConfig.model_validate(run_config).supports(execution_target, gpu_type):
             filtered_workloads[key] = workload_data
 
     return filtered_workloads
 
 
-def _parse_gpu_type(gpu_type: str) -> tuple[str, int]:
-    """Parse GPU type into prefix and model number.
+def _gpu_sort_key(gpu_type: str) -> int:
+    """Generate sort key for GPU types from GPU_DISPLAY_ORDER.
 
-    Expected format: <alphabetic_prefix><numeric_model>
-    Examples: 'gb300' -> ('gb', 300), 'h100' -> ('h', 100)
-
-    Args:
-        gpu_type: GPU type string (e.g., 'gb300', 'h100')
-
-    Returns:
-        tuple[str, int]: (prefix, model_number)
-
-    Raises:
-        ValueError: If GPU type doesn't match expected format
-    """
-    match = re.match(r'^([a-z]+)(\d+)$', gpu_type.lower())
-    if not match:
-        raise ValueError(
-            f"GPU type '{gpu_type}' does not match expected format '<prefix><number>' "
-            f"(e.g., 'gb300', 'h100'). GPU types must consist of lowercase letters "
-            f"followed by digits with no other characters."
-        )
-    prefix, number_str = match.groups()
-    return prefix, int(number_str)
-
-
-def _gpu_sort_key(gpu_type: str) -> tuple[int, int]:
-    """Generate sort key for GPU types.
-
-    Sorts by prefix priority (lower priority number = higher precedence),
-    then by model number descending within the same prefix.
-
-    Example ordering with current priorities:
-        gb300 (priority=1, model=-300)
-        gb200 (priority=1, model=-200)
-        b300  (priority=2, model=-300)
-        b200  (priority=2, model=-200)
-        h100  (priority=3, model=-100)
+    Lower index = higher precedence (newest chips first).
 
     Args:
         gpu_type: GPU type string (e.g., 'gb300', 'h100')
 
     Returns:
-        tuple[int, int]: (prefix_priority, -model_number) for sorting
+        int: Index into GPU_DISPLAY_ORDER for sorting
 
     Raises:
-        ValueError: If GPU prefix is not in GPU_PREFIX_PRIORITY map
+        ValueError: If GPU type is not in GPU_DISPLAY_ORDER
     """
-    prefix, model_number = _parse_gpu_type(gpu_type)
-
-    if prefix not in GPU_PREFIX_PRIORITY:
-        known_prefixes = sorted(GPU_PREFIX_PRIORITY.keys())
+    try:
+        return GPU_DISPLAY_ORDER.index(gpu_type.lower())
+    except ValueError:
         raise ValueError(
-            f"GPU prefix '{prefix}' not found in GPU_PREFIX_PRIORITY. "
-            f"Add '{prefix}' to GPU_PREFIX_PRIORITY in constants.py. "
-            f"Known prefixes: {known_prefixes}"
-        )
-
-    priority = GPU_PREFIX_PRIORITY[prefix]
-    # Negative model number for descending sort (higher models first)
-    return (priority, -model_number)
+            f"GPU type '{gpu_type}' not found in GPU_DISPLAY_ORDER. "
+            f"Add '{gpu_type.lower()}' to GPU_DISPLAY_ORDER in constants.py. "
+            f"Known types: {GPU_DISPLAY_ORDER}"
+        ) from None
 
 
 def get_available_gpu_choices(workloads: Dict[str, Dict[str, Any]]) -> List[Dict[str, str]]:
     """Get available GPU type choices based on workloads.
 
-    GPU types are sorted by prefix priority (gb > b > h), then by model number
-    descending within each prefix. This ensures premium/latest GPUs appear first.
+    GPU types are sorted by GPU_DISPLAY_ORDER, so newest chips appear first.
 
     Args:
         workloads: Dictionary of workload metadata
@@ -280,7 +230,7 @@ def get_available_gpu_choices(workloads: Dict[str, Dict[str, Any]]) -> List[Dict
                               sorted by display priority
 
     Raises:
-        ValueError: If no supported GPU types found, or if a GPU type has an unknown prefix
+        ValueError: If no supported GPU types found, or if a GPU type is missing from GPU_DISPLAY_ORDER
     """
     # Get supported GPU types from workloads, but limit to known types
     supported_types = get_supported_gpu_types(workloads)
@@ -289,8 +239,7 @@ def get_available_gpu_choices(workloads: Dict[str, Dict[str, Any]]) -> List[Dict
     if not available_types:
         raise ValueError("No supported GPU types found in workload metadata.")
 
-    # Sort by prefix priority, then by model number (descending)
-    # This will raise ValueError if any GPU type has an unknown prefix
+    # Sort by GPU_DISPLAY_ORDER; raises ValueError if a type is missing from it
     available_types.sort(key=_gpu_sort_key)
 
     return [{'name': gpu_type.upper(), 'value': gpu_type} for gpu_type in available_types]

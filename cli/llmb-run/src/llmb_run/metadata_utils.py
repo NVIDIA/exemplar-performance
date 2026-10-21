@@ -1,23 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # For each dataset a user elects to use, the user is responsible for
 # checking if the dataset license is fit for the intended purpose.
@@ -53,13 +35,50 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Dict, List
+from typing import Annotated, Dict, List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from llmb_run.config_manager import ExecutionTarget
 
 logger = logging.getLogger("llmb_run.metadata_utils")
 
 # Known dtype keys supported by our tooling. Extend as needed.
 _KNOWN_DTYPES = {"fp8", "bf16", "nvfp4", "mxfp4"}
 _MODEL_SIZE_SUFFIX_RE = re.compile(r'^(?P<value>\d+(?:\.\d+)?)(?P<unit>[bt])$', re.IGNORECASE)
+
+
+ExecutionTargetList = Annotated[List[ExecutionTarget], Field(min_length=1)]
+
+
+class ExecutionTargetsByGpu(BaseModel):
+    by_gpu: Dict[str, ExecutionTargetList]
+
+
+class RunConfig(BaseModel):
+    """The subset of a workload's ``run`` block that llmb-run interprets.
+
+    ``extra='ignore'`` keeps this a partial view: the authoritative metadata contract
+    is the yamale schema in .gitlab/ci/metadata_schema.yaml. This model validates only
+    the fields the CLIs read at runtime, and must stay in sync with the schema. The
+    same model is duplicated in llmb-install, which is a separate package.
+    """
+
+    model_config = ConfigDict(extra='ignore')
+
+    execution_targets: ExecutionTargetList | ExecutionTargetsByGpu = Field(
+        default_factory=lambda: [ExecutionTarget.SLURM]
+    )
+
+    def targets_for(self, gpu_type: Optional[str] = None) -> List[ExecutionTarget]:
+        if isinstance(self.execution_targets, list):
+            return self.execution_targets
+        by_gpu = self.execution_targets.by_gpu
+        return by_gpu.get(gpu_type, by_gpu.get('default', []))
+
+    def supports(self, execution_target: str, gpu_type: Optional[str] = None) -> bool:
+        """Whether this workload's launch script can run on ``execution_target``."""
+        return execution_target in self.targets_for(gpu_type)
 
 
 def normalize_model_dtype_config(model_config: dict) -> Dict[str, Dict[str, object]]:

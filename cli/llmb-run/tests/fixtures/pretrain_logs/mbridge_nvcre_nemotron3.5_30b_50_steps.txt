@@ -1,0 +1,74 @@
+pretrain-nemotron-3-5-lightni-21552-workload-node-0-0:356:356 [0] NCCL INFO Channel 22/64 : 0
+/usr/local/lib/python3.12/dist-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+pretrain-nemotron-3-5-lightni-21552-workload-node-0-0:356:356 [0] NCCL INFO ChannelStep Time : 166.73s GPU utilization: 88.5MODEL_TFLOP/s/GPU
+Number of dense and embedding parameters in billions: 3.05
+Number of routed expert parameters in billions: 68.97
+Total number of parameters in billions: 72.01
+Number of dense and embedding parameters in most loaded shard in billions: 3.0462
+Number of routed expert parameters in most loaded shard in billions: 8.6209
+Theoretical memory footprints: weight and optimizer=169775.41 MB
+[Rank 0] (after 1 iterations) memory (GB) | mem-allocated-gigabytes: 93.7 | mem-active-gigabytes: 93.7 | mem-inactive-gigabytes: 0.0 | mem-reserved-gigabytes: 191.52 | mem-max-allocated-gigabytes: 185.57 | mem-max-active-gigabytes: 185.57 | mem-max-inactive-gigabytes: 0.0 | mem-max-reserved-gigabytes: 191.52 | mem-alloc-retires: 0 | mem-allocated-count: 7946
+Step Time : 16.79s GPU utilization: 879.0MODEL_TFLOP/s/GPU
+Number of dense and embedding parameters in billions: 3.05
+Number of routed expert parameters in billions: 68.97
+Total number of parameters in billions: 72.01
+Number of dense and embedding parameters in most loaded shard in billions: 3.0462
+Number of routed expert parameters in most loaded shard in billions: 8.6209
+Theoretical memory footprints: weight and optimizer=169775.41 MB
+[Rank 0] (after 2 iterations) memory (GB) | mem-allocated-gigabytes: 93.7 | mem-active-gigabytes: 93.7 | mem-inactive-gigabytes: 0.0 | mem-reserved-gigabytes: 225.12 | mem-max-allocated-gigabytes: 218.47 | mem-max-active-gigabytes: 218.47 | mem-max-inactive-gigabytes: 0.0 | mem-max-reserved-gigabytes: 225.12 | mem-alloc-retires: 0 | mem-allocated-count: 7946
+Step Time : 15.59s GPU utilization: 946.8MODEL_TFLOP/s/GPU
+INFO:megatron.core.transformer.cuda_graphs:Start CUDA Graphs capture...
+INFO:megatron.core.transformer.cuda_graphs:Time spent in CUDA Graphs capture on rank 0: 4.726168870925903s
+Step Time : 31.92s GPU utilization: 462.4MODEL_TFLOP/s/GPU
+Step Time : 15.35s GPU utilization: 961.6MODEL_TFLOP/s/GPU
+Step Time : 15.79s GPU utilization: 934.8MODEL_TFLOP/s/GPU
+Step Time : 15.38s GPU utilization: 959.6MODEL_TFLOP/s/GPU
+Step Time : 15.37s GPU utilization: 960.3MODEL_TFLOP/s/GPU
+Step Time : 15.37s GPU utilization: 960.3MODEL_TFLOP/s/GPU
+Step Time : 15.36s GPU utilization: 961.0MODEL_TFLOP/s/GPU
+Step Time : 15.35s GPU utilization: 961.7MODEL_TFLOP/s/GPU
+Step Time : 15.24s GPU utilization: 968.2MODEL_TFLOP/s/GPU
+Step Time : 15.34s GPU utilization: 962.3MODEL_TFLOP/s/GPU
+Step Time : 15.26s GPU utilization: 967.3MODEL_TFLOP/s/GPU
+Step Time : 15.25s GPU utilization: 968.0MODEL_TFLOP/s/GPU
+Step Time : 15.28s GPU utilization: 965.9MODEL_TFLOP/s/GPU
+Step Time : 15.37s GPU utilization: 960.0MODEL_TFLOP/s/GPU
+Step Time : 15.35s GPU utilization: 961.1MODEL_TFLOP/s/GPU
+Step Time : 15.32s GPU utilization: 963.4MODEL_TFLOP/s/GPU
+Step Time : 15.32s GPU utilization: 963.6MODEL_TFLOP/s/GPU
+Step Time : 15.36s GPU utilization: 960.5MODEL_TFLOP/s/GPU
+Step Time : 15.32s GPU utilization: 963.5MODEL_TFLOP/s/GPU
+Step Time : 15.42s GPU utilization: 957.0MODEL_TFLOP/s/GPU
+Step Time : 15.35s GPU utilization: 961.4MODEL_TFLOP/s/GPU
+Step Time : 15.32s GPU utilization: 963.1MODEL_TFLOP/s/GPU
+Step Time : 15.37s GPU utilization: 960.3MODEL_TFLOP/s/GPU
+Step Time : 15.34s GPU utilization: 962.3MODEL_TFLOP/s/GPU
+Step Time : 15.34s GPU utilization: 962.1MODEL_TFLOP/s/GPU
+Step Time : 15.33s GPU utilization: 962.5MODEL_TFLOP/s/GPU
+Step Time : 15.34s GPU utilization: 962.0MODEL_TFLOP/s/GPU
+Step Time : 15.57s GPU utilization: 948.0MODEL_TFLOP/s/GPU
+Step Time : 15.36s GPU utilization: 960.9MODEL_TFLOP/s/GPU
+Step Time : 15.38s GPU utilization: 959.3MODEL_TFLOP/s/GPU
+Step Time : 15.37s GPU utilization: 960.2MODEL_TFLOP/s/GPU
+Step Time : 15.44s GPU utilization: 956.0MODEL_TFLOP/s/GPU
+Step Time : 15.45s GPU utilization: 955.4MODEL_TFLOP/s/GPU
+Step Time : 15.39s GPU utilization: 959.1MODEL_TFLOP/s/GPU
+Step Time : 15.38s GPU utilization: 959.3MODEL_TFLOP/s/GPU
+Step Time : 15.37s GPU utilization: 960.0MODEL_TFLOP/s/GPU
+Step Time : 15.39s GPU utilization: 958.6MODEL_TFLOP/s/GPU
+Step Time : 15.35s GPU utilization: 961.5MODEL_TFLOP/s/GPU
+Step Time : 15.46s GPU utilization: 954.8MODEL_TFLOP/s/GPU
+Step Time : 15.38s GPU utilization: 959.7MODEL_TFLOP/s/GPU
+Step Time : 15.35s GPU utilization: 961.3MODEL_TFLOP/s/GPU
+Step Time : 15.35s GPU utilization: 961.6MODEL_TFLOP/s/GPU
+Step Time : 15.34s GPU utilization: 962.0MODEL_TFLOP/s/GPU
+Step Time : 15.36s GPU utilization: 961.0MODEL_TFLOP/s/GPU
+Step Time : 15.36s GPU utilization: 961.1MODEL_TFLOP/s/GPU
+Step Time : 15.36s GPU utilization: 960.5MODEL_TFLOP/s/GPU
+Step Time : 15.41s GPU utilization: 957.8MODEL_TFLOP/s/GPU
+Deleting CUDA graphs
+INFO:megatron.core.transformer.cuda_graphs:Rank 0: 52 graphs deleted with explicit reset, 0 graphs deleted without explicit reset.
+[after training is done] datetime: 2026-10-07 21:41:06
+ 0
+pretrain-nemotron-3-5-lightni-21552-workload-node-0-0:358:358 [2] NCCL INFO Channel 13/64 : 0
