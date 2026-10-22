@@ -355,7 +355,7 @@ wheels = [
 
 [[package]]
 name = "llmb-install"
-version = "1.13.3"
+version = "1.13.3.post1"
 source = { editable = "." }
 dependencies = [
     { name = "hf-xet" },

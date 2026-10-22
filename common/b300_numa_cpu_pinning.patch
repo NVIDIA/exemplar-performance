@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
 # Template for customizing optional Priority Core Turbo-related fixed-core CPU binding
 # when your B300 system's PCT high-priority core IDs do not match the Megatron-Bridge
 # reference binding. Edit the -C expression below before applying this patch.

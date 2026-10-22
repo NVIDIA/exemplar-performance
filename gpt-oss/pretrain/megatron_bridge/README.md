@@ -4,9 +4,9 @@ This recipe contains information and scripts to produce performance results for 
 
 ## GB300
 
-| GPT OSS Model Size |  GPUs  | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |  DP  | VP  | MBS |   GBS    | GA  |  CG   |
-| ------------------ | :----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :--: | :-: | :-: | :------: | :-: | :---: |
-| 120b               | 64-512 |   BF16   |  4096  |   36   | False |  1  |  1  |  1  | 64  |  1  | GPUs | NA  |  4  | GPUs\*20 |  5  | False |
+| GPT OSS Model Size |  GPUs  | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |  DP  | VP  | MBS |   GBS    | GA  |  CG  |
+| ------------------ | :----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :--: | :-: | :-: | :------: | :-: | :--: |
+| 120b               | 64-512 |   BF16   |  4096  |   36   | False |  1  |  1  |  1  | 64  |  1  | GPUs | NA  |  4  | GPUs\*20 |  5  | True |
 
 ## GB200
 
@@ -16,9 +16,9 @@ This recipe contains information and scripts to produce performance results for 
 
 ## B300
 
-| GPT OSS Model Size |  GPUs  | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |  DP  | VP  | MBS |   GBS    | GA  |  CG   |
-| ------------------ | :----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :--: | :-: | :-: | :------: | :-: | :---: |
-| 120b               | 64-512 |   BF16   |  4096  |   36   | False |  1  |  1  |  1  |  8  |  1  | GPUs | NA  |  4  | GPUs\*20 |  5  | False |
+| GPT OSS Model Size |  GPUs  | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |  DP  | VP  | MBS |   GBS    | GA  |  CG  |
+| ------------------ | :----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :--: | :-: | :-: | :------: | :-: | :--: |
+| 120b               | 64-512 |   BF16   |  4096  |   36   | False |  1  |  1  |  1  |  8  |  1  | GPUs | NA  |  4  | GPUs\*20 |  5  | True |
 
 ## B200
 

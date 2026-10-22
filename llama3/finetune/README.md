@@ -6,17 +6,19 @@ This recipe contains information and scripts to produce performance results for 
 
 | Model Size | Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | DP  | VP  | MBS | GBS | GA  |
 | :--------: | :-------: | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-|    70b     | BF16/FP8  |  8   |  4096  |   80   |  1  |  1  |  1  |  8  | N/A |  1  | 32  |  4  |
-|    70b     | BF16/FP8  |  16  |  4096  |   80   |  1  |  1  |  1  | 16  | N/A |  1  | 64  |  4  |
+|    70b     |   BF16    |  8   |  4096  |   80   |  1  |  1  |  1  |  8  | N/A |  1  | 32  |  4  |
+|    70b     |    FP8    |  8   |  4096  |   80   |  1  |  2  |  1  |  4  | 20  |  1  | 32  |  8  |
+|    70b     |   BF16    |  16  |  4096  |   80   |  1  |  1  |  1  | 16  | N/A |  1  | 64  |  4  |
+|    70b     |    FP8    |  16  |  4096  |   80   |  1  |  2  |  1  |  8  | 20  |  1  | 64  |  8  |
 
 ## GB200
 
 | Model Size | Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | DP  | VP  | MBS | GBS | GA  |
 | :--------: | :-------: | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-|    70b     |   BF16    |  8   |  2048  |   80   |  1  |  1  |  1  |  8  | N/A |  1  | 64  |  8  |
-|    70b     |    FP8    |  8   |  4096  |   80   |  1  |  2  |  1  |  4  | N/A |  1  | 32  |  8  |
-|    70b     |   BF16    |  16  |  2048  |   80   |  1  |  1  |  1  | 16  | N/A |  1  | 128 |  8  |
-|    70b     |    FP8    |  16  |  4096  |   80   |  1  |  2  |  1  |  8  | N/A |  1  | 64  |  8  |
+|    70b     |   BF16    |  8   |  2048  |   80   |  1  |  2  |  1  |  4  | 20  |  1  | 64  | 16  |
+|    70b     |    FP8    |  8   |  4096  |   80   |  1  |  2  |  1  |  4  | 20  |  1  | 32  |  8  |
+|    70b     |   BF16    |  16  |  2048  |   80   |  1  |  2  |  1  |  8  | 20  |  1  | 128 | 16  |
+|    70b     |    FP8    |  16  |  4096  |   80   |  1  |  2  |  1  |  8  | 20  |  1  | 64  |  8  |
 
 ## B300
 
@@ -31,8 +33,10 @@ This recipe contains information and scripts to produce performance results for 
 
 | Model Size | Precision | GPUs | SeqLen | Layers | TP  | PP  | CP  | DP  | VP  | MBS | GBS | GA  |
 | :--------: | :-------: | :--: | :----: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-|    70b     | FP8/BF16  |  8   |  4096  |   80   |  1  |  2  |  1  |  4  | N/A |  1  | 32  |  8  |
-|    70b     | FP8/BF16  |  16  |  4096  |   80   |  1  |  2  |  1  |  8  | N/A |  1  | 64  |  8  |
+|    70b     |   BF16    |  8   |  4096  |   80   |  1  |  2  |  1  |  4  | N/A |  1  | 32  |  8  |
+|    70b     |    FP8    |  8   |  4096  |   80   |  1  |  2  |  1  |  4  | 20  |  1  | 32  |  8  |
+|    70b     |   BF16    |  16  |  4096  |   80   |  1  |  2  |  1  |  8  | N/A |  1  | 64  |  8  |
+|    70b     |    FP8    |  16  |  4096  |   80   |  1  |  2  |  1  |  8  | 20  |  1  | 64  |  8  |
 
 ## H100
 
@@ -226,7 +230,7 @@ JOB_TOTAL_GPUS=<number> GPU_TYPE=<type> [DTYPE=<precision>] [MODEL_SIZE=<size>] 
 
 **Optional:**
 
-- `DTYPE`: Precision format (default: `bf16`)
+- `DTYPE`: Precision format (default: `fp8`)
   - `fp8` - FP8 precision
   - `bf16` - BFloat16 precision
 - `MODEL_SIZE`: Model variant (fixed: `70b`)

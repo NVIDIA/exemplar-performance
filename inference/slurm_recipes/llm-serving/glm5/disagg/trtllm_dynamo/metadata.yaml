@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 
 # GLM-5 inference benchmark, TRT-LLM Dynamo disaggregated serving on gb300.
 # Front-door: llmb-install + llmb-run. Backend executor: srt-slurm.

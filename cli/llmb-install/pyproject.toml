@@ -1,10 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "llmb-install"
-version = "1.13.3"
+version = "1.13.3.post1"
 requires-python = ">=3.10"
 description = "Installer for LLM benchmarking workloads"
 

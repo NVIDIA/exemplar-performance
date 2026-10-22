@@ -12,7 +12,7 @@ This recipe contains information and scripts to produce performance results for 
 | ---------- | :-----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :-----: | :-: | :-: | :------: | :-: | :---: |
 | 405b       | 256-512 |   FP8    |  8192  |  126   | False |  4  |  8  |  1  |  1  |  1  | GPUs/32 |  4  |  1  | GPUs\*6  | 192 | False |
 | 70b        | 64-512  |   FP8    |  8192  |   80   | True  |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  2  | GPUs\*4  |  2  | False |
-| 8b         |  8-128  |   FP8    |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  4  | GPUs\*16 |  4  | False |
+| 8b         |  8-128  |   FP8    |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  4  | GPUs\*16 |  4  | True  |
 
 ### NVFP4
 
@@ -20,7 +20,7 @@ This recipe contains information and scripts to produce performance results for 
 | ---------- | :-----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :-----: | :-: | :-: | :------: | :-: | :---: |
 | 405b       | 256-512 |  NVFP4   |  8192  |  126   | False |  4  |  8  |  1  |  1  |  1  | GPUs/32 |  4  |  1  | GPUs\*6  | 192 | False |
 | 70b        | 64-512  |  NVFP4   |  8192  |   80   | False |  1  |  4  |  1  |  1  |  1  | GPUs/4  |  5  |  1  | GPUs\*4  | 16  | False |
-| 8b         |  8-128  |  NVFP4   |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  4  | GPUs\*16 |  4  | False |
+| 8b         |  8-128  |  NVFP4   |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  4  | GPUs\*16 |  4  | True  |
 
 ## GB200
 
@@ -30,13 +30,14 @@ This recipe contains information and scripts to produce performance results for 
 | ---------- | :-----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :-----: | :-: | :-: | :------: | :-: | :---: |
 | 405b       | 256-512 |   FP8    |  8192  |  126   | False |  4  | 16  |  1  |  1  |  1  | GPUs/64 |  4  |  1  | GPUs\*6  | 384 | False |
 | 70b        | 64-512  |   FP8    |  8192  |   80   | True  |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  2  | GPUs\*4  |  2  | False |
-| 8b         |  8-128  |   FP8    |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  2  | GPUs\*16 |  8  | False |
+| 8b         |  8-128  |   FP8    |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  2  | GPUs\*16 |  8  | True  |
 
 ### NVFP4
 
 | Model Size |  GPUs   | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |   DP    | VP  | MBS |   GBS    | GA  |  CG   |
 | ---------- | :-----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :-----: | :-: | :-: | :------: | :-: | :---: |
 | 405b       | 256-512 |  NVFP4   |  8192  |  126   | False |  4  | 16  |  1  |  1  |  1  | GPUs/64 |  8  |  1  | GPUs\*6  | 384 | False |
+| 70b        | 64-512  |  NVFP4   |  8192  |   80   | False |  2  |  4  |  1  |  1  |  1  | GPUs/8  |  5  |  1  | GPUs\*4  | 32  | True  |
 | 8b         |  8-128  |  NVFP4   |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  4  | GPUs\*16 |  4  | False |
 
 ## B300
@@ -48,7 +49,7 @@ This recipe contains information and scripts to produce performance results for 
 | 405b       |   256-512   |   FP8    |  8192  |  126   | False |  4  |  8  |  1  |  1  |  1  | GPUs/32 |  4  |  1  | GPUs\*6  | 192 | False |
 | 70b        |   **64**    |   FP8    |  8192  |   80   | True  |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  1  | GPUs\*4  |  4  | False |
 | 70b        | **128-512** |   FP8    |  8192  |   80   | False |  1  |  4  |  1  |  1  |  1  | GPUs/4  |  5  |  1  | GPUs\*4  | 16  | False |
-| 8b         |    8-128    |   FP8    |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  4  | GPUs\*16 |  4  | False |
+| 8b         |    8-128    |   FP8    |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  4  | GPUs\*16 |  4  | True  |
 
 ### NVFP4
 
@@ -62,20 +63,20 @@ This recipe contains information and scripts to produce performance results for 
 
 ### FP8
 
-| Model Size |     GPUs     | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |   DP    | VP  | MBS |   GBS    | GA  |  CG   |
-| ---------- | :----------: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :-----: | :-: | :-: | :------: | :-: | :---: |
-| 405b       |   256-1024   |   FP8    |  8192  |  126   | False |  4  |  8  |  2  |  1  |  1  | GPUs/64 |  8  |  1  | GPUs\*6  | 384 | False |
-| 70b        |    **64**    |   FP8    |  8192  |   80   | True  |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  1  | GPUs\*4  |  4  | False |
-| 70b        | **128-1024** |   FP8    |  8192  |   80   | False |  2  |  4  |  1  |  1  |  1  | GPUs/8  |  5  |  1  | GPUs\*4  | 32  | False |
-| 8b         |    8-128     |   FP8    |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  2  | GPUs\*16 |  8  | False |
+| Model Size |    GPUs     | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |   DP    | VP  | MBS |   GBS    | GA  |  CG   |
+| ---------- | :---------: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :-----: | :-: | :-: | :------: | :-: | :---: |
+| 405b       |   256-512   |   FP8    |  8192  |  126   | False |  4  | 16  |  1  |  1  |  1  | GPUs/64 |  4  |  1  | GPUs\*6  | 384 | False |
+| 70b        |   **64**    |   FP8    |  8192  |   80   | True  |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  1  | GPUs\*4  |  4  | False |
+| 70b        | **128-512** |   FP8    |  8192  |   80   | False |  2  |  4  |  1  |  1  |  1  | GPUs/8  |  5  |  1  | GPUs\*4  | 32  | False |
+| 8b         |    8-128    |   FP8    |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  2  | GPUs\*16 |  8  | True  |
 
 ### NVFP4
 
-| Model Size |   GPUs   | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |   DP    | VP  | MBS |   GBS    | GA  |  CG   |
-| ---------- | :------: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :-----: | :-: | :-: | :------: | :-: | :---: |
-| 405b       | 256-1024 |  NVFP4   |  8192  |  126   | False |  4  | 16  |  1  |  1  |  1  | GPUs/64 |  8  |  1  | GPUs\*6  | 384 | False |
-| 70b        | 64-1024  |  NVFP4   |  8192  |   80   | False |  2  |  4  |  1  |  1  |  1  | GPUs/8  |  5  |  1  | GPUs\*4  | 32  | False |
-| 8b         |  8-128   |  NVFP4   |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  4  | GPUs\*16 |  4  | False |
+| Model Size |  GPUs   | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |   DP    | VP  | MBS |   GBS    | GA  |  CG   |
+| ---------- | :-----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :-----: | :-: | :-: | :------: | :-: | :---: |
+| 405b       | 256-512 |  NVFP4   |  8192  |  126   | False |  4  | 16  |  1  |  1  |  1  | GPUs/64 |  8  |  1  | GPUs\*6  | 384 | False |
+| 70b        | 64-512  |  NVFP4   |  8192  |   80   | False |  2  |  4  |  1  |  1  |  1  | GPUs/8  |  5  |  1  | GPUs\*4  | 32  | False |
+| 8b         |  8-128  |  NVFP4   |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |  GPUs   | NA  |  4  | GPUs\*16 |  4  | False |
 
 ## H100
 
@@ -83,19 +84,19 @@ This recipe contains information and scripts to produce performance results for 
 
 ### BF16
 
-| Model Size |  GPUs   | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |    DP    | VP  | MBS |   GBS    | GA  |  CG   |
-| ---------- | :-----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :------: | :-: | :-: | :------: | :-: | :---: |
-| 405b       |  1024   |   BF16   |  8192  |  126   | False |  8  |  8  |  2  |  1  |  1  | GPUs/128 |  8  |  1  |   1536   | 192 | False |
-| 70b        | 64-1024 |   BF16   |  8192  |   80   | False |  4  |  4  |  2  |  1  |  1  | GPUs/32  |  5  |  1  | GPUs\*4  | 128 | False |
-| 8b         |  8-128  |   BF16   |  8192  |   32   | False |  1  |  1  |  2  |  1  |  1  |  GPUs/2  | NA  |  1  | GPUs\*16 | 32  | False |
+| Model Size |  GPUs  | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |    DP    | VP  | MBS |   GBS    | GA  |  CG   |
+| ---------- | :----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :------: | :-: | :-: | :------: | :-: | :---: |
+| 405b       |  1024  |   BF16   |  8192  |  126   | False |  8  |  8  |  2  |  1  |  1  | GPUs/128 |  8  |  1  |   1536   | 192 | False |
+| 70b        | 64-512 |   BF16   |  8192  |   80   | False |  4  |  4  |  2  |  1  |  1  | GPUs/32  |  5  |  1  | GPUs\*4  | 128 | False |
+| 8b         | 8-128  |   BF16   |  8192  |   32   | False |  1  |  1  |  2  |  1  |  1  |  GPUs/2  | NA  |  1  | GPUs\*16 | 32  | False |
 
 ### FP8
 
-| Model Size |  GPUs   | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |    DP    | VP  | MBS |   GBS    | GA  |  CG   |
-| ---------- | :-----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :------: | :-: | :-: | :------: | :-: | :---: |
-| 405b       |  1024   |   FP8    |  8192  |  126   | False |  8  |  8  |  2  |  1  |  1  | GPUs/128 |  8  |  1  |   1536   | 192 | False |
-| 70b        | 64-1024 |   FP8    |  8192  |   80   | False |  4  |  8  |  1  |  1  |  1  | GPUs/32  |  5  |  2  | GPUs\*4  |  4  | False |
-| 8b         |  8-128  |   FP8    |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |   GPUs   | NA  |  1  | GPUs\*16 | 16  | False |
+| Model Size |  GPUs  | Datatype | SeqLen | Layers | FSDP  | TP  | PP  | CP  | EP  | ETP |    DP    | VP  | MBS |   GBS    | GA  |  CG   |
+| ---------- | :----: | :------: | :----: | :----: | :---: | :-: | :-: | :-: | :-: | :-: | :------: | :-: | :-: | :------: | :-: | :---: |
+| 405b       |  1024  |   FP8    |  8192  |  126   | False |  8  |  8  |  2  |  1  |  1  | GPUs/128 |  8  |  1  |   1536   | 192 | False |
+| 70b        | 64-512 |   FP8    |  8192  |   80   | False |  4  |  8  |  1  |  1  |  1  | GPUs/32  |  5  |  1  | GPUs\*4  | 128 | False |
+| 8b         | 8-128  |   FP8    |  8192  |   32   | False |  1  |  1  |  1  |  1  |  1  |   GPUs   | NA  |  1  | GPUs\*16 | 16  | False |
 
 # Performance Measurement and Analysis
 

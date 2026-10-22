@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 This project uses [PEP 440](https://www.python.org/dev/peps/pep-0440/) versioning with semantic versioning semantics:
 **MAJOR.MINOR.PATCH** for feature parity with [SemVer](https://semver.org/).
 
+## [1.13.3.post1] - 2026-10-21
+
+### Fixed
+
+- Backport of the 1.18.2 fix: tokenizer metadata is no longer regenerated for repos that already ship `tokenizer_config.json` (e.g. Qwen3). The rewrite into the Hugging Face cache failed with `Permission denied` on huggingface-hub 1.32 and later, which stores Xet-backed blobs read-only.
+
 ## [1.13.3] - 2026-07-09
 
 ### Changed
