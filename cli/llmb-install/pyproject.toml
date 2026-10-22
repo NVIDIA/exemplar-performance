@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llmb-install"
-version = "1.13.3"
+version = "1.13.3.post1"
 requires-python = ">=3.10"
 description = "Installer for LLM benchmarking workloads"
 

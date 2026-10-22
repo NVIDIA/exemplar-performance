@@ -37,6 +37,8 @@ setup:
     pip:
       - package: nemo_run
         repo_key: nemo_run
+      # NeMo-Run imports leptonai.api.v1, which leptonai 0.47 removed.
+      - 'leptonai==0.27.3'
 
 # Todo: Needed for 20b?
 tools:

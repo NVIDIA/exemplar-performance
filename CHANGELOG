@@ -1,3 +1,14 @@
+## [v26.08.02] - 2026-10-22
+
+### Changed
+
+- Relicensed the repository from MIT to Apache-2.0.
+
+### Fixed
+
+- Pin `leptonai==0.27.3` in every recipe that installs NeMo-Run. leptonai 0.47 removed `leptonai.api.v1`, which all pinned NeMo-Run revisions import, so fresh installs failed before job submission.
+- `llmb-install` no longer regenerates tokenizer metadata for repos that already ship `tokenizer_config.json` (e.g. Qwen3). The rewrite into the Hugging Face cache failed with `Permission denied` on huggingface-hub 1.32 and later, which stores Xet-backed blobs read-only.
+
 ## [v26.08.01] - 2026-08-25
 
 ### Added

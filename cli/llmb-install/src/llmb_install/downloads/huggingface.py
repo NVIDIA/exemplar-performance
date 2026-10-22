@@ -847,14 +847,13 @@ def _maybe_finalize_tokenizer_snapshot(
 
     snapshot_root = Path(snapshot_path)
     tokenizer_config_path = snapshot_root / "tokenizer_config.json"
-    special_tokens_path = snapshot_root / "special_tokens_map.json"
-    if tokenizer_config_path.exists() and special_tokens_path.exists():
+    if tokenizer_config_path.exists():
         return
 
     from transformers import AutoTokenizer
 
     logger.debug(
-        "Generating tokenizer metadata for repo '%s' (missing tokenizer_config.json or special_tokens_map.json)",
+        "Generating tokenizer metadata for repo '%s' (missing tokenizer_config.json)",
         repo_id,
     )
 
