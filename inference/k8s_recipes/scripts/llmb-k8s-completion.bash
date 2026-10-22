@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # llmb-k8s bash completion.
 #
 # Install (from the k8s recipe root, inference/k8s_recipes):

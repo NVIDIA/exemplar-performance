@@ -2,12 +2,6 @@
 
 Thank you for your interest in contributing to Exemplar Performance.
 
-## Temporary Contribution Pause
-
-This project is currently not accepting contributions.
-
-This is a temporary pause while we transition to a new license.
-
 ## Signing Off Your Work
 
 - We require that all contributors "sign-off" on their commits. This certifies that the contribution

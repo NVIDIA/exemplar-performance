@@ -9,12 +9,6 @@ These Performance Recipes support performance characterization
 
 Each recipe maps to one workload and can be run at various cluster scales and precisions. These workloads are tested against NVIDIA Reference Architectures to establish baselines for comparison. These performance metrics are collected from production environments and are subject to real-world variability.
 
-## Contributions
-
-This project is currently not accepting contributions.
-
-This is a temporary pause while we transition to a new license.
-
 ## Prerequisites
 
 To use the Performance Recipes, make sure the following prerequisites are available on your cluster:
@@ -322,6 +316,8 @@ Baseline performance metrics were collected using workloads on the NVIDIA DGX H1
 | Microbenchmark |     TRT-LLM     |       [GPT-OSS](microbenchmarks/cpu_overhead/README.md)       |     1.1.0rc5      |    120B    |        1-4        |   MXFP4   |          Yes          |      No       |    Slurm     |
 
 ### Deprecated
+
+These recipes have been removed from the repository. To use one, check out the release tag listed in its **Last Version** column (for example `git checkout v25.08`).
 
 |          Type           |                  Framework                   |       Model       |            Container Version            | Model Size | Scale (# of GPUs) | Precision  | Model Access Required | Checkpointing |   Cluster Type    | Last Version |
 | :---------------------: | :------------------------------------------: | :---------------: | :-------------------------------------: | :--------: | :---------------: | :--------: | :-------------------: | :-----------: | :---------------: | :----------: |
@@ -719,3 +715,7 @@ After applying the patch, submit the workload with `ENABLE_PCT_BINDING=true`.
 Terminology used in these recipes is explained in the [Appendix](APPENDIX.md).
 
 For questions or to provide feedback, please contact LLMBenchmarks@nvidia.com
+
+# Notice and Disclaimer
+
+This software automatically retrieves, accesses or interacts with external materials. Those retrieved materials are not distributed with this software and are governed solely by separate terms, conditions and licenses. You are solely responsible for finding, reviewing and complying with all applicable terms, conditions, and licenses, and for verifying the security, integrity and suitability of any retrieved materials for your specific use case. This software is provided "AS IS", without warranty of any kind. The author makes no representations or warranties regarding any retrieved materials, and assumes no liability for any losses, damages, liabilities or legal consequences from your use or inability to use this software or any retrieved materials. Use this software and the retrieved materials at your own risk.

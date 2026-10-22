@@ -29,8 +29,8 @@ The tables below list the GPU counts in `metadata.yaml` for this recipe (256 and
 
 | Precision | GPUs | SeqLen | TP  | PP  | CP  | EP  | DP  | VP  | MBS | GBS  |
 | --------- | :--: | :----: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :--: |
-| FP8       | 256  |  4096  |  1  | 16  |  1  | 16  | 16  | N/A |  1  | 4096 |
-| FP8       | 512  |  4096  |  1  | 16  |  1  | 16  | 32  | N/A |  1  | 8192 |
+| FP8       | 256  |  4096  |  1  | 16  |  1  | 16  | 16  | N/A |  1  | 2048 |
+| FP8       | 512  |  4096  |  1  | 16  |  1  | 16  | 32  | N/A |  1  | 4096 |
 
 # Performance Measurement and Analysis
 

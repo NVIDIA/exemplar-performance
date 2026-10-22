@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
 
@@ -27,7 +9,7 @@
 CI runs (image lycheeverse/lychee:latest-alpine, from the REPO ROOT):
 
     lychee --offline --include-fragments -f detailed -q --no-progress \\
-      --exclude-path "deprecated" --exclude-path "common" --exclude-path "scripts" \\
+      --exclude-path "common" --exclude-path "scripts" \\
       "**/*.md"
 
 That job checks the WHOLE repository, so one stale link anywhere blocks every MR. It also
@@ -36,8 +18,7 @@ gate, offline and dependency-free (stdlib only, python3.8+, no network, no docke
 `make link-check` / `make ci` catches it before the push.
 
 Scope, matching the CI invocation:
-  * every `*.md` in the repo, minus any path containing a `deprecated` / `common` /
-    `scripts` component;
+  * every `*.md` in the repo, minus any path containing a `common` / `scripts` component;
   * LOCAL links only (`--offline`): http(s)/mailto/tel/etc are skipped, as in CI;
   * fragments (`--include-fragments`): `#anchor` is resolved against the target markdown
     file's headings (GitHub slugs) and explicit `id=` / `name=` anchors.
@@ -52,7 +33,7 @@ import unicodedata
 from urllib.parse import unquote
 
 # --- CI parity: --exclude-path values from .gitlab/ci/stages/validate.yml -------------
-EXCLUDED_PATH_PARTS = {"deprecated", "common", "scripts"}
+EXCLUDED_PATH_PARTS = {"common", "scripts"}
 # Never markdown source; excluded so we do not walk them.
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__"}
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 
 # Qwen3 long-context inference dispatcher — renders this folder's
 # config_template.yaml once per session concurrency and `srtctl apply`s each.
