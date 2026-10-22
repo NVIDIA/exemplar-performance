@@ -34,6 +34,22 @@ export FW_VERSION
 # Repo downloaded by installer.
 export NVCOMM_DIR=$LLMB_WORKLOAD/Nvidia-Comms-Perf-Suite
 
+LLMB_NCCL_NETWORK=${LLMB_NCCL_NETWORK:-ib}
+case "$LLMB_NCCL_NETWORK" in
+    ib)
+        SYSTEMS_TOML=config/systems.toml
+        TESTSET_TOML=config/testset.toml
+        ;;
+    spx)
+        SYSTEMS_TOML=config/systems-spx.toml
+        TESTSET_TOML=config/testset-spx.toml
+        ;;
+    *)
+        echo "Unsupported LLMB_NCCL_NETWORK: $LLMB_NCCL_NETWORK (expected ib or spx)" >&2
+        exit 1
+        ;;
+esac
+
 cp -r config "$NVCOMM_DIR/"
 # Populate the user TOML template with the resolved framework image version.
 sed -i -e "s|__FW_VERSION__|$FW_VERSION|g" "$NVCOMM_DIR/config/nemofw.user.toml"
@@ -50,9 +66,9 @@ uv build
 uv pip install dist/nvcomms_perf*.whl
 
 nvcomms-perf generate-job-script --run-type=container --system $GPU_TYPE \
-    --systems-toml config/systems.toml \
+    --systems-toml "$SYSTEMS_TOML" \
     --user-toml config/nemofw.user.toml \
-    --testset-toml config/testset.toml > "$LLMB_INSTALL/llmb_repo/microbenchmarks/nccl/launch.sh"
+    --testset-toml "$TESTSET_TOML" > "$LLMB_INSTALL/llmb_repo/microbenchmarks/nccl/launch.sh"
 
 # shellcheck disable=SC2016
 sed -i -e 's|NVCOMMS_PERF_TOOLS_WORKSPACE:-.|NVCOMMS_PERF_TOOLS_WORKSPACE:-$LLMB_INSTALL/workloads/microbenchmark_nccl/experiments/|g' "$LLMB_INSTALL/llmb_repo/microbenchmarks/nccl/launch.sh"
