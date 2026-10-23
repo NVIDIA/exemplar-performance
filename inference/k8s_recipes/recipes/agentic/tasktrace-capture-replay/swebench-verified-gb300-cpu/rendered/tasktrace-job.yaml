@@ -346,6 +346,7 @@ data:
             --instrument-shell-commands
             --instrument-shell-perfetto-depth 1
             --output-dir "$CAPTURE_DIR"
+            --agent-env UV_EXCLUDE_NEWER=2026-10-12T00:00:00Z
         )
         # As on Slurm: non-interactive Bash gets the image's .bashrc (SWE-bench activates its conda env there), and
         # the trace records it so the replay sets the same BASH_ENV.

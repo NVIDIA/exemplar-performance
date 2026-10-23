@@ -172,6 +172,7 @@ CAPTURE_ARGS=(
     --instrument-shell-commands
     --instrument-shell-perfetto-depth 1
     --output-dir "$CAPTURE_DIR"
+    --agent-env UV_EXCLUDE_NEWER=2026-10-12T00:00:00Z
 )
 if [[ ${RUN_CONF_SOURCE_IMAGE_BASHRC:-1} == 1 ]]; then
     CAPTURE_ARGS+=(--source-image-bashrc)

@@ -1,3 +1,9 @@
+## [v26.10.01] - 2026-10-23
+
+### Fixed
+
+- TaskTrace captures failed on their first model call (`ModuleNotFoundError: No module named 'mcp'`), scoring 0 and writing no trajectory. The Slurm and Kubernetes capture recipes now pin the agent's dependencies to 2026-10-12 (litellm 1.105.0), fixing captures.
+
 ## [v26.10.00] - 2026-10-21
 
 ### Added
