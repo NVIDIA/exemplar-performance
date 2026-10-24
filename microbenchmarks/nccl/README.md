@@ -1,6 +1,6 @@
 # Overview
 
-This recipe provides a method and script to produce performance results for the NCCL benchmarks. The SLURM sbatch script launches a collection of benchmarking jobs to evaluate an Infiniband network.
+This recipe provides a method and script to produce performance results for the NCCL benchmarks. The SLURM sbatch script launches a collection of benchmarking jobs to evaluate an InfiniBand network by default, with an opt-in Spectrum-X profile.
 
 ## Platform support
 
@@ -11,7 +11,7 @@ This recipe provides a method and script to produce performance results for the 
 
 - SLURM workload manager
 - NVIDIA GPUs: GB300, GB200, B300, B200, or H100
-- InfiniBand (IB) networking with Quantum2 switches and CX7 NICs
+- InfiniBand (IB) networking, or a configured Spectrum-X RoCE fabric with the SPX profile below
 - CUDA toolkit
 
 # Performance Measurement and Analysis
@@ -164,3 +164,69 @@ H100 jobs disable UCC by default (`UCX_TLS=^ucc`, `OMPI_MCA_coll=^ucc`, `OMPI_MC
 cd $LLMB_INSTALL
 llmb-run submit -w microbenchmark_nccl --scale <NUM_GPUS> --env LLMB_DISABLE_UCC=1
 ```
+
+## Spectrum-X NCCL profile (experimental)
+
+Select `LLMB_NCCL_NETWORK=spx` when generating the launcher. This uses
+`config/systems-spx.toml` and `config/testset-spx.toml`; the default `ib` keeps
+the existing IB configuration. The profile is selected during setup, so passing
+`LLMB_NCCL_NETWORK` only to `llmb-run submit` does not change an already generated launcher.
+
+For an existing installation, regenerate from the NCCL recipe directory. For example,
+for an H100 installation:
+
+```bash
+cd "$LLMB_INSTALL/llmb_repo/microbenchmarks/nccl"
+LLMB_NCCL_NETWORK=spx GPU_TYPE=h100 \
+  LLMB_WORKLOAD="$LLMB_INSTALL/workloads/microbenchmark_nccl" \
+  ./setup_nccl_launcher.sh
+```
+
+Use your installation's GPU type (`gb300`, `gb200`, `b300`, `b200`, or `h100`).
+To restore the IB launcher, run the same setup command with `LLMB_NCCL_NETWORK=ib`.
+
+SPX runs require an explicit container image, available to every allocated node,
+containing the Spectrum-X NCCL plugin, compatible NCCL and MPI libraries, and
+`all_reduce_perf_mpi`, `all_gather_perf_mpi`, `reduce_scatter_perf_mpi`,
+`alltoall_perf_mpi`, and `sendrecv_perf_mpi` in `/usr/local/bin/`.
+If the binaries are elsewhere, change `NCCL_TEST_PATH` in `config/nemofw.user.toml`
+and regenerate the launcher. See the public
+[Spectrum-X plugin instructions](https://networking-docs.nvidia.com/hpcxum/2.51/spectrum-x-nccl-plugin)
+for plugin installation and library discovery. The profile selects `NCCL_NET=spcx`
+and `NCCL_NET_PLUGIN=spcx` explicitly.
+
+Configure RoCE interfaces, addressing, and QoS for your cluster before running.
+For example, pass the appropriate `NCCL_IB_HCA`, `NCCL_SOCKET_IFNAME`, and
+`NCCL_IB_TC` values with `--env`; these settings depend on the fabric.
+Supply any environment plugin settings required by your HPC-X release the same way.
+The profile does not configure switches or host networking.
+
+```bash
+cd "$LLMB_INSTALL"
+# H100/B200/B300: 16 GPUs = two nodes. GB200/GB300: use at least 8 GPUs.
+llmb-run submit -w microbenchmark_nccl --scale 16 \
+  --env RUN_CONF_IMAGE=/shared/images/spx-nccl.sqsh
+```
+
+The example image path must be replaced with your actual image. Single-node
+allocations and missing `RUN_CONF_IMAGE` fail before launching tests.
+
+| Coverage | Collectives | Registration | Message sizes |
+| --- | --- | --- | --- |
+| Baseline: all ranks in one communicator | AllReduce, AllGather, ReduceScatter, Alltoall, SendRecv | `-R0` and `-R1` | 128K–16G, factor 2 |
+| Split: one GPU per node in each communicator | Same five | `-R0` and `-R1` | Same |
+
+This produces 20 invocations, each with 50 warmup and 100 measured iterations.
+Split tests use block rank placement and `NCCL_TESTS_SPLIT=MOD <GPUs per node>`
+(4 for GB200/GB300, 8 for the other profiles), with MNNVL disabled for those tests.
+[Upstream nccl-tests](https://github.com/NVIDIA/nccl-tests#running-multiple-operations-in-parallel)
+explains the split semantics: bandwidth is reported per communicator, so aggregate
+bandwidth requires multiplying by the number of groups. Keep baseline and split
+results separate when comparing performance.
+
+Inspect `*_baseline_*` and `*_split_*` result files and per-rank NET logs to verify
+plugin selection, communicator groups, and correctness. Test binary and srun
+failures make the SPX job fail. No performance pass threshold is supplied: establish
+a reference for the actual topology and software stack. This profile still needs
+multi-node hardware validation. Isolation with concurrent noise, forced-fabric
+NoNVLink cases, link-failure injection, and GIN are follow-up work.

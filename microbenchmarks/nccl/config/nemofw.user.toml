@@ -17,6 +17,15 @@ NVCOMMS_PERF_TOOLS_WORKSPACE="$LLMB_INSTALL/workloads/microbenchmark_nccl/experi
 
 # Skip UCC by default on H100, or when LLMB_DISABLE_UCC is true
 prologue_commands = '''
+if [[ "${SYS_INFO_NETWORK:-}" == "Spectrum-X" ]]; then
+  : "${RUN_CONF_IMAGE:?Set RUN_CONF_IMAGE to an image containing MPI nccl-tests and the Spectrum-X NCCL plugin}"
+  if (( ${SLURM_JOB_NUM_NODES:-0} < 2 )); then
+    echo "Spectrum-X NCCL tests require at least two nodes." >&2
+    exit 1
+  fi
+  # Let the testset control communicator grouping, including baseline runs.
+  unset NCCL_TESTS_SPLIT NCCL_TESTS_SPLIT_MASK
+fi
 _llmb_ucc_flag="${LLMB_DISABLE_UCC:-${DISABLE_UCC:-}}"
 _llmb_ucc_flag="${_llmb_ucc_flag,,}"
 _llmb_sys="${SYS_INFO_NAME:-}"
@@ -28,4 +37,24 @@ if [[ "$_llmb_sys" == "h100" ]] || [[ "$_llmb_ucc_flag" == "1" || "$_llmb_ucc_fl
   echo "Disabling UCC; exporting UCX_TLS=^ucc OMPI_MCA_coll=^ucc OMPI_MCA_coll_ucc_enable=0"
 fi
 unset _llmb_ucc_flag _llmb_sys
+'''
+
+# The generator records each srun status but otherwise exits successfully.
+epilogue_commands = '''
+if [[ "${SYS_INFO_NETWORK:-}" == "Spectrum-X" ]]; then
+  _llmb_results=0
+  for _llmb_result in "$LOG_DIR"/*/result.txt; do
+    [[ -f "$_llmb_result" ]] || continue
+    _llmb_results=$((_llmb_results + 1))
+    if ! grep -qx 'ret_code="0"' "$_llmb_result"; then
+      echo "Spectrum-X NCCL test failed: $_llmb_result" >&2
+      exit 1
+    fi
+  done
+  if (( _llmb_results == 0 )); then
+    echo "No Spectrum-X NCCL test results were recorded." >&2
+    exit 1
+  fi
+  unset _llmb_results _llmb_result
+fi
 '''

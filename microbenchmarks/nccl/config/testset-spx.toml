@@ -1,0 +1,121 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Standard nccl-tests host collectives; no symmetric/CE/GIN kernels required.
+description = "Spectrum-X NCCL: baseline and per-node split communicators, registration 0/1, 128K-16G."
+library_name = "nccl"
+testset_iterations = 1
+test_iterations = 1
+
+[common]
+path = "${NCCL_TEST_PATH}"
+
+[common.sweep_envs]
+NCCL_DEBUG = "INFO"
+NCCL_DEBUG_FILE = "nccl_debug_file.%h.%p.txt"
+NCCL_DEBUG_SUBSYS = "INIT,ENV,GRAPH,TUNING,NET"
+# Explicitly keep the baseline in one communicator even if the submit shell has split settings.
+NCCL_TESTS_SPLIT = "AND 0"
+
+# The upstream run_test helper pipes output through tee. Preserve binary failures.
+[common.sweep_custom_commands]
+pre_command = "set -eo pipefail"
+
+[common.sweep_args]
+-t = 1
+-g = 1
+-f = 2
+-n = 100
+-w = 50
+-b = "128K"
+-e = "16G"
+-d = "float"
+-R = [0, 1]
+
+[[test]]
+name = "all_reduce_baseline"
+binary = "all_reduce_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+
+[[test]]
+name = "all_gather_baseline"
+binary = "all_gather_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+
+[[test]]
+name = "reduce_scatter_baseline"
+binary = "reduce_scatter_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+
+[[test]]
+name = "alltoall_baseline"
+binary = "alltoall_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+[test.sweep_args]
+-d = "uint8"
+
+[[test]]
+name = "sendrecv_baseline"
+binary = "sendrecv_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+[test.sweep_args]
+-d = "uint8"
+
+[[test]]
+name = "all_reduce_split"
+binary = "all_reduce_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+[test.sweep_envs]
+# Block rank placement gives one GPU per node in each communicator.
+NCCL_TESTS_SPLIT = "MOD ${SYS_INFO_GPUS_PER_NODE}"
+NCCL_MNNVL_ENABLE = "0"
+
+[[test]]
+name = "all_gather_split"
+binary = "all_gather_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+[test.sweep_envs]
+# Block rank placement gives one GPU per node in each communicator.
+NCCL_TESTS_SPLIT = "MOD ${SYS_INFO_GPUS_PER_NODE}"
+NCCL_MNNVL_ENABLE = "0"
+
+[[test]]
+name = "reduce_scatter_split"
+binary = "reduce_scatter_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+[test.sweep_envs]
+# Block rank placement gives one GPU per node in each communicator.
+NCCL_TESTS_SPLIT = "MOD ${SYS_INFO_GPUS_PER_NODE}"
+NCCL_MNNVL_ENABLE = "0"
+
+[[test]]
+name = "alltoall_split"
+binary = "alltoall_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+[test.sweep_envs]
+# Block rank placement gives one GPU per node in each communicator.
+NCCL_TESTS_SPLIT = "MOD ${SYS_INFO_GPUS_PER_NODE}"
+NCCL_MNNVL_ENABLE = "0"
+[test.sweep_args]
+-d = "uint8"
+
+[[test]]
+name = "sendrecv_split"
+binary = "sendrecv_perf"
+envs_merge_strategy = "override"
+args_merge_strategy = "override"
+[test.sweep_envs]
+# Block rank placement gives one GPU per node in each communicator.
+NCCL_TESTS_SPLIT = "MOD ${SYS_INFO_GPUS_PER_NODE}"
+NCCL_MNNVL_ENABLE = "0"
+[test.sweep_args]
+-d = "uint8"

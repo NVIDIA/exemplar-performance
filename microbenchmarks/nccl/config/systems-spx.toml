@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Spectrum-X profiles use the same GPU counts as the corresponding IB profiles.
+# Configure RoCE interfaces, traffic class, and addressing for your fabric at run time.
+[common.run_params]
+sbatch = ["--exclusive", "--mem=0", "--output=%x_%j.out"]
+srun = ["-N ${SLURM_JOB_NUM_NODES}", "--mpi=pmix", "--distribution=block:block", "--cpu-bind=none"]
+nccl = [
+    "NCCL_NET=spcx",
+    "NCCL_NET_PLUGIN=spcx",
+    "UCX_TLS=${UCX_TLS:-self,tcp}",
+    "OMPI_MCA_coll_ucc_enable=${OMPI_MCA_coll_ucc_enable:-1}"
+]
+
+[gb300.labels]
+name = "gb300"
+network = "Spectrum-X"
+gpu_type = "gb300"
+gpus_per_node = "4"
+
+[gb300.run_params]
+sbatch = ["--ntasks-per-node=4"]
+
+[gb200.labels]
+name = "gb200"
+network = "Spectrum-X"
+gpu_type = "gb200"
+gpus_per_node = "4"
+
+[gb200.run_params]
+sbatch = ["--ntasks-per-node=4"]
+
+[b300.labels]
+name = "b300"
+network = "Spectrum-X"
+gpu_type = "b300"
+gpus_per_node = "8"
+
+[b300.run_params]
+sbatch = ["--ntasks-per-node=8"]
+
+[b200.labels]
+name = "b200"
+network = "Spectrum-X"
+gpu_type = "b200"
+gpus_per_node = "8"
+
+[b200.run_params]
+sbatch = ["--ntasks-per-node=8"]
+
+[h100.labels]
+name = "h100"
+network = "Spectrum-X"
+gpu_type = "h100"
+gpus_per_node = "8"
+
+[h100.run_params]
+sbatch = ["--ntasks-per-node=8"]
