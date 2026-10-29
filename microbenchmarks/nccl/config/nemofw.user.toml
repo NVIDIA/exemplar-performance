@@ -17,6 +17,17 @@ NVCOMMS_PERF_TOOLS_WORKSPACE="$LLMB_INSTALL/workloads/microbenchmark_nccl/experi
 
 # Skip UCC by default on H100, or when LLMB_DISABLE_UCC is true
 prologue_commands = '''
+if [[ "${SYS_INFO_NETWORK:-}" == "Spectrum-X" ]]; then
+  unset NCCL_TESTS_SPLIT NCCL_TESTS_SPLIT_MASK
+  # Select rank placement before srun starts.
+  llmb_nccl_distribution() {
+    case "${TEST_NAME:-}" in
+      *_nonvlink) printf '%s\n' cyclic ;;
+      *) printf '%s\n' block:block ;;
+    esac
+  }
+  export -f llmb_nccl_distribution
+fi
 _llmb_ucc_flag="${LLMB_DISABLE_UCC:-${DISABLE_UCC:-}}"
 _llmb_ucc_flag="${_llmb_ucc_flag,,}"
 _llmb_sys="${SYS_INFO_NAME:-}"

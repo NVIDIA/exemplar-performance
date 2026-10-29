@@ -1,6 +1,6 @@
 # Overview
 
-This recipe provides a method and script to produce performance results for the NCCL benchmarks. The SLURM sbatch script launches a collection of benchmarking jobs to evaluate an Infiniband network.
+This recipe provides a method and script to produce performance results for the NCCL benchmarks. The SLURM sbatch script launches a collection of benchmarking jobs to evaluate an InfiniBand network by default, with an opt-in Spectrum-X profile.
 
 ## Platform support
 
@@ -11,7 +11,7 @@ This recipe provides a method and script to produce performance results for the 
 
 - SLURM workload manager
 - NVIDIA GPUs: GB300, GB200, B300, B200, or H100
-- InfiniBand (IB) networking with Quantum2 switches and CX7 NICs
+- InfiniBand (IB) networking, or a configured Spectrum-X RoCE fabric with the SPX profile below
 - CUDA toolkit
 
 # Performance Measurement and Analysis
@@ -23,6 +23,10 @@ Performance for NCCL is measured by bandwidth and latency. **Open the `.txt` fil
 Which files to open:
 
 Filenames use the test names from `config/testset.toml`. Each collective has a `_legacy` result; AllReduce, AllGather, and ReduceScatter also have `_symmetric`; AllGather and Alltoall also have `_ce`.
+
+For SPX, filenames use the `_baseline`, `_split`, and `_nonvlink` test names from
+`config/testset-spx.toml`, with separate results for each registration mode.
+Retain the per-rank NCCL logs to verify SPX plugin and device selection.
 
 ```text
 # AllReduce (legacy) results (open this .txt file)
@@ -121,7 +125,9 @@ $LLMB_WORKLOAD/experiments/
 
 # Prerequisites
 
-Run `install.sh` first so required tools (including `uv`) are available before NCCL setup generates `launch.sh`.
+Run `install.sh` first and select the NCCL microbenchmark workload so its source
+repository and required tools (including `uv`) are available before setup
+generates `launch.sh`.
 
 ## Set environment variable (optional)
 
@@ -132,11 +138,69 @@ Only needed if not using `llmb-run`, or if you want to run `llmb-run` from outsi
 export LLMB_INSTALL=<path to your installation directory> (e.g. /lustre/llmb/)
 ```
 
+## Spectrum-X NCCL profile
+
+Set `LLMB_NCCL_NETWORK=spx` during setup to select `systems-spx.toml` and
+`testset-spx.toml`. IB remains the default. Changing this variable at submission
+does not change an already generated launcher.
+
+The container must include compatible NCCL 2.28+, MPI, the Spectrum-X NET and ENV
+plugins, and the five MPI-enabled [NVIDIA nccl-tests](https://github.com/NVIDIA/nccl-tests)
+binaries. See the [Spectrum-X plugin instructions](https://networking-docs.nvidia.com/hpcxum/2.51/spectrum-x-nccl-plugin)
+to install and configure the libraries inside the benchmark container if they
+are not already included. Both profiles use the image's existing MPI test
+binaries. The profile sets `NCCL_NET=spcx`, `NCCL_NET_PLUGIN=spcx`,
+`NCCL_ENV_PLUGIN=spcx`, `NCCL_IB_TC=96`, and `NCCL_IB_TIMEOUT=18` by default.
+
+### Select the profile
+
+From an installation containing the NCCL workload, regenerate the launcher for
+the selected GPU type (`h100` below). Activate its environment from
+`cluster_config.yaml` first; the default venv installation uses the path below.
+Use `LLMB_NCCL_NETWORK=ib` to switch back:
+
+```bash
+source "$LLMB_INSTALL/venvs/microbenchmark_nccl_venv/bin/activate"
+cd "$LLMB_INSTALL/llmb_repo/microbenchmarks/nccl"
+LLMB_NCCL_NETWORK=spx GPU_TYPE=h100 \
+  LLMB_WORKLOAD="$LLMB_INSTALL/workloads/microbenchmark_nccl" \
+  ./setup_nccl_launcher.sh
+```
+
+Set fabric-specific `NCCL_IB_HCA`, `NCCL_SOCKET_IFNAME` and plugin settings with
+`--env`. The traffic class defaults to the NCS value of 96; override it with
+`--env NCCL_IB_TC=<value>` for a different fabric QoS configuration. Use
+`--env RUN_CONF_IMAGE=<image>` if a different container is needed; the default
+image and MPI binary paths are the same as for IB.
+
+### Coverage
+
+AllReduce, AllGather, ReduceScatter, Alltoall and SendRecv run with registration
+modes `-R0` and `-R1`, 128K–16G messages, factor 2, 50 warmups, 200 iterations,
+and correctness checking (`-c1`):
+
+| Variant | Communicators | Rank placement |
+| --- | --- | --- |
+| Baseline | All ranks | Block |
+| Split (Mask) | One GPU per node per group; MNNVL disabled | Block |
+| NoNVLink | All ranks; MNNVL/P2P/SHM/PXN disabled | Cyclic |
+
+There are 30 invocations per run. Split cases use `NCCL_TESTS_SPLIT=MOD <GPUs per node>`:
+4 for GB200/GB300, 8 for H100/B200/B300. Their reported bandwidth is per group.
+SendRecv uses `-a2` (minimum iteration time across ranks); the other collectives
+use average timing.
+
+After a run, verify correctness results and confirm that NCCL logs show the SPX
+plugin and expected RoCE devices.
+
 # Run NCCL Benchmarks
 
 ## Quick Start (llmb-run)
 
-`llmb-run` uses your SLURM settings from install to submit jobs.
+`llmb-run` uses your SLURM settings from install to submit the launcher generated
+for either IB or Spectrum-X. Scale is the total number of GPUs. For Spectrum-X,
+use at least two nodes: 16 GPUs for H100/B200/B300 or 8 for GB200/GB300.
+Pass fabric-specific settings with `--env KEY=value`.
 
 ```bash
 # Navigate to your installation directory
@@ -145,8 +209,7 @@ cd $LLMB_INSTALL
 # Run a benchmark (scale = total GPUs)
 llmb-run submit -w microbenchmark_nccl --scale <NUM_GPUS>
 
-# Examples
-llmb-run submit -w microbenchmark_nccl --scale 4
+# Example: two H100/B200/B300 nodes
 llmb-run submit -w microbenchmark_nccl --scale 16
 ```
 
@@ -158,9 +221,4 @@ MPI-linked NCCL tests (`*_perf_mpi`) initialize OpenMPI, which can load UCC's CU
 symbol lookup error: .../ucc/lib/ucc/libucc_sysinfo_cuda.so: undefined symbol: nvmlDeviceGetGpuFabricInfoV
 ```
 
-H100 jobs disable UCC by default (`UCX_TLS=^ucc`, `OMPI_MCA_coll=^ucc`, `OMPI_MCA_coll_ucc_enable=0`). On other GPUs, set `LLMB_DISABLE_UCC=1`:
-
-```bash
-cd $LLMB_INSTALL
-llmb-run submit -w microbenchmark_nccl --scale <NUM_GPUS> --env LLMB_DISABLE_UCC=1
-```
+H100 jobs disable UCC by default (`UCX_TLS=^ucc`, `OMPI_MCA_coll=^ucc`, `OMPI_MCA_coll_ucc_enable=0`). On other GPUs, add `--env LLMB_DISABLE_UCC=1` to the submission command.
