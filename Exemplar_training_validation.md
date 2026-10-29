@@ -31,6 +31,8 @@ While the benchmarks can be run independently, we recommend looping in your NVID
 3. During install, you will be prompted for workload selection. If you select 'Exemplar Cloud', the full Exemplar test suite for your selected GPU type will be installed.
 4. Validate the system by running the [prescreen test](microbenchmarks/system_info/README.md).
 
+   For Spectrum-X systems, also see the [reference architectures](docs/networking/spectrum-x.md) and optional [NCCL diagnostic profile](microbenchmarks/nccl/README.md#spectrum-x-nccl-profile). Select the NCCL workload during installation to use that profile.
+
 ### **Run benchmark recipes via llmb-run**
 
 ```bash

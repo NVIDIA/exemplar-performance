@@ -464,6 +464,11 @@ Some recipes additionally require approval for gated model or dataset repositori
 
 Exemplar Performance validates recipes on the reference infrastructure, CSP-specific configurations, and software listed below. These environments provide the baseline configurations used for comparison.
 
+For Spectrum-X Ethernet configurations across the supported GPU platforms, see
+[Spectrum-X Reference Architectures](docs/networking/spectrum-x.md). Those design
+references describe the fabric; benchmark comparisons also require the actual
+cluster topology and software versions used for each result.
+
 ## Peak Theoretical Throughput
 
 The following table shows the peak theoretical throughput (in TFLOPS) for different GPU types and data types. These values represent the maximum computational capacity of each GPU architecture and are used for calculating Model FLOPS Utilization (MFU) in performance analysis.
@@ -526,8 +531,9 @@ Baseline performance metrics for B300 workloads were collected using systems equ
   - PCIe Gen5
 - NVLink: NVLink 5th Generation
   - 1.8 TB/s per GPU bandwidth
-- SpectrumX:
+- Spectrum-X Ethernet:
   - Compute links: 8x 800 Gbit/s
+  - See [Spectrum-X reference configurations](docs/networking/spectrum-x.md) for network components and topology guidance.
 - System Memory: 2 TB
 - Local Storage:
   - 2x 1.9 TB NVMe M.2
